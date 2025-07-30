@@ -6,21 +6,17 @@ import os
 import json
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
-load_dotenv()
-load_dotenv("/etc/secrets/.env")  # Para entornos de producción como Render
+# ✅ Cargar variables de entorno desde Render
+load_dotenv("/etc/secrets/.env")
 
-# Configurar claves API
+# ✅ Configurar claves API de forma segura
 openai.api_key = os.environ.get("OPENAI_API_KEY")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-
-# Diagnóstico para saber si se cargó la API Key correctamente
-print("🔑 OPENAI_API_KEY:", openai.api_key)
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 
 app = Flask(__name__)
 
-# Cargar configuración de los bots desde archivo JSON
+# ✅ Cargar configuración de los bots
 with open("bots_config.json") as f:
     bots_data = json.load(f)
 
@@ -48,7 +44,7 @@ def webhook():
     system_prompt = bot["system_prompt"]
 
     try:
-        # Generar respuesta usando GPT
+        # ✅ Generar respuesta con GPT sin mostrar claves
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -58,10 +54,9 @@ def webhook():
         )
         reply = response.choices[0].message.content.strip()
     except Exception as e:
-        print("❌ ERROR GPT:", e)  # Mostrar error exacto en los logs de Render
+        print(f"[Error GPT] {str(e)}")  # Puedes eliminar esta línea si no deseas mostrar el error en logs
         reply = "Lo siento, hubo un error generando la respuesta."
 
-    # Crear y enviar respuesta por Twilio
     twilio_response = MessagingResponse()
     twilio_response.message(reply)
     return str(twilio_response)
