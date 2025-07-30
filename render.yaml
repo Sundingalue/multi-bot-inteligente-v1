@@ -5,7 +5,6 @@ services:
     plan: free
     branch: main
     buildCommand: ""
-    startCommand: "python main.py"
+    startCommand: "gunicorn main:app"
     envVars:
       - fromDotEnv: true
-    autoDeploy: true
