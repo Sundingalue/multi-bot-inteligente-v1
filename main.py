@@ -8,13 +8,15 @@ from dotenv import load_dotenv
 
 # Cargar variables de entorno
 load_dotenv()
+load_dotenv("/etc/secrets/.env")  # Para entornos de producción como Render
 
 # Configurar claves API
-from dotenv import load_dotenv
-load_dotenv("/etc/secrets/.env")
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+# Diagnóstico para saber si se cargó la API Key correctamente
+print("🔑 OPENAI_API_KEY:", openai.api_key)
 
 app = Flask(__name__)
 
@@ -56,6 +58,7 @@ def webhook():
         )
         reply = response.choices[0].message.content.strip()
     except Exception as e:
+        print("❌ ERROR GPT:", e)  # Mostrar error exacto en los logs de Render
         reply = "Lo siento, hubo un error generando la respuesta."
 
     # Crear y enviar respuesta por Twilio
@@ -72,6 +75,3 @@ def voice():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-    # Esto es un cambio mínimo para forzar el redeploy
-# Forzando redeploy para activar gunicorn
-
