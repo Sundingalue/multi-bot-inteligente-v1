@@ -30,6 +30,19 @@ def get_bot_by_number(to_number):
 def home():
     return "✅ Sistema multibot activo en Render."
 
+# ✅ NUEVO: Endpoint para verificación de Meta (WhatsApp)
+@app.route("/whatsapp/", methods=["GET"])
+def verify():
+    verify_token = "sundinwhatsapp2025"  # Asegúrate de que este sea el mismo que ingresaste en Meta
+    mode = request.args.get('hub.mode')
+    token = request.args.get('hub.verify_token')
+    challenge = request.args.get('hub.challenge')
+
+    if mode and token:
+        if mode == 'subscribe' and token == verify_token:
+            return challenge, 200
+    return 'Verificación fallida', 403
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.values.get("Body", "").strip()
