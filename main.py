@@ -6,7 +6,7 @@ import os
 import json
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
+# Cargar variables de entorno desde archivo oculto
 load_dotenv("/etc/secrets/.env")
 
 # Configurar claves API
@@ -37,13 +37,13 @@ def webhook():
     from_number = request.values.get("From", "").strip()
 
     bot = get_bot_by_number(to_number)
-
     if not bot:
         return "❌ Bot no encontrado para este número.", 404
 
     system_prompt = bot["system_prompt"]
 
     try:
+        # Generar respuesta usando GPT
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -55,6 +55,7 @@ def webhook():
     except Exception as e:
         reply = "Lo siento, hubo un error generando la respuesta."
 
+    # Crear y enviar respuesta por Twilio
     twilio_response = MessagingResponse()
     twilio_response.message(reply)
     return str(twilio_response)
@@ -62,7 +63,7 @@ def webhook():
 @app.route("/voice", methods=["POST"])
 def voice():
     response = VoiceResponse()
-    # Reenviar la llamada al número personal de Sundin
+    response.say("Conectando su llamada con el Sr. Sundin Galue. Un momento por favor.", voice='woman', language='es-ES')
     dial = Dial()
     dial.number("+18323790809")
     response.append(dial)
