@@ -1,22 +1,22 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
-import openai
 import os
 import json
+from openai import OpenAI
 from dotenv import load_dotenv
 
-# ✅ Cargar variables de entorno desde Render
+# Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
-# ✅ Configurar claves API de forma segura
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Inicializar cliente OpenAI con la nueva versión
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 
 app = Flask(__name__)
 
-# ✅ Cargar configuración de los bots
+# Cargar configuración de bots
 with open("bots_config.json") as f:
     bots_data = json.load(f)
 
@@ -37,15 +37,14 @@ def webhook():
     from_number = request.values.get("From", "").strip()
 
     bot = get_bot_by_number(to_number)
-
     if not bot:
         return "❌ Bot no encontrado para este número.", 404
 
     system_prompt = bot["system_prompt"]
 
     try:
-        # ✅ Generar respuesta con GPT sin mostrar claves
-        response = openai.ChatCompletion.create(
+        # ✅ NUEVA SINTAXIS CON OPENAI 1.x
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -54,7 +53,7 @@ def webhook():
         )
         reply = response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"[Error GPT] {str(e)}")  # Puedes eliminar esta línea si no deseas mostrar el error en logs
+        print(f"[ERROR GPT] {str(e)}")
         reply = "Lo siento, hubo un error generando la respuesta."
 
     twilio_response = MessagingResponse()
