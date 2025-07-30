@@ -8,3 +8,4 @@ services:
     startCommand: "python main.py"
     envVars:
       - fromDotEnv: true
+    autoDeploy: true
