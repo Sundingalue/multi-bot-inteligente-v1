@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: multi-bot-inteligente-v1
+    env: python
+    plan: free
+    branch: main
+    buildCommand: ""
+    startCommand: "python main.py"
+    envVars:
+      - fromDotEnv: true
