@@ -30,7 +30,7 @@ def get_bot_by_number(to_number):
 def home():
     return "✅ Sistema multibot activo en Render."
 
-# ✅ NUEVO: Endpoint para verificación de Meta (WhatsApp)
+# ✅ Endpoint para verificación de Meta (WhatsApp)
 @app.route("/whatsapp/", methods=["GET"])
 def verify():
     verify_token = "sundinwhatsapp2025"
