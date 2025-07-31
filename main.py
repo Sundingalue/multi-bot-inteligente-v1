@@ -1,22 +1,25 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Dial
-from openai import OpenAI
+import openai
 import os
 import json
 from dotenv import load_dotenv
 
-# Cargar variables de entorno desde archivo oculto
+# Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
 # Configurar claves API
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 app = Flask(__name__)
 
-# Cargar configuración de los bots desde archivo JSON
+# Historial de conversación por número
+session_history = {}
+
+# Cargar configuración de bots desde archivo JSON
 with open("bots_config.json") as f:
     bots_data = json.load(f)
 
@@ -30,7 +33,6 @@ def get_bot_by_number(to_number):
 def home():
     return "✅ Sistema multibot activo en Render."
 
-# ✅ NUEVO: Endpoint para verificación de Meta (WhatsApp)
 @app.route("/whatsapp/", methods=["GET"])
 def verify():
     verify_token = "sundinwhatsapp2025"
@@ -55,15 +57,22 @@ def webhook():
 
     system_prompt = bot["system_prompt"]
 
+    # Inicializar historial si no existe
+    if from_number not in session_history:
+        session_history[from_number] = [{"role": "system", "content": system_prompt}]
+
+    # Agregar mensaje del usuario al historial
+    session_history[from_number].append({"role": "user", "content": incoming_msg})
+
     try:
+        # Generar respuesta con historial
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": incoming_msg}
-            ]
+            messages=session_history[from_number]
         )
         reply = response.choices[0].message.content.strip()
+        # Agregar respuesta del asistente al historial
+        session_history[from_number].append({"role": "assistant", "content": reply})
     except Exception as e:
         print("❌ ERROR AL GENERAR RESPUESTA CON OPENAI:")
         print(e)
