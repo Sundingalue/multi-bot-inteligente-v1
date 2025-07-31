@@ -3,82 +3,58 @@ from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
+import json
 
 # Cargar variables de entorno
-load_dotenv("/etc/secrets/.env")
+load_dotenv()
 
 # Configurar OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Crear la app Flask
+# Crear app Flask
 app = Flask(__name__)
 
 # Historial por número
 session_history = {}
 
-# Prompt del personaje Sara
-system_prompt = """
-Eres Sara, la asistente virtual del Sr. Sundin Galue, CEO de In Houston, Texas. 
-Tu misión es ayudar a personas interesadas en anunciarse en la revista o conocer los servicios de la empresa.
+# Cargar configuración de bots
+def cargar_configuracion_bots():
+    with open("bots_config.json", "r", encoding="utf-8") as f:
+        return json.load(f)["bots"]
 
-Estilo:
-- Frases cortas, claras y amables.
-- Conversación fluida, sin repeticiones.
-- No haces dos veces la misma pregunta.
-- Te presentas solo al inicio si el cliente dice "hola", "buenas" o "quién eres".
-- Si ya sabes el nombre o a qué se dedica, no lo vuelves a preguntar.
-- Si el cliente dos veces precio debes dar los precios de la publicidad
-- Si repite alguna palabra debes avanzar la conversación como si fuera una persona real.
-- Si el cliente pregunta por algo que no sea de publicidad debes decir que no puedes ayudarlo.
-- Si el cliente responde algo corto como sí o no de la pregunta que hiciste, debes avanzar con la conversación.
-- Cuando Sara pregunte si le gustaría agendar una cita con el Sr. Sundin Galue y el cliente responde sí, debes pedir nombre, teléfono, correo y mejor día para contactarlo.
+bots = cargar_configuracion_bots()
 
-Información del negocio:
-- Revista trimestral (próxima edición: 25 de septiembre).
-- Más de 200,000 lectores digitales mensuales y 3,000 revistas impresas.
-- Distribución en supermercados H-E-B (Katy), panaderías, barberías, spas, clínicas y concesionarios en toda la I-10.
-- App gratuita con directorio digital de negocios.
-- Leads automatizados: se activan con tarjeta por $1.
-- Estrategias publicitarias personalizadas en revista, redes sociales, web y app.
-- Solo se vende la publicidad de la revista. Si dicen que quieren solo el app u otra plataforma debes decir que por estar en nuestra revista estará completamente gratis en todas nuestras plataformas.
-- Si el cliente pregunta precios sin haberle explicado los servicios y los beneficios debes decir que antes de darle los precios queremos que conozca todos los beneficios que obtendrá al anunciarse en nuestra revista.
-
-Precios (solo si el cliente pregunta 2 veces):
-- 1/4 página: $420
-- 1/2 página: $750
-- Página completa: $1300
-- 2 páginas interiores: $2200
-- 2 páginas centrales, 2 primeras páginas o 2 últimas páginas: $3000
-
-Aclarar que hay descuentos especiales del 50%, 25% y 15% dependiendo del tamaño y el tiempo de la publicación.
-
-Cierre:
-Si el cliente muestra interés real, ofrece agendar cita directa con Sundin Galue.
-Pide su nombre, teléfono, correo y mejor día para contactarlo.
-
-Siempre debes avanzar la conversación como una persona real, empática y profesional.
-"""
-
+# Ruta raíz
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Sara está en línea y lista para ayudarte."
+    return "✅ Bot multibot activo y esperando mensajes de WhatsApp."
 
+# Ruta Webhook
 @app.route("/webhook", methods=["POST"])
-def whatsapp_bot():
+def whatsapp_webhook():
     incoming_msg = request.values.get("Body", "").strip()
     sender_number = request.values.get("From", "")
-    print(f"📩 Mensaje de {sender_number}: {incoming_msg}")
+    to_number = request.values.get("To", "")  # Número que recibió el mensaje
+
+    print(f"📩 Mensaje de {sender_number} para {to_number}: {incoming_msg}")
 
     response = MessagingResponse()
     msg = response.message()
 
+    # Buscar bot correspondiente por número
+    bot = next((b for b in bots if b["twilio_number"] == to_number), None)
+
+    if not bot:
+        msg.body("⚠️ Lo siento, este número no está asignado a ningún bot.")
+        return str(response)
+
     # Iniciar historial si es nuevo
     if sender_number not in session_history:
         session_history[sender_number] = [
-            {"role": "system", "content": system_prompt}
+            {"role": "system", "content": bot["system_prompt"]}
         ]
 
-    # Atajos directos
+    # Mensajes clave para presentación
     if any(word in incoming_msg.lower() for word in ["hola", "buenas", "hello", "hey"]):
         msg.body("Hola, bienvenido a In Houston Texas. Soy Sara. ¿Con quién tengo el gusto?")
         return str(response)
@@ -86,10 +62,10 @@ def whatsapp_bot():
         msg.body("Soy Sara, la asistente del Sr. Sundin Galue, CEO de In Houston Texas. Estoy aquí para ayudarte.")
         return str(response)
 
-    # Agregar el mensaje del usuario
+    # Añadir mensaje del usuario al historial
     session_history[sender_number].append({"role": "user", "content": incoming_msg})
 
-    # Llamar a GPT
+    # Consultar OpenAI
     try:
         completion = client.chat.completions.create(
             model="gpt-4o",
@@ -100,11 +76,10 @@ def whatsapp_bot():
         msg.body(respuesta)
     except Exception as e:
         print(f"❌ Error GPT: {e}")
-        msg.body("Lo siento, hubo un error procesando tu mensaje. Intenta de nuevo más tarde.")
+        msg.body("Lo siento, hubo un error generando la respuesta. Intenta de nuevo más tarde.")
 
     return str(response)
 
-# Ejecutar en Render
+# Ejecutar app en entorno local (opcional para pruebas)
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(port=5000)
