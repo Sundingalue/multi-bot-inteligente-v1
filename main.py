@@ -1,7 +1,7 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Dial
-import openai
+from openai import OpenAI
 import os
 import json
 from dotenv import load_dotenv
@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv("/etc/secrets/.env")
 
 # Configurar claves API
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
@@ -30,7 +30,7 @@ def get_bot_by_number(to_number):
 def home():
     return "✅ Sistema multibot activo en Render."
 
-# ✅ Endpoint para verificación de Meta (WhatsApp)
+# ✅ NUEVO: Endpoint para verificación de Meta (WhatsApp)
 @app.route("/whatsapp/", methods=["GET"])
 def verify():
     verify_token = "sundinwhatsapp2025"
@@ -56,7 +56,7 @@ def webhook():
     system_prompt = bot["system_prompt"]
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -66,7 +66,7 @@ def webhook():
         reply = response.choices[0].message.content.strip()
     except Exception as e:
         print("❌ ERROR AL GENERAR RESPUESTA CON OPENAI:")
-        print(e)  # Esto se verá en los logs de Render
+        print(e)
         reply = "Lo siento, hubo un error generando la respuesta. Código 500."
 
     twilio_response = MessagingResponse()
