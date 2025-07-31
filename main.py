@@ -33,7 +33,7 @@ def home():
 # ✅ NUEVO: Endpoint para verificación de Meta (WhatsApp)
 @app.route("/whatsapp/", methods=["GET"])
 def verify():
-    verify_token = "sundinwhatsapp2025"  # Asegúrate de que este sea el mismo que ingresaste en Meta
+    verify_token = "sundinwhatsapp2025"
     mode = request.args.get('hub.mode')
     token = request.args.get('hub.verify_token')
     challenge = request.args.get('hub.challenge')
@@ -56,7 +56,6 @@ def webhook():
     system_prompt = bot["system_prompt"]
 
     try:
-        # Generar respuesta usando GPT
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
@@ -66,9 +65,10 @@ def webhook():
         )
         reply = response.choices[0].message.content.strip()
     except Exception as e:
-        reply = "Lo siento, hubo un error generando la respuesta."
+        print("❌ ERROR AL GENERAR RESPUESTA CON OPENAI:")
+        print(e)  # Esto se verá en los logs de Render
+        reply = "Lo siento, hubo un error generando la respuesta. Código 500."
 
-    # Crear y enviar respuesta por Twilio
     twilio_response = MessagingResponse()
     twilio_response.message(reply)
     return str(twilio_response)
