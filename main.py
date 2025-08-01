@@ -40,6 +40,7 @@ def whatsapp_bot():
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
     print(f"📥 Mensaje de WhatsApp recibido de {sender_number} para {bot_number}: {incoming_msg}")
+    print(f"🔎 Número al que fue enviado el mensaje (To): {bot_number}")
 
     response = MessagingResponse()
     msg = response.message()
