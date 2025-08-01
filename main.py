@@ -25,6 +25,15 @@ session_history = {}
 def home():
     return "✅ Bot inteligente activo en Render."
 
+# ✅ Ruta para verificación del webhook de Meta
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    VERIFY_TOKEN = "1234"  # Este es el token que ya configuraste en Meta
+    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+        return request.args.get("hub.challenge"), 200
+    return "Token de verificación inválido", 403
+
+# ✅ Ruta para recibir mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
