@@ -30,12 +30,12 @@ def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
-    print(f"📥 Mensaje de {sender_number} para {bot_number}: {incoming_msg}")
+    print(f"📥 Mensaje de WhatsApp recibido de {sender_number} para {bot_number}: {incoming_msg}")
 
     response = MessagingResponse()
     msg = response.message()
 
-    # Buscar el bot correspondiente al número de destino
+    # Verificar si el número de destino está en bots_config
     bot = next((b for b in bots_config if b["twilio_number"] == bot_number), None)
     if not bot:
         print(f"⚠️ Número no asignado a ningún bot: {bot_number}")
@@ -46,9 +46,11 @@ def whatsapp_bot():
     if sender_number not in session_history:
         session_history[sender_number] = [{"role": "system", "content": bot["system_prompt"]}]
 
-    # Atajos de presentación
+    # Saludo inicial
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        msg.body(f"Hola, soy {bot['name']}, la asistente virtual de {bot['business_name']}. ¿Con quién tengo el gusto?")
+        saludo = f"Hola, soy {bot['name']}, la asistente virtual de {bot['business_name']}. ¿Con quién tengo el gusto?"
+        print(f"🤖 Enviando saludo: {saludo}")
+        msg.body(saludo)
         return str(response)
 
     # Agregar mensaje del usuario al historial
@@ -61,14 +63,10 @@ def whatsapp_bot():
         )
         respuesta = completion.choices[0].message.content.strip()
         session_history[sender_number].append({"role": "assistant", "content": respuesta})
-        print(f"💬 Respuesta generada: {respuesta}")
+        print(f"💬 Respuesta generada por GPT: {respuesta}")
         msg.body(respuesta)
     except Exception as e:
         print(f"❌ Error generando respuesta con OpenAI: {e}")
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
-
-# Ejecutar la app (solo localmente, en Render no se usa)
-if __name__ == "__main__":
-    app.run(port=5000)
