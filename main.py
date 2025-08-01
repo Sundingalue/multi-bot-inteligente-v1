@@ -29,45 +29,32 @@ follow_up_flags = {}
 def home():
     return "✅ Bot inteligente activo en Render."
 
-# ✅ Verificación del webhook de WhatsApp
+# ✅ Verificación del webhook (para Meta)
 @app.route("/webhook", methods=["GET"])
-def verify_whatsapp_webhook():
+def verify_webhook():
     VERIFY_TOKEN = "1234"
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
     
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("🔐 Webhook de WhatsApp verificado correctamente.")
+        print("🔐 Webhook verificado correctamente por Meta.")
         return challenge, 200
     else:
-        print("❌ Falló la verificación del webhook de WhatsApp.")
-        return "Token inválido", 403
-
-# ✅ Verificación del webhook de Instagram
-@app.route("/instagram", methods=["GET"])
-def verify_instagram_webhook():
-    VERIFY_TOKEN = "1234"
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("🔐 Webhook de Instagram verificado correctamente.")
-        return challenge, 200
-    else:
-        print("❌ Falló la verificación del webhook de Instagram.")
+        print("❌ Falló la verificación del webhook.")
         return "Token inválido", 403
 
 # Función para enviar recordatorios por inactividad
 def follow_up_task(sender_number, bot_number):
-    time.sleep(300)  # 5 minutos
+    time.sleep(300)  # Esperar 5 minutos
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
+        print(f"⏰ Enviando recordatorio de 5 minutos a {sender_number}")
         send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
         follow_up_flags[sender_number]["5min"] = True
 
-    time.sleep(3300)  # 55 minutos más
+    time.sleep(3300)  # Esperar 55 minutos más (total 60)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
+        print(f"⏰ Enviando recordatorio de 60 minutos a {sender_number}")
         send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
         follow_up_flags[sender_number]["60min"] = True
 
@@ -97,6 +84,7 @@ def whatsapp_bot():
 
     bot = bots_config.get(bot_number)
     if not bot:
+        print(f"⚠️ Número no asignado a ningún bot: {bot_number}")
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
@@ -106,6 +94,7 @@ def whatsapp_bot():
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
         saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de la revista, {bot['business_name']}. ¿Con quién tengo el gusto?"
+        print(f"🤖 Enviando saludo: {saludo}")
         msg.body(saludo)
         last_message_time[sender_number] = time.time()
         follow_up_flags[sender_number] = {"5min": False, "60min": False}
@@ -124,6 +113,7 @@ def whatsapp_bot():
         )
         respuesta = completion.choices[0].message.content.strip()
         session_history[sender_number].append({"role": "assistant", "content": respuesta})
+        print(f"💬 GPT respondió: {respuesta}")
         msg.body(respuesta)
     except Exception as e:
         print(f"❌ Error con GPT: {e}")
