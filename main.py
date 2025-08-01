@@ -61,7 +61,7 @@ def whatsapp_bot():
         session_history[sender_number] = [{"role": "system", "content": bot["system_prompt"]}]
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        saludo = f"Hola, soy {bot['name']}, la asistente virtual de {bot['business_name']}. ¿Con quién tengo el gusto?"
+        saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
         print(f"🤖 Enviando saludo: {saludo}")
         msg.body(saludo)
         return str(response)
