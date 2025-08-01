@@ -16,36 +16,42 @@ app = Flask(__name__)
 
 # Cargar configuración de bots desde archivo JSON
 with open("bots_config.json", "r") as f:
-    bots_config = json.load(f)["bots"]
+    bots_config = json.load(f)
 
-# Diccionario para almacenar historial por número de cliente
+# Historial por número
 session_history = {}
 
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Bot inteligente activo en Render."
 
-# ✅ Ruta para verificación del webhook de Meta
-@app.route("/whatsapp/", methods=["GET"], strict_slashes=False)
+# ✅ Verificación del webhook (para Meta)
+@app.route("/webhook", methods=["GET"])
 def verify_webhook():
     VERIFY_TOKEN = "1234"
-    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-        return request.args.get("hub.challenge"), 200
-    return "Token de verificación inválido", 403
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("🔐 Webhook verificado correctamente por Meta.")
+        return challenge, 200
+    else:
+        print("❌ Falló la verificación del webhook.")
+        return "Token inválido", 403
 
-# ✅ Ruta para recibir mensajes de WhatsApp
-@app.route("/whatsapp/", methods=["POST"], strict_slashes=False)
+# ✅ Recepción de mensajes de WhatsApp
+@app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
     print(f"📥 Mensaje recibido de {sender_number} para {bot_number}: {incoming_msg}")
-    print(f"🔎 Buscando bot asignado a {bot_number}...")
 
     response = MessagingResponse()
     msg = response.message()
 
-    bot = next((b for b in bots_config if b["twilio_number"] == bot_number), None)
+    bot = bots_config.get(bot_number)
     if not bot:
         print(f"⚠️ Número no asignado a ningún bot: {bot_number}")
         msg.body("Lo siento, este número no está asignado a ningún bot.")
@@ -69,10 +75,10 @@ def whatsapp_bot():
         )
         respuesta = completion.choices[0].message.content.strip()
         session_history[sender_number].append({"role": "assistant", "content": respuesta})
-        print(f"💬 Respuesta generada por GPT: {respuesta}")
+        print(f"💬 GPT respondió: {respuesta}")
         msg.body(respuesta)
     except Exception as e:
-        print(f"❌ Error generando respuesta con OpenAI: {e}")
+        print(f"❌ Error con GPT: {e}")
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
