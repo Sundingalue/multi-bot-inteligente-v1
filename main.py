@@ -4,6 +4,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
+import time
+from threading import Thread
 
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
@@ -18,8 +20,10 @@ app = Flask(__name__)
 with open("bots_config.json", "r") as f:
     bots_config = json.load(f)
 
-# Historial por número
+# Historial por número y seguimiento de actividad
 session_history = {}
+last_message_time = {}
+follow_up_flags = {}
 
 @app.route("/", methods=["GET"])
 def home():
@@ -40,6 +44,33 @@ def verify_webhook():
         print("❌ Falló la verificación del webhook.")
         return "Token inválido", 403
 
+# Función para enviar recordatorios por inactividad
+def follow_up_task(sender_number, bot_number):
+    time.sleep(300)  # Esperar 5 minutos
+    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
+        print(f"⏰ Enviando recordatorio de 5 minutos a {sender_number}")
+        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
+        follow_up_flags[sender_number]["5min"] = True
+
+    time.sleep(3300)  # Esperar 55 minutos más (total 60)
+    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
+        print(f"⏰ Enviando recordatorio de 60 minutos a {sender_number}")
+        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
+        follow_up_flags[sender_number]["60min"] = True
+
+# Función auxiliar para enviar mensajes salientes con Twilio
+def send_whatsapp_message(to_number, message):
+    from twilio.rest import Client
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+    client_twilio = Client(account_sid, auth_token)
+    client_twilio.messages.create(
+        body=message,
+        from_=from_number,
+        to=to_number
+    )
+
 # ✅ Recepción de mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
@@ -59,14 +90,21 @@ def whatsapp_bot():
 
     if sender_number not in session_history:
         session_history[sender_number] = [{"role": "system", "content": bot["system_prompt"]}]
+        follow_up_flags[sender_number] = {"5min": False, "60min": False}
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
+        saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de la revista, {bot['business_name']}. ¿Con quién tengo el gusto?"
         print(f"🤖 Enviando saludo: {saludo}")
         msg.body(saludo)
+        last_message_time[sender_number] = time.time()
+        follow_up_flags[sender_number] = {"5min": False, "60min": False}
+        Thread(target=follow_up_task, args=(sender_number, bot_number)).start()
         return str(response)
 
     session_history[sender_number].append({"role": "user", "content": incoming_msg})
+    last_message_time[sender_number] = time.time()
+    follow_up_flags[sender_number] = {"5min": False, "60min": False}
+    Thread(target=follow_up_task, args=(sender_number, bot_number)).start()
 
     try:
         completion = client.chat.completions.create(
