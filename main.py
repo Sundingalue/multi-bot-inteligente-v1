@@ -29,20 +29,69 @@ follow_up_flags = {}
 def home():
     return "✅ Bot inteligente activo en Render."
 
-# ✅ Verificación del webhook (para Meta WhatsApp)
+# ✅ Verificación del webhook de WhatsApp
 @app.route("/webhook", methods=["GET"])
-def verify_webhook():
+def verify_whatsapp():
     VERIFY_TOKEN = "1234"
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
     
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("🔐 Webhook verificado correctamente por Meta (WhatsApp).")
+        print("🔐 Webhook de WhatsApp verificado correctamente por Meta.")
         return challenge, 200
     else:
-        print("❌ Falló la verificación del webhook (WhatsApp).")
+        print("❌ Falló la verificación del webhook de WhatsApp.")
         return "Token inválido", 403
+
+# ✅ Verificación del webhook de Instagram (misma lógica)
+@app.route("/instagram", methods=["GET", "POST"])
+def instagram_webhook():
+    VERIFY_TOKEN = "1234"
+    
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            print("🔐 Webhook de Instagram verificado correctamente por Meta.")
+            return challenge, 200
+        else:
+            print("❌ Falló la verificación del webhook de Instagram.")
+            return "Token inválido", 403
+
+    if request.method == "POST":
+        print("📩 Instagram webhook POST recibido:")
+        print(request.json)
+        return "✅ Instagram Webhook recibido correctamente", 200
+
+# Función para enviar recordatorios por inactividad
+def follow_up_task(sender_number, bot_number):
+    time.sleep(300)  # Esperar 5 minutos
+    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
+        print(f"⏰ Enviando recordatorio de 5 minutos a {sender_number}")
+        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
+        follow_up_flags[sender_number]["5min"] = True
+
+    time.sleep(3300)  # Esperar 55 minutos más (total 60)
+    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
+        print(f"⏰ Enviando recordatorio de 60 minutos a {sender_number}")
+        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
+        follow_up_flags[sender_number]["60min"] = True
+
+# Función auxiliar para enviar mensajes salientes con Twilio
+def send_whatsapp_message(to_number, message):
+    from twilio.rest import Client
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+    client_twilio = Client(account_sid, auth_token)
+    client_twilio.messages.create(
+        body=message,
+        from_=from_number,
+        to=to_number
+    )
 
 # ✅ Recepción de mensajes de WhatsApp
 @app.route("/webhook", methods=["POST"])
@@ -93,45 +142,3 @@ def whatsapp_bot():
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
-
-# ⏰ Función para enviar recordatorios por inactividad
-def follow_up_task(sender_number, bot_number):
-    time.sleep(300)  # Esperar 5 minutos
-    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
-        print(f"⏰ Enviando recordatorio de 5 minutos a {sender_number}")
-        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
-        follow_up_flags[sender_number]["5min"] = True
-
-    time.sleep(3300)  # Esperar 55 minutos más (total 60)
-    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
-        print(f"⏰ Enviando recordatorio de 60 minutos a {sender_number}")
-        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
-        follow_up_flags[sender_number]["60min"] = True
-
-# 🔁 Función auxiliar para enviar mensajes con Twilio
-def send_whatsapp_message(to_number, message):
-    from twilio.rest import Client
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
-    client_twilio = Client(account_sid, auth_token)
-    client_twilio.messages.create(
-        body=message,
-        from_=from_number,
-        to=to_number
-    )
-
-# ✅ Nueva ruta para Webhook de Instagram
-@app.route("/instagram", methods=["GET"])
-def verify_instagram_webhook():
-    VERIFY_TOKEN = "1234"
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("🔐 Webhook verificado correctamente por Meta (Instagram).")
-        return challenge, 200
-    else:
-        print("❌ Falló la verificación del webhook de Instagram.")
-        return "Token inválido", 403
