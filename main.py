@@ -75,18 +75,29 @@ def voice():
     response = VoiceResponse()
     response.say(
         "Hola, soy Sara, la asistente virtual del señor Sundin Galué. "
-        "Si estás interesado en publicidad o deseas más información sobre la revista In Houston Texas, "
-        "por favor deja tu mensaje después del tono. Te devolveremos la llamada lo antes posible.",
+        "Por favor habla después del tono y te responderé en breve.",
         voice="woman",
         language="es-MX"
     )
     response.record(
         timeout=10,
         maxLength=30,
-        play_beep=True
+        play_beep=True,
+        action="/recording",
+        method="POST"
     )
     response.hangup()
     return str(response)
+
+# ✅ Nueva ruta para recibir la grabación
+@app.route("/recording", methods=["POST"])
+def handle_recording():
+    recording_url = request.form.get("RecordingUrl")
+    caller = request.form.get("From")
+    print(f"📥 Grabación recibida de {caller}: {recording_url}.mp3")
+
+    # Aquí luego llamaremos a Whisper para transcribir el audio
+    return "✅ Grabación recibida", 200
 
 # Función para enviar recordatorios por inactividad
 def follow_up_task(sender_number, bot_number):
