@@ -7,8 +7,9 @@ import json
 import time
 from threading import Thread
 
-# ✅ Importación adicional para llamadas de voz
+# ✅ Importaciones necesarias para llamadas y descarga de audio
 from twilio.twiml.voice_response import VoiceResponse
+import requests
 
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
@@ -47,7 +48,7 @@ def verify_whatsapp():
         print("❌ Falló la verificación del webhook de WhatsApp.")
         return "Token inválido", 403
 
-# ✅ Verificación del webhook de Instagram (misma lógica)
+# ✅ Verificación del webhook de Instagram
 @app.route("/instagram", methods=["GET", "POST"])
 def instagram_webhook():
     VERIFY_TOKEN = "1234"
@@ -69,7 +70,7 @@ def instagram_webhook():
         print(request.json)
         return "✅ Instagram Webhook recibido correctamente", 200
 
-# ✅ Ruta para responder llamadas telefónicas entrantes
+# ✅ Ruta de llamadas entrantes (Twilio Voice)
 @app.route("/voice", methods=["POST"])
 def voice():
     response = VoiceResponse()
@@ -89,31 +90,52 @@ def voice():
     response.hangup()
     return str(response)
 
-# ✅ Nueva ruta para recibir la grabación
+# ✅ Nueva ruta para recibir la grabación y transcribir con Whisper
 @app.route("/recording", methods=["POST"])
 def handle_recording():
     recording_url = request.form.get("RecordingUrl")
     caller = request.form.get("From")
-    print(f"📥 Grabación recibida de {caller}: {recording_url}.mp3")
+    audio_url = f"{recording_url}.mp3"
 
-    # Aquí luego llamaremos a Whisper para transcribir el audio
-    return "✅ Grabación recibida", 200
+    print(f"🎙️ Procesando grabación de {caller}: {audio_url}")
 
-# Función para enviar recordatorios por inactividad
+    try:
+        # Descargar el audio
+        audio_response = requests.get(audio_url)
+        audio_path = "/tmp/audio.mp3"
+        with open(audio_path, "wb") as f:
+            f.write(audio_response.content)
+
+        # Enviar a Whisper para transcripción
+        with open(audio_path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="text"
+            )
+        print(f"📝 Transcripción de {caller}: {transcription}")
+
+    except Exception as e:
+        print(f"❌ Error al transcribir: {e}")
+        return "Error en la transcripción", 500
+
+    return "✅ Transcripción completada", 200
+
+# 🕒 Función para enviar recordatorios por inactividad
 def follow_up_task(sender_number, bot_number):
-    time.sleep(300)  # Esperar 5 minutos
+    time.sleep(300)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
         print(f"⏰ Enviando recordatorio de 5 minutos a {sender_number}")
         send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
         follow_up_flags[sender_number]["5min"] = True
 
-    time.sleep(3300)  # Esperar 55 minutos más (total 60)
+    time.sleep(3300)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
         print(f"⏰ Enviando recordatorio de 60 minutos a {sender_number}")
         send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
         follow_up_flags[sender_number]["60min"] = True
 
-# Función auxiliar para enviar mensajes salientes con Twilio
+# 💬 Enviar mensajes salientes con Twilio
 def send_whatsapp_message(to_number, message):
     from twilio.rest import Client
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
@@ -126,7 +148,7 @@ def send_whatsapp_message(to_number, message):
         to=to_number
     )
 
-# ✅ Recepción de mensajes de WhatsApp
+# ✅ Webhook de WhatsApp (recepción de mensajes)
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
