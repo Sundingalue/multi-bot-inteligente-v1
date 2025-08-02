@@ -7,6 +7,9 @@ import json
 import time
 from threading import Thread
 
+# ✅ Importación adicional para llamadas de voz
+from twilio.twiml.voice_response import VoiceResponse
+
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
@@ -65,6 +68,25 @@ def instagram_webhook():
         print("📩 Instagram webhook POST recibido:")
         print(request.json)
         return "✅ Instagram Webhook recibido correctamente", 200
+
+# ✅ Ruta para responder llamadas telefónicas entrantes
+@app.route("/voice", methods=["POST"])
+def voice():
+    response = VoiceResponse()
+    response.say(
+        "Hola, soy Sara, la asistente virtual del señor Sundin Galué. "
+        "Si estás interesado en publicidad o deseas más información sobre la revista In Houston Texas, "
+        "por favor deja tu mensaje después del tono. Te devolveremos la llamada lo antes posible.",
+        voice="woman",
+        language="es-MX"
+    )
+    response.record(
+        timeout=10,
+        maxLength=30,
+        play_beep=True
+    )
+    response.hangup()
+    return str(response)
 
 # Función para enviar recordatorios por inactividad
 def follow_up_task(sender_number, bot_number):
