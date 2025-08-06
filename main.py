@@ -224,19 +224,24 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 
-@app.route("/chat/<numero>")
-def ver_conversacion(numero):
-    numero = numero.strip()
+@app.route("/conversacion/<numero>")
+def chat_conversacion(numero):
     if not os.path.exists("leads.json"):
-        return "No hay datos disponibles"
+        return "No hay historial disponible", 404
 
     with open("leads.json", "r") as f:
         leads = json.load(f)
 
-    if numero not in leads:
-        return "Número no encontrado"
+    historial = leads.get(numero, {}).get("historial", [])
 
-    mensajes = leads[numero].get("historial", [])
+    mensajes = []
+    for registro in historial:
+        mensajes.append({
+            "texto": registro.get("texto", ""),
+            "hora": registro.get("hora", ""),
+            "tipo": registro.get("tipo", "user")
+        })
+
     return render_template("chat.html", numero=numero, mensajes=mensajes)
 
 
@@ -258,24 +263,3 @@ def send_whatsapp_message(to_number, message):
     from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
-
-@app.route("/conversacion/<numero>")
-def ver_conversacion(numero):
-    if not os.path.exists("leads.json"):
-        return "No hay historial disponible", 404
-
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-
-    historial = leads.get(numero, {}).get("historial", [])
-    
-    mensajes = []
-    for index, texto in enumerate(historial):
-        tipo = "user" if index % 2 == 0 else "bot"
-        mensajes.append({
-            "texto": texto,
-            "hora": "",  # Puedes agregar timestamp si deseas
-            "tipo": tipo
-        })
-
-    return render_template("chat.html", numero=numero, mensajes=mensajes)
