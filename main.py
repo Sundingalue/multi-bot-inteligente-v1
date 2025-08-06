@@ -26,8 +26,6 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
-# Guardar leads en leads.json
-
 def guardar_lead(numero, mensaje):
     try:
         archivo = "leads.json"
@@ -64,17 +62,14 @@ def guardar_lead(numero, mensaje):
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
 
-
 @app.after_request
 def permitir_iframe(response):
     response.headers["X-Frame-Options"] = "ALLOWALL"
     return response
 
-
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Bot inteligente activo en Render."
-
 
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
@@ -86,7 +81,6 @@ def verify_whatsapp():
         return challenge, 200
     else:
         return "Token inválido", 403
-
 
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
@@ -141,7 +135,6 @@ def whatsapp_bot():
 
     return str(response)
 
-
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
@@ -149,15 +142,8 @@ def panel():
             if request.form.get("usuario") == "sundin" and request.form.get("clave") == "inhouston2025":
                 session["autenticado"] = True
                 return redirect(url_for("panel"))
-            return "Acceso denegado", 401
-        return '''
-            <form method="post">
-                <h2>🔐 Ingreso al panel de leads</h2>
-                Usuario: <input type="text" name="usuario"><br><br>
-                Clave: <input type="password" name="clave"><br><br>
-                <input type="submit" value="Ingresar">
-            </form>
-        '''
+            return render_template("login.html", error=True)
+        return render_template("login.html")
 
     if not os.path.exists("leads.json"):
         leads = {}
@@ -166,7 +152,6 @@ def panel():
             leads = json.load(f)
 
     return render_template("panel.html", leads=leads)
-
 
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -187,12 +172,10 @@ def guardar_edicion():
 
     return jsonify({"mensaje": "Lead actualizado"})
 
-
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return redirect(url_for("panel"))
-
 
 @app.route("/exportar")
 def exportar():
@@ -222,7 +205,6 @@ def exportar():
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
-
 @app.route("/conversacion/<numero>")
 def chat_conversacion(numero):
     if not os.path.exists("leads.json"):
@@ -243,7 +225,6 @@ def chat_conversacion(numero):
 
     return render_template("chat.html", numero=numero, mensajes=mensajes)
 
-
 @app.route("/ver-leads-json")
 def ver_leads_json():
     try:
@@ -257,7 +238,6 @@ def ver_leads_json():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 def follow_up_task(sender_number, bot_number):
     time.sleep(300)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
@@ -267,7 +247,6 @@ def follow_up_task(sender_number, bot_number):
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
         send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
         follow_up_flags[sender_number]["60min"] = True
-
 
 def send_whatsapp_message(to_number, message):
     from twilio.rest import Client
