@@ -73,7 +73,7 @@ def home():
 
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
-    VERIFY_TOKEN = "1234"
+    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_WHATSAPP")
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
@@ -134,6 +134,17 @@ def whatsapp_bot():
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
+
+@app.route("/webhook_instagram", methods=["GET"])
+def verify_instagram():
+    VERIFY_TOKEN_INSTAGRAM = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN_INSTAGRAM:
+        return challenge, 200
+    else:
+        return "Token inválido para Instagram", 403
 
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
@@ -255,15 +266,3 @@ def send_whatsapp_message(to_number, message):
     from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
-
-# NUEVA RUTA PARA INSTAGRAM
-@app.route("/webhook_instagram", methods=["GET"])
-def verify_instagram():
-    VERIFY_TOKEN_INSTAGRAM = os.environ.get("VERIFY_TOKEN")
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN_INSTAGRAM:
-        return challenge, 200
-    else:
-        return "Token inválido para Instagram", 403
