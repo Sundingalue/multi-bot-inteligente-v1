@@ -284,3 +284,7 @@ def exportar():
         download_name="leads.csv",
         as_attachment=True
     )
+@app.after_request
+def permitir_iframe(response):
+    response.headers["X-Frame-Options"] = "ALLOWALL"
+    return response
