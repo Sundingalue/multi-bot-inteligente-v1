@@ -126,7 +126,6 @@ def whatsapp_bot():
         session_history[sender_number].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
-        # Guardar respuesta del bot en historial
         archivo = "leads.json"
         if os.path.exists(archivo):
             with open(archivo, "r") as f:
@@ -243,6 +242,20 @@ def chat_conversacion(numero):
         })
 
     return render_template("chat.html", numero=numero, mensajes=mensajes)
+
+
+@app.route("/ver-leads-json")
+def ver_leads_json():
+    try:
+        if not os.path.exists("leads.json"):
+            return jsonify({"error": "El archivo leads.json no existe."}), 404
+
+        with open("leads.json", "r") as f:
+            leads = json.load(f)
+
+        return jsonify(leads)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def follow_up_task(sender_number, bot_number):
