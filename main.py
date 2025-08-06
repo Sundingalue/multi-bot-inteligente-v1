@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, session, redirect, url_for, send_file, jsonify
+from flask import Flask, request, render_template_string, session, redirect, url_for, send_file, jsonify, render_template
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -48,7 +48,7 @@ def guardar_lead(numero, mensaje):
                 "messages": 1,
                 "status": "nuevo",
                 "notes": "",
-                "historial": [mensaje]
+                "historial": [{"tipo": "user", "texto": mensaje, "hora": ahora}]
             }
         else:
             leads[numero]["messages"] += 1
@@ -56,7 +56,7 @@ def guardar_lead(numero, mensaje):
             leads[numero]["last_seen"] = ahora
             if "historial" not in leads[numero]:
                 leads[numero]["historial"] = []
-            leads[numero]["historial"].append(mensaje)
+            leads[numero]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
 
         with open(archivo, "w") as f:
             json.dump(leads, f, indent=4)
@@ -125,6 +125,17 @@ def whatsapp_bot():
         respuesta = completion.choices[0].message.content.strip()
         session_history[sender_number].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
+
+        # Guardar respuesta del bot en historial
+        archivo = "leads.json"
+        if os.path.exists(archivo):
+            with open(archivo, "r") as f:
+                leads = json.load(f)
+            if sender_number in leads:
+                leads[sender_number]["historial"].append({"tipo": "bot", "texto": respuesta, "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+                with open(archivo, "w") as f:
+                    json.dump(leads, f, indent=4)
+
     except Exception as e:
         print(f"❌ Error con GPT: {e}")
         msg.body("Lo siento, hubo un error generando la respuesta.")
@@ -155,7 +166,7 @@ def panel():
         with open("leads.json", "r") as f:
             leads = json.load(f)
 
-    return render_template_string(open("templates/panel.html").read(), leads=leads)
+    return render_template("panel.html", leads=leads)
 
 
 @app.route("/guardar-lead", methods=["POST"])
@@ -211,6 +222,22 @@ def exportar():
 
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
+
+
+@app.route("/chat/<numero>")
+def ver_conversacion(numero):
+    numero = numero.strip()
+    if not os.path.exists("leads.json"):
+        return "No hay datos disponibles"
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    if numero not in leads:
+        return "Número no encontrado"
+
+    mensajes = leads[numero].get("historial", [])
+    return render_template("chat.html", numero=numero, mensajes=mensajes)
 
 
 def follow_up_task(sender_number, bot_number):
