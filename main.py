@@ -266,3 +266,8 @@ def send_whatsapp_message(to_number, message):
     from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
+
+# 🚀 CORRECTO PARA RENDER
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
