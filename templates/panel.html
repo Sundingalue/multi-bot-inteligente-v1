@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel de Leads - In Houston Texas</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #fff;
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background-color: #FFD700;
+            padding: 20px;
+            text-align: center;
+            color: black;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        table {
+            width: 95%;
+            margin: 30px auto;
+            border-collapse: collapse;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        th {
+            background-color: #000;
+            color: #FFD700;
+            padding: 10px;
+        }
+        td {
+            padding: 8px;
+            border-bottom: 1px solid #ccc;
+        }
+        input[type="text"], select {
+            padding: 4px;
+            width: 95%;
+        }
+        button {
+            background-color: #000;
+            color: #FFD700;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #FFD700;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <header>📋 Panel de Leads - In Houston Texas</header>
+    <table>
+        <thead>
+            <tr>
+                <th>Número</th>
+                <th>Primer contacto</th>
+                <th>Último mensaje</th>
+                <th>Última vez</th>
+                <th>Mensajes</th>
+                <th>Estado</th>
+                <th>Notas</th>
+                <th>Guardar</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for numero, datos in leads.items() %}
+            <tr>
+                <td>{{ numero }}</td>
+                <td>{{ datos.first_seen }}</td>
+                <td>{{ datos.last_message }}</td>
+                <td>{{ datos.last_seen }}</td>
+                <td>{{ datos.messages }}</td>
+                <td>
+                    <select id="estado-{{ loop.index }}">
+                        <option value="nuevo" {% if datos.status == 'nuevo' %}selected{% endif %}>nuevo</option>
+                        <option value="pendiente" {% if datos.status == 'pendiente' %}selected{% endif %}>pendiente</option>
+                        <option value="agendado" {% if datos.status == 'agendado' %}selected{% endif %}>agendado</option>
+                        <option value="cerrado" {% if datos.status == 'cerrado' %}selected{% endif %}>cerrado</option>
+                    </select>
+                </td>
+                <td>
+                    <input type="text" id="nota-{{ loop.index }}" value="{{ datos.notes }}">
+                </td>
+                <td>
+                    <button onclick="guardar('{{ numero }}', {{ loop.index }})">💾</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <script>
+        function guardar(numero, index) {
+            const estado = document.getElementById('estado-' + index).value;
+            const nota = document.getElementById('nota-' + index).value;
+            fetch('/guardar-lead', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ numero, estado, nota })
+            })
+            .then(response => response.json())
+            .then(data => alert('✅ Lead actualizado'))
+            .catch(error => alert('❌ Error al guardar'));
+        }
+    </script>
+</body>
+</html>
