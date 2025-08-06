@@ -6,6 +6,7 @@ import os
 import json
 import time
 from threading import Thread
+from datetime import datetime
 
 # ✅ Importaciones necesarias para llamadas y descarga de audio
 from twilio.twiml.voice_response import VoiceResponse
@@ -29,18 +30,52 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
+# ✅ Nueva función para registrar leads
+def guardar_lead(numero, mensaje):
+    try:
+        archivo = "leads.json"
+        if not os.path.exists(archivo):
+            with open(archivo, "w") as f:
+                json.dump({}, f, indent=4)
+
+        with open(archivo, "r") as f:
+            leads = json.load(f)
+
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if numero not in leads:
+            leads[numero] = {
+                "first_seen": ahora,
+                "last_message": mensaje,
+                "last_seen": ahora,
+                "messages": 1,
+                "status": "nuevo",
+                "notes": ""
+            }
+        else:
+            leads[numero]["messages"] += 1
+            leads[numero]["last_message"] = mensaje
+            leads[numero]["last_seen"] = ahora
+
+        with open(archivo, "w") as f:
+            json.dump(leads, f, indent=4)
+
+        print(f"📁 Lead guardado: {numero}")
+
+    except Exception as e:
+        print(f"❌ Error guardando lead: {e}")
+
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Bot inteligente activo en Render."
 
-# ✅ Verificación del webhook de WhatsApp
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
     VERIFY_TOKEN = "1234"
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
-    
+
     if mode == "subscribe" and token == VERIFY_TOKEN:
         print("🔐 Webhook de WhatsApp verificado correctamente por Meta.")
         return challenge, 200
@@ -48,16 +83,15 @@ def verify_whatsapp():
         print("❌ Falló la verificación del webhook de WhatsApp.")
         return "Token inválido", 403
 
-# ✅ Verificación del webhook de Instagram
 @app.route("/instagram", methods=["GET", "POST"])
 def instagram_webhook():
     VERIFY_TOKEN = "1234"
-    
+
     if request.method == "GET":
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
-        
+
         if mode == "subscribe" and token == VERIFY_TOKEN:
             print("🔐 Webhook de Instagram verificado correctamente por Meta.")
             return challenge, 200
@@ -70,7 +104,6 @@ def instagram_webhook():
         print(request.json)
         return "✅ Instagram Webhook recibido correctamente", 200
 
-# ✅ Ruta de llamadas entrantes (Twilio Voice)
 @app.route("/voice", methods=["POST"])
 def voice():
     response = VoiceResponse()
@@ -90,7 +123,6 @@ def voice():
     response.hangup()
     return str(response)
 
-# ✅ Nueva ruta para recibir la grabación y transcribir con Whisper
 @app.route("/recording", methods=["POST"])
 def handle_recording():
     recording_url = request.form.get("RecordingUrl")
@@ -100,13 +132,11 @@ def handle_recording():
     print(f"🎙️ Procesando grabación de {caller}: {audio_url}")
 
     try:
-        # Descargar el audio
         audio_response = requests.get(audio_url)
         audio_path = "/tmp/audio.mp3"
         with open(audio_path, "wb") as f:
             f.write(audio_response.content)
 
-        # Enviar a Whisper para transcripción
         with open(audio_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
                 model="whisper-1",
@@ -121,7 +151,6 @@ def handle_recording():
 
     return "✅ Transcripción completada", 200
 
-# 🕒 Función para enviar recordatorios por inactividad
 def follow_up_task(sender_number, bot_number):
     time.sleep(300)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
@@ -135,7 +164,6 @@ def follow_up_task(sender_number, bot_number):
         send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
         follow_up_flags[sender_number]["60min"] = True
 
-# 💬 Enviar mensajes salientes con Twilio
 def send_whatsapp_message(to_number, message):
     from twilio.rest import Client
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
@@ -148,7 +176,6 @@ def send_whatsapp_message(to_number, message):
         to=to_number
     )
 
-# ✅ Webhook de WhatsApp (recepción de mensajes)
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
@@ -164,6 +191,9 @@ def whatsapp_bot():
         print(f"⚠️ Número no asignado a ningún bot: {bot_number}")
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
+
+    # ✅ Guardar lead en leads.json
+    guardar_lead(sender_number, incoming_msg)
 
     if sender_number not in session_history:
         session_history[sender_number] = [{"role": "system", "content": bot["system_prompt"]}]
