@@ -258,3 +258,24 @@ def send_whatsapp_message(to_number, message):
     from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
+
+@app.route("/conversacion/<numero>")
+def ver_conversacion(numero):
+    if not os.path.exists("leads.json"):
+        return "No hay historial disponible", 404
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    historial = leads.get(numero, {}).get("historial", [])
+    
+    mensajes = []
+    for index, texto in enumerate(historial):
+        tipo = "user" if index % 2 == 0 else "bot"
+        mensajes.append({
+            "texto": texto,
+            "hora": "",  # Puedes agregar timestamp si deseas
+            "tipo": tipo
+        })
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes)
