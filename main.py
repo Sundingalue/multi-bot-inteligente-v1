@@ -15,6 +15,9 @@ import requests
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
+# Token de Instagram desde el entorno
+INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
+
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
