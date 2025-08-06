@@ -135,66 +135,6 @@ def whatsapp_bot():
 
     return str(response)
 
-@app.route("/webhook_instagram", methods=["GET"])
-def verify_instagram():
-    VERIFY_TOKEN_INSTAGRAM = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN_INSTAGRAM:
-        return challenge, 200
-    else:
-        return "Token inválido para Instagram", 403
-
-@app.route("/webhook_instagram", methods=["POST"])
-def instagram_bot():
-    data = request.get_json()
-    print(f"📥 Instagram payload recibido: {json.dumps(data, indent=2)}")
-
-    entry = data.get("entry", [])
-    for item in entry:
-        messaging = item.get("messaging", [])
-        for message_event in messaging:
-            sender_id = message_event.get("sender", {}).get("id")
-            message = message_event.get("message", {}).get("text")
-            if sender_id and message:
-                print(f"📨 Mensaje desde Instagram: {message}")
-
-                if sender_id not in session_history:
-                    session_history[sender_id] = [{"role": "system", "content": bots_config["whatsapp:+13469882323"]["system_prompt"]}]
-
-                session_history[sender_id].append({"role": "user", "content": message})
-
-                try:
-                    completion = client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=session_history[sender_id]
-                    )
-                    respuesta = completion.choices[0].message.content.strip()
-                    session_history[sender_id].append({"role": "assistant", "content": respuesta})
-                    enviar_respuesta_instagram(sender_id, respuesta)
-
-                except Exception as e:
-                    print(f"❌ Error al generar respuesta GPT para Instagram: {e}")
-
-    return "EVENT_RECEIVED", 200
-
-def enviar_respuesta_instagram(psid, mensaje):
-    token = os.environ.get("META_WA_ACCESS_TOKEN")
-    url = f"https://graph.facebook.com/v19.0/me/messages"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "recipient": {"id": psid},
-        "message": {"text": mensaje},
-        "messaging_type": "RESPONSE"
-    }
-
-    response = requests.post(url, headers=headers, json=payload, params={"access_token": token})
-    if response.status_code != 200:
-        print(f"❌ Error al enviar mensaje a Instagram: {response.status_code} {response.text}")
-    else:
-        print(f"✅ Mensaje enviado a Instagram: {mensaje}")
-
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
