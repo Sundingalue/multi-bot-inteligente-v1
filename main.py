@@ -15,7 +15,7 @@ import requests
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
-# Token de Instagram desde el entorno
+# Tokens desde entorno
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -167,10 +167,9 @@ def recibir_instagram():
         return "Error", 500
 
 def enviar_respuesta_instagram(psid):
-    token = os.environ.get("META_WA_ACCESS_TOKEN")
     url = f"https://graph.facebook.com/v18.0/me/messages"
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
         "Content-Type": "application/json"
     }
     payload = {
