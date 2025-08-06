@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Conversación - In Houston Texas</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            background: #fff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background-color: #ffd500;
+            color: black;
+            padding: 20px;
+            font-size: 20px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .chat-box {
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .message {
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            max-width: 70%;
+            clear: both;
+        }
+        .user {
+            background-color: #e1ffc7;
+            float: left;
+        }
+        .bot {
+            background-color: #cce5ff;
+            float: right;
+            text-align: right;
+        }
+        .timestamp {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .volver {
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+        }
+        .volver a {
+            text-decoration: none;
+            color: #333;
+            background: #ffd500;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .clearfix::after {
+            content: "";
+            clear: both;
+            display: table;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            Conversación con {{ numero }}
+        </div>
+        <div class="chat-box">
+            {% for msg in mensajes %}
+                <div class="message {{ msg.tipo }} clearfix">
+                    <div>{{ msg.texto }}</div>
+                    <div class="timestamp">{{ msg.hora }}</div>
+                </div>
+            {% endfor %}
+        </div>
+        <div class="volver">
+            <a href="/panel">⬅ Volver al panel</a>
+        </div>
+    </div>
+</body>
+</html>
