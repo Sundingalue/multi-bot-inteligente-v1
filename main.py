@@ -135,6 +135,48 @@ def whatsapp_bot():
 
     return str(response)
 
+@app.route("/webhook_instagram", methods=["GET"])
+def verify_instagram():
+    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    else:
+        return "Token inválido", 403
+
+@app.route("/webhook_instagram", methods=["POST"])
+def recibir_instagram():
+    data = request.json
+    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
+    try:
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") == "messages":
+                    mensaje = change["value"].get("message")
+                    sender_id = change["value"].get("from")
+                    if mensaje and sender_id:
+                        enviar_respuesta_instagram(sender_id)
+        return "EVENT_RECEIVED", 200
+    except Exception as e:
+        print(f"❌ Error procesando mensaje de Instagram: {e}")
+        return "Error", 500
+
+def enviar_respuesta_instagram(psid):
+    token = os.environ.get("META_WA_ACCESS_TOKEN")
+    url = f"https://graph.facebook.com/v18.0/me/messages"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "recipient": {"id": psid},
+        "message": {"text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"}
+    }
+    r = requests.post(url, headers=headers, json=payload)
+    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
+
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
