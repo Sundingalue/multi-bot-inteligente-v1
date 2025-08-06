@@ -48,6 +48,15 @@
             background-color: #FFD700;
             color: #000;
         }
+        a.numero-link {
+            color: #000;
+            font-weight: bold;
+            text-decoration: none;
+        }
+        a.numero-link:hover {
+            text-decoration: underline;
+            color: #F7BD02;
+        }
     </style>
 </head>
 <body>
@@ -68,7 +77,7 @@
         <tbody>
             {% for numero, datos in leads.items() %}
             <tr>
-                <td>{{ numero }}</td>
+                <td><a href="/conversacion/{{ numero }}" class="numero-link">{{ numero }}</a></td>
                 <td>{{ datos.first_seen }}</td>
                 <td>{{ datos.last_message }}</td>
                 <td>{{ datos.last_seen }}</td>
