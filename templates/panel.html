@@ -10,13 +10,31 @@
             margin: 0;
             padding: 0;
         }
-        header {
+        .header {
             background-color: #F7BD02;
             padding: 20px;
-            text-align: center;
             color: black;
             font-size: 24px;
             font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logout-form {
+            margin: 0;
+        }
+        .logout-form button {
+            background-color: #000;
+            color: #F7BD02;
+            border: none;
+            padding: 8px 15px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .logout-form button:hover {
+            background-color: #FFD700;
+            color: #000;
         }
         table {
             width: 95%;
@@ -60,7 +78,13 @@
     </style>
 </head>
 <body>
-    <header>📋 Panel de Leads - In Houston Texas</header>
+    <div class="header">
+        <div>📋 Panel de Leads - In Houston Texas</div>
+        <form class="logout-form" method="POST" action="/logout">
+            <button type="submit">Cerrar sesión</button>
+        </form>
+    </div>
+
     <table>
         <thead>
             <tr>
