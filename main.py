@@ -163,7 +163,7 @@ def recibir_instagram():
                     print("ℹ️ Mensaje tipo echo recibido. No se responderá.")
                     continue
 
-                if sender_id and "text" in message:
+                if sender_id and message.get("text"):
                     print("📨 Texto recibido desde Instagram:", message["text"])
                     enviar_respuesta_instagram(sender_id)
         return "EVENT_RECEIVED", 200
