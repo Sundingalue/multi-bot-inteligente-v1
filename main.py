@@ -155,26 +155,24 @@ def recibir_instagram():
     print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
     try:
         for entry in data.get("entry", []):
-            for change in entry.get("changes", []):
-                if change.get("field") == "messages":
-                    messaging_events = change["value"].get("messaging", [])
-                    for event in messaging_events:
-                        sender_id = event.get("sender", {}).get("id")
-                        message = event.get("message", {})
+            for messaging_event in entry.get("messaging", []):
+                sender_id = messaging_event.get("sender", {}).get("id")
+                message = messaging_event.get("message", {})
 
-                        if message.get("is_echo"):
-                            print("ℹ️ Mensaje echo (autoenviado), ignorado.")
-                            continue
+                if message.get("is_echo"):
+                    print("ℹ️ Mensaje tipo echo recibido. No se responderá.")
+                    continue
 
-                        if message.get("text") and sender_id:
-                            enviar_respuesta_instagram(sender_id)
+                if sender_id and "text" in message:
+                    print("📨 Texto recibido desde Instagram:", message["text"])
+                    enviar_respuesta_instagram(sender_id)
         return "EVENT_RECEIVED", 200
     except Exception as e:
         print(f"❌ Error procesando mensaje de Instagram: {e}")
         return "Error", 500
 
 def enviar_respuesta_instagram(psid):
-    url = f"https://graph.facebook.com/v18.0/me/messages"
+    url = "https://graph.facebook.com/v18.0/me/messages"
     headers = {
         "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
         "Content-Type": "application/json"
