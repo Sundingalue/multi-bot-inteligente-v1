@@ -178,8 +178,11 @@ def enviar_respuesta_instagram(psid):
         "Content-Type": "application/json"
     }
     payload = {
+        "messaging_type": "RESPONSE",
         "recipient": {"id": psid},
-        "message": {"text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"}
+        "message": {
+            "text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
+        }
     }
     r = requests.post(url, headers=headers, json=payload)
     print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
