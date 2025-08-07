@@ -157,10 +157,17 @@ def recibir_instagram():
         for entry in data.get("entry", []):
             for change in entry.get("changes", []):
                 if change.get("field") == "messages":
-                    mensaje = change["value"].get("message")
-                    sender_id = change["value"].get("from")
-                    if mensaje and sender_id:
-                        enviar_respuesta_instagram(sender_id)
+                    messaging_events = change["value"].get("messaging", [])
+                    for event in messaging_events:
+                        sender_id = event.get("sender", {}).get("id")
+                        message = event.get("message", {})
+
+                        if message.get("is_echo"):
+                            print("ℹ️ Mensaje echo (autoenviado), ignorado.")
+                            continue
+
+                        if message.get("text") and sender_id:
+                            enviar_respuesta_instagram(sender_id)
         return "EVENT_RECEIVED", 200
     except Exception as e:
         print(f"❌ Error procesando mensaje de Instagram: {e}")
