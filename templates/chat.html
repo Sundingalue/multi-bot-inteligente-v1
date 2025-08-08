@@ -133,7 +133,8 @@
             {% endfor %}
         </div>
         <div class="volver">
-            <a href="/panel">⬅ Volver al panel</a>
+            <!-- El enlace ha sido actualizado para volver al panel exclusivo del bot -->
+            <a href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}">⬅ Volver al panel del bot</a>
         </div>
     </div>
 </body>
