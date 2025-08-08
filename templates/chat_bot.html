@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Conversación - In Houston Texas</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #f7f7f7;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 100%;
+            margin: 0 auto;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        .header {
+            background-color: #F7BD02;
+            color: #000;
+            padding: 20px;
+            font-size: 22px;
+            font-weight: bold;
+            text-align: center;
+            letter-spacing: 1px;
+        }
+
+        .chat-box {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            background: #fafafa;
+        }
+
+        .message {
+            padding: 14px 18px;
+            margin: 12px 0;
+            border-radius: 18px;
+            max-width: 85%;
+            clear: both;
+            font-size: 16px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            position: relative;
+        }
+
+        .user {
+            background-color: #ffe97f;
+            float: left;
+            color: #000;
+            border-top-left-radius: 4px;
+            border-bottom-right-radius: 18px;
+        }
+
+        .bot {
+            background-color: #000;
+            color: #F7BD02;
+            float: right;
+            text-align: right;
+            border-top-right-radius: 4px;
+            border-bottom-left-radius: 18px;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #888;
+            margin-top: 6px;
+        }
+
+        .volver {
+            text-align: center;
+            padding: 20px;
+            background: #000;
+        }
+
+        .volver a {
+            text-decoration: none;
+            color: #F7BD02;
+            background: transparent;
+            padding: 10px 25px;
+            border: 2px solid #F7BD02;
+            border-radius: 30px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .volver a:hover {
+            background: #F7BD02;
+            color: #000;
+        }
+
+        .clearfix::after {
+            content: "";
+            clear: both;
+            display: table;
+        }
+
+        @media screen and (max-width: 600px) {
+            .header {
+                font-size: 18px;
+                padding: 16px;
+            }
+
+            .message {
+                font-size: 15px;
+                padding: 12px 16px;
+                margin: 10px 0;
+            }
+
+            .chat-box {
+                padding: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            Conversación con {{ numero }}
+        </div>
+        <div class="chat-box">
+            {% for msg in mensajes %}
+                <div class="message {{ msg.tipo }} clearfix">
+                    <div>{{ msg.texto }}</div>
+                    <div class="timestamp">{{ msg.hora }}</div>
+                </div>
+            {% endfor %}
+        </div>
+        <div class="volver">
+            <!-- Este enlace siempre regresa al panel del bot específico -->
+            <a href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}">
+                ⬅ Volver al panel del bot
+            </a>
+        </div>
+    </div>
+</body>
+</html>
