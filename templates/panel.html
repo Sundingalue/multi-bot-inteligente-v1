@@ -2,6 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panel de Conversaciones</title>
     <style>
         body {
@@ -10,6 +11,7 @@
             margin: 0;
             padding: 0;
         }
+
         .header {
             background-color: #000;
             color: #F7BD02;
@@ -19,84 +21,132 @@
             font-weight: bold;
             letter-spacing: 1px;
         }
+
         .container {
             max-width: 1100px;
-            margin: 40px auto;
+            margin: 20px auto;
             background: #fff;
             border-radius: 16px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
             overflow: hidden;
         }
+
         .selector {
             padding: 20px;
             background-color: #ffe97f;
             text-align: center;
         }
+
         .selector form {
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            gap: 12px;
             align-items: center;
-            gap: 10px;
         }
+
         select {
-            padding: 10px;
-            font-size: 16px;
+            padding: 12px;
+            font-size: 18px;
             border-radius: 8px;
             border: 1px solid #ccc;
+            width: 90%;
+            max-width: 400px;
         }
+
         button {
             background-color: #000;
             color: #F7BD02;
             border: none;
-            padding: 10px 20px;
+            padding: 12px 24px;
             border-radius: 8px;
+            font-size: 18px;
             font-weight: bold;
             cursor: pointer;
             transition: background 0.3s;
         }
+
         button:hover {
             background-color: #F7BD02;
             color: #000;
         }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 18px;
         }
+
         th {
             background-color: #000;
             color: #F7BD02;
-            padding: 12px;
+            padding: 14px;
             text-align: left;
+            white-space: nowrap;
         }
+
         td {
-            padding: 12px;
+            padding: 14px;
             border-bottom: 1px solid #ccc;
+            white-space: nowrap;
         }
+
         tr:hover {
             background-color: #f9f9f9;
         }
+
         .link {
             color: #000;
             text-decoration: none;
             font-weight: bold;
         }
+
         .link:hover {
             text-decoration: underline;
         }
+
         .no-leads {
             text-align: center;
             padding: 30px;
-            font-size: 18px;
+            font-size: 20px;
             color: #555;
+        }
+
+        @media screen and (max-width: 600px) {
+            .header {
+                font-size: 24px;
+                padding: 16px;
+            }
+
+            .selector form {
+                flex-direction: column;
+            }
+
+            select, button {
+                font-size: 18px;
+                width: 100%;
+            }
+
+            table {
+                font-size: 16px;
+            }
+
+            th, td {
+                padding: 12px;
+            }
         }
     </style>
 </head>
 <body>
     <div class="header">Panel de Conversaciones</div>
+
     <div class="container">
         <div class="selector">
             <form method="GET" action="/panel">
-                <label for="bot">Selecciona una compañía:</label>
+                <label for="bot" style="font-weight: bold;">Selecciona una compañía:</label>
                 <select name="bot" id="bot">
                     <option value="">-- Ver todos --</option>
                     {% for bot in bots %}
@@ -107,34 +157,36 @@
             </form>
         </div>
 
-        {% if leads %}
-        <table>
-            <tr>
-                <th>Número</th>
-                <th>Último mensaje</th>
-                <th>Fecha</th>
-                <th>Status</th>
-                <th>Notas</th>
-            </tr>
-            {% for clave, lead in leads.items() %}
-            <tr>
-                <td><a class="link" href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a></td>
-                <td>{{ lead.last_message }}</td>
-                <td>{{ lead.last_seen }}</td>
-                <td>{{ lead.status }}</td>
-                <td>{{ lead.notes }}</td>
-            </tr>
-            {% endfor %}
-        </table>
-        {% else %}
-        <div class="no-leads">
-            {% if seleccionado %}
-                No hay conversaciones para la compañía <strong>{{ seleccionado }}</strong>.
+        <div class="table-container">
+            {% if leads %}
+            <table>
+                <tr>
+                    <th>Número</th>
+                    <th>Último mensaje</th>
+                    <th>Fecha</th>
+                    <th>Status</th>
+                    <th>Notas</th>
+                </tr>
+                {% for clave, lead in leads.items() %}
+                <tr>
+                    <td><a class="link" href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a></td>
+                    <td>{{ lead.last_message }}</td>
+                    <td>{{ lead.last_seen }}</td>
+                    <td>{{ lead.status }}</td>
+                    <td>{{ lead.notes }}</td>
+                </tr>
+                {% endfor %}
+            </table>
             {% else %}
-                No hay leads disponibles todavía.
+            <div class="no-leads">
+                {% if seleccionado %}
+                    No hay conversaciones para la compañía <strong>{{ seleccionado }}</strong>.
+                {% else %}
+                    No hay leads disponibles todavía.
+                {% endif %}
+            </div>
             {% endif %}
         </div>
-        {% endif %}
     </div>
 </body>
 </html>
