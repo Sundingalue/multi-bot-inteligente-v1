@@ -170,3 +170,144 @@ def recibir_instagram():
     except Exception as e:
         print(f"❌ Error procesando mensaje de Instagram: {e}")
         return "Error", 500
+
+def enviar_respuesta_instagram(psid):
+    url = "https://graph.facebook.com/v18.0/me/messages"
+    headers = {
+        "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_type": "RESPONSE",
+        "recipient": {"id": psid},
+        "message": {
+            "text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
+        }
+    }
+    r = requests.post(url, headers=headers, json=payload)
+    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
+
+@app.route("/panel", methods=["GET", "POST"])
+def panel():
+    if not session.get("autenticado"):
+        if request.method == "POST":
+            if request.form.get("usuario") == "sundin" and request.form.get("clave") == "inhouston2025":
+                session["autenticado"] = True
+                return redirect(url_for("panel"))
+            return render_template("login.html", error=True)
+        return render_template("login.html")
+
+    if not os.path.exists("leads.json"):
+        leads = {}
+    else:
+        with open("leads.json", "r") as f:
+            leads = json.load(f)
+
+    return render_template("panel.html", leads=leads)
+
+@app.route("/guardar-lead", methods=["POST"])
+def guardar_edicion():
+    data = request.json
+    numero = data.get("numero")
+    estado = data.get("estado")
+    nota = data.get("nota")
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    if numero in leads:
+        leads[numero]["status"] = estado
+        leads[numero]["notes"] = nota
+
+        with open("leads.json", "w") as f:
+            json.dump(leads, f, indent=4)
+
+    return jsonify({"mensaje": "Lead actualizado"})
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("panel"))
+
+@app.route("/exportar")
+def exportar():
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+
+    if not os.path.exists("leads.json"):
+        return "No hay leads disponibles"
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
+    for numero, datos in leads.items():
+        writer.writerow([
+            numero,
+            datos.get("first_seen", ""),
+            datos.get("last_message", ""),
+            datos.get("last_seen", ""),
+            datos.get("messages", ""),
+            datos.get("status", ""),
+            datos.get("notes", "")
+        ])
+
+    output.seek(0)
+    return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
+
+@app.route("/conversacion/<numero>")
+def chat_conversacion(numero):
+    if not os.path.exists("leads.json"):
+        return "No hay historial disponible", 404
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    historial = leads.get(numero, {}).get("historial", [])
+
+    mensajes = []
+    for registro in historial:
+        mensajes.append({
+            "texto": registro.get("texto", ""),
+            "hora": registro.get("hora", ""),
+            "tipo": registro.get("tipo", "user")
+        })
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes)
+
+@app.route("/ver-leads-json")
+def ver_leads_json():
+    try:
+        if not os.path.exists("leads.json"):
+            return jsonify({"error": "El archivo leads.json no existe."}), 404
+
+        with open("leads.json", "r") as f:
+            leads = json.load(f)
+
+        return jsonify(leads)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def follow_up_task(sender_number, bot_number):
+    time.sleep(300)
+    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
+        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
+        follow_up_flags[sender_number]["5min"] = True
+    time.sleep(3300)
+    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
+        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
+        follow_up_flags[sender_number]["60min"] = True
+
+def send_whatsapp_message(to_number, message):
+    from twilio.rest import Client
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+    client_twilio = Client(account_sid, auth_token)
+    client_twilio.messages.create(body=message, from_=from_number, to=to_number)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
