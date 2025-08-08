@@ -293,18 +293,18 @@ def ver_leads_json():
 def follow_up_task(sender_number, bot_number):
     time.sleep(300)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
-        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊")
+        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊", bot_number)
         follow_up_flags[sender_number]["5min"] = True
     time.sleep(3300)
     if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
-        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉")
+        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉", bot_number)
         follow_up_flags[sender_number]["60min"] = True
 
-def send_whatsapp_message(to_number, message):
+def send_whatsapp_message(to_number, message, bot_number=None):
     from twilio.rest import Client
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
     auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+    from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
 
