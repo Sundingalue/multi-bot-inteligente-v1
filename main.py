@@ -102,26 +102,6 @@ def panel_exclusivo_bot(bot_nombre):
 
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
 
-@app.route("/conversacion/<bot>/<numero>")
-def chat_conversacion(bot, numero):
-    clave = f"{bot}|{numero}"
-    if not os.path.exists("leads.json"):
-        return "No hay historial disponible", 404
-
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-
-    historial = leads.get(clave, {}).get("historial", [])
-    mensajes = []
-    for registro in historial:
-        mensajes.append({
-            "texto": registro.get("texto", ""),
-            "hora": registro.get("hora", ""),
-            "tipo": registro.get("tipo", "user")
-        })
-
-    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot, nombre_comercial=bot)
-
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Bot inteligente activo en Render."
