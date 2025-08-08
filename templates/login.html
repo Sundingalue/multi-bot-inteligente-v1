@@ -16,64 +16,72 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      background: #000;
+      background: linear-gradient(135deg, #000000 0%, #F7BD02 100%);
     }
 
     .login-box {
       background: #fff;
       color: #000;
-      padding: 40px;
-      border-radius: 12px;
+      padding: 50px 40px;
+      border-radius: 16px;
       width: 100%;
       max-width: 400px;
-      box-shadow: 0 8px 20px rgba(255, 213, 0, 0.6);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
       text-align: center;
     }
 
     .login-box h1 {
-      color: #ffd500;
-      margin-bottom: 30px;
+      color: #F7BD02;
+      margin-bottom: 35px;
+      font-size: 28px;
     }
 
     .login-box input {
       width: 100%;
-      padding: 12px;
-      margin-bottom: 20px;
+      padding: 14px;
+      margin-bottom: 25px;
       border: 1px solid #ccc;
-      border-radius: 6px;
+      border-radius: 8px;
       font-size: 16px;
+      background: #f9f9f9;
     }
 
     .login-box button {
-      background-color: #ffd500;
+      background-color: #F7BD02;
       color: #000;
       border: none;
-      padding: 12px;
+      padding: 14px;
       width: 100%;
       font-weight: bold;
       font-size: 16px;
-      border-radius: 6px;
+      border-radius: 8px;
       cursor: pointer;
       transition: background-color 0.3s ease;
     }
 
     .login-box button:hover {
-      background-color: #e5bf00;
+      background-color: #000;
+      color: #F7BD02;
+    }
+
+    .footer {
+      margin-top: 20px;
+      font-size: 13px;
+      color: #888;
     }
   </style>
 </head>
 <body>
-
   <div class="login-container">
     <div class="login-box">
-      <h1>Iniciar sesión</h1>
+      <h1>Acceso al Panel</h1>
       <form method="POST" action="/panel">
         <input type="text" name="usuario" placeholder="Usuario" required>
         <input type="password" name="clave" placeholder="Contraseña" required>
-        <button type="submit">Entrar al Panel</button>
+        <button type="submit">Entrar</button>
       </form>
+      <div class="footer">In Houston Texas - Sistema de Leads © 2025</div>
     </div>
   </div>
-
 </body>
 </html>
