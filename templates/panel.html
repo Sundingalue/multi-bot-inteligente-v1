@@ -6,10 +6,11 @@
     <title>Panel de Conversaciones</title>
     <style>
         body {
-            font-family: 'Segoe UI', sans-serif;
-            background-color: #f4f4f4;
             margin: 0;
             padding: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #F7BD02;
+            color: #000;
         }
 
         .header {
@@ -19,100 +20,86 @@
             text-align: center;
             font-size: 28px;
             font-weight: bold;
-            letter-spacing: 1px;
         }
 
         .container {
-            max-width: 1100px;
-            margin: 20px auto;
-            background: #fff;
-            border-radius: 16px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
-            overflow: hidden;
+            padding: 20px;
         }
 
         .selector {
-            padding: 20px;
-            background-color: #ffe97f;
+            margin-bottom: 20px;
             text-align: center;
         }
 
-        .selector form {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            align-items: center;
+        .selector label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 10px;
+            font-size: 18px;
         }
 
-        select {
+        .selector select {
             padding: 12px;
             font-size: 18px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            width: 90%;
+            border-radius: 30px;
+            border: none;
+            width: 80%;
             max-width: 400px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
         }
 
-        button {
+        .selector button {
+            margin-top: 15px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 30px;
             background-color: #000;
             color: #F7BD02;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
             font-size: 18px;
             font-weight: bold;
             cursor: pointer;
-            transition: background 0.3s;
+            width: 80%;
+            max-width: 400px;
         }
 
-        button:hover {
+        .selector button:hover {
             background-color: #F7BD02;
             color: #000;
+            border: 2px solid #000;
         }
 
-        .table-container {
-            overflow-x: auto;
+        .lead-card {
+            background-color: #1a1a1a;
+            color: #fff;
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 18px;
-        }
-
-        th {
-            background-color: #000;
+        .lead-card a {
             color: #F7BD02;
-            padding: 14px;
-            text-align: left;
-            white-space: nowrap;
-        }
-
-        td {
-            padding: 14px;
-            border-bottom: 1px solid #ccc;
-            white-space: nowrap;
-        }
-
-        tr:hover {
-            background-color: #f9f9f9;
-        }
-
-        .link {
-            color: #000;
-            text-decoration: none;
             font-weight: bold;
+            text-decoration: none;
+            font-size: 20px;
         }
 
-        .link:hover {
+        .lead-card a:hover {
             text-decoration: underline;
+        }
+
+        .lead-info {
+            margin-top: 10px;
+            font-size: 16px;
         }
 
         .no-leads {
             text-align: center;
-            padding: 30px;
             font-size: 20px;
-            color: #555;
+            color: #333;
+            background: #fff3cd;
+            padding: 20px;
+            border-radius: 12px;
         }
 
         @media screen and (max-width: 600px) {
@@ -121,21 +108,13 @@
                 padding: 16px;
             }
 
-            .selector form {
-                flex-direction: column;
-            }
-
-            select, button {
-                font-size: 18px;
-                width: 100%;
-            }
-
-            table {
+            .selector select,
+            .selector button {
                 font-size: 16px;
             }
 
-            th, td {
-                padding: 12px;
+            .lead-card {
+                font-size: 16px;
             }
         }
     </style>
@@ -146,7 +125,7 @@
     <div class="container">
         <div class="selector">
             <form method="GET" action="/panel">
-                <label for="bot" style="font-weight: bold;">Selecciona una compañía:</label>
+                <label for="bot">Selecciona una compañía:</label>
                 <select name="bot" id="bot">
                     <option value="">-- Ver todos --</option>
                     {% for bot in bots %}
@@ -157,27 +136,17 @@
             </form>
         </div>
 
-        <div class="table-container">
-            {% if leads %}
-            <table>
-                <tr>
-                    <th>Número</th>
-                    <th>Último mensaje</th>
-                    <th>Fecha</th>
-                    <th>Status</th>
-                    <th>Notas</th>
-                </tr>
-                {% for clave, lead in leads.items() %}
-                <tr>
-                    <td><a class="link" href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a></td>
-                    <td>{{ lead.last_message }}</td>
-                    <td>{{ lead.last_seen }}</td>
-                    <td>{{ lead.status }}</td>
-                    <td>{{ lead.notes }}</td>
-                </tr>
-                {% endfor %}
-            </table>
-            {% else %}
+        {% if leads %}
+            {% for clave, lead in leads.items() %}
+            <div class="lead-card">
+                <a href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a>
+                <div class="lead-info">📩 {{ lead.last_message }}</div>
+                <div class="lead-info">📅 {{ lead.last_seen }}</div>
+                <div class="lead-info">🔖 Estado: {{ lead.status }}</div>
+                <div class="lead-info">📝 Notas: {{ lead.notes }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
             <div class="no-leads">
                 {% if seleccionado %}
                     No hay conversaciones para la compañía <strong>{{ seleccionado }}</strong>.
@@ -185,8 +154,7 @@
                     No hay leads disponibles todavía.
                 {% endif %}
             </div>
-            {% endif %}
-        </div>
+        {% endif %}
     </div>
 </body>
 </html>
