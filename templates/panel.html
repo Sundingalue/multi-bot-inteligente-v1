@@ -1,160 +1,179 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Conversaciones</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', sans-serif;
-            background-color: #F7BD02;
-            color: #000;
-        }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Panel de Conversaciones</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #F7BD02;
+      color: #000;
+    }
 
-        .header {
-            background-color: #000;
-            color: #F7BD02;
-            padding: 20px;
-            text-align: center;
-            font-size: 28px;
-            font-weight: bold;
-        }
+    .header {
+      background-color: #000;
+      color: #F7BD02;
+      padding: 20px;
+      text-align: center;
+      font-size: 28px;
+      font-weight: bold;
+    }
 
-        .container {
-            padding: 20px;
-        }
+    .container {
+      padding: 20px;
+    }
 
-        .selector {
-            margin-bottom: 20px;
-            text-align: center;
-        }
+    .selector {
+      margin-bottom: 20px;
+      text-align: center;
+    }
 
-        .selector label {
-            font-weight: bold;
-            display: block;
-            margin-bottom: 10px;
-            font-size: 18px;
-        }
+    .selector label {
+      font-weight: bold;
+      display: block;
+      margin-bottom: 10px;
+      font-size: 18px;
+    }
 
-        .selector select {
-            padding: 12px;
-            font-size: 18px;
-            border-radius: 30px;
-            border: none;
-            width: 80%;
-            max-width: 400px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-        }
+    .selector select {
+      padding: 12px;
+      font-size: 18px;
+      border-radius: 30px;
+      border: none;
+      width: 80%;
+      max-width: 400px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    }
 
-        .selector button {
-            margin-top: 15px;
-            padding: 12px 24px;
-            border: none;
-            border-radius: 30px;
-            background-color: #000;
-            color: #F7BD02;
-            font-size: 18px;
-            font-weight: bold;
-            cursor: pointer;
-            width: 80%;
-            max-width: 400px;
-        }
+    .lead-card {
+      background-color: #1a1a1a;
+      color: #fff;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
 
-        .selector button:hover {
-            background-color: #F7BD02;
-            color: #000;
-            border: 2px solid #000;
-        }
+    .lead-card a {
+      color: #F7BD02;
+      font-weight: bold;
+      text-decoration: none;
+      font-size: 20px;
+    }
 
-        .lead-card {
-            background-color: #1a1a1a;
-            color: #fff;
-            border-radius: 16px;
-            padding: 16px;
-            margin-bottom: 16px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
+    .lead-card a:hover {
+      text-decoration: underline;
+    }
 
-        .lead-card a {
-            color: #F7BD02;
-            font-weight: bold;
-            text-decoration: none;
-            font-size: 20px;
-        }
+    .lead-info {
+      margin-top: 10px;
+      font-size: 16px;
+    }
 
-        .lead-card a:hover {
-            text-decoration: underline;
-        }
+    .lead-select {
+      margin-top: 10px;
+      font-size: 16px;
+      padding: 8px;
+      border-radius: 8px;
+      border: none;
+      background-color: #F7BD02;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
 
-        .lead-info {
-            margin-top: 10px;
-            font-size: 16px;
-        }
+    .no-leads {
+      text-align: center;
+      font-size: 20px;
+      color: #333;
+      background: #fff3cd;
+      padding: 20px;
+      border-radius: 12px;
+    }
 
-        .no-leads {
-            text-align: center;
-            font-size: 20px;
-            color: #333;
-            background: #fff3cd;
-            padding: 20px;
-            border-radius: 12px;
-        }
+    @media screen and (max-width: 600px) {
+      .header {
+        font-size: 24px;
+        padding: 16px;
+      }
 
-        @media screen and (max-width: 600px) {
-            .header {
-                font-size: 24px;
-                padding: 16px;
-            }
+      .selector select {
+        font-size: 16px;
+      }
 
-            .selector select,
-            .selector button {
-                font-size: 16px;
-            }
-
-            .lead-card {
-                font-size: 16px;
-            }
-        }
-    </style>
+      .lead-card {
+        font-size: 16px;
+      }
+    }
+  </style>
 </head>
 <body>
-    <div class="header">Panel de Conversaciones</div>
+  <div class="header">Panel de Conversaciones</div>
 
-    <div class="container">
-        <div class="selector">
-            <form method="GET" action="/panel">
-                <label for="bot">Selecciona una compañía:</label>
-                <select name="bot" id="bot">
-                    <option value="">-- Ver todos --</option>
-                    {% for bot in bots %}
-                        <option value="{{ bot }}" {% if bot == seleccionado %}selected{% endif %}>{{ bot }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit">Ver conversaciones</button>
-            </form>
-        </div>
-
-        {% if leads %}
-            {% for clave, lead in leads.items() %}
-            <div class="lead-card">
-                <a href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a>
-                <div class="lead-info">📩 {{ lead.last_message }}</div>
-                <div class="lead-info">📅 {{ lead.last_seen }}</div>
-                <div class="lead-info">🔖 Estado: {{ lead.status }}</div>
-                <div class="lead-info">📝 Notas: {{ lead.notes }}</div>
-            </div>
-            {% endfor %}
-        {% else %}
-            <div class="no-leads">
-                {% if seleccionado %}
-                    No hay conversaciones para la compañía <strong>{{ seleccionado }}</strong>.
-                {% else %}
-                    No hay leads disponibles todavía.
-                {% endif %}
-            </div>
-        {% endif %}
+  <div class="container">
+    <div class="selector">
+      <form method="GET" action="/panel" id="form-bot">
+        <label for="bot">Selecciona una compañía:</label>
+        <select name="bot" id="bot" onchange="document.getElementById('form-bot').submit();">
+          <option value="">-- Ver todos --</option>
+          {% for bot in bots %}
+            <option value="{{ bot }}" {% if bot == bot_seleccionado %}selected{% endif %}>{{ bot }}</option>
+          {% endfor %}
+        </select>
+      </form>
     </div>
+
+    {% if leads %}
+      {% for clave, lead in leads.items() %}
+        <div class="lead-card">
+          <a href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a>
+          <div class="lead-info">📩 {{ lead.last_message }}</div>
+          <div class="lead-info">📅 {{ lead.last_seen }}</div>
+          <div class="lead-info">
+            🔖 Estado:
+            <select class="lead-select" onchange="actualizarEstado('{{ lead.bot }}', '{{ lead.numero }}', this.value)">
+              <option value="nuevo" {% if lead.status == 'nuevo' %}selected{% endif %}>Nuevo</option>
+              <option value="en espera" {% if lead.status == 'en espera' %}selected{% endif %}>En espera</option>
+              <option value="cerrado" {% if lead.status == 'cerrado' %}selected{% endif %}>Cerrado</option>
+            </select>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="no-leads">
+        {% if bot_seleccionado %}
+          No hay conversaciones para la compañía <strong>{{ bot_seleccionado }}</strong>.
+        {% else %}
+          No hay leads disponibles todavía.
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <script>
+    function actualizarEstado(bot, numero, estado) {
+      fetch('/guardar-lead', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          numero: `${bot}|${numero}`,
+          estado: estado,
+          nota: ""
+        })
+      })
+      .then(response => response.json())
+      .then(data => {
+        console.log("✅ Estado actualizado:", data);
+      })
+      .catch(error => {
+        console.error("❌ Error actualizando estado:", error);
+      });
+    }
+  </script>
 </body>
 </html>
