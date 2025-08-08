@@ -129,7 +129,8 @@
     {% if leads %}
       {% for clave, lead in leads.items() %}
         <div class="lead-card">
-          <a href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a>
+          <!-- Aquí está el cambio. Se usa la nueva ruta 'chat_general' -->
+          <a href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">{{ lead.numero }}</a>
           <div class="lead-info">📩 {{ lead.last_message }}</div>
           <div class="lead-info">📅 {{ lead.last_seen }}</div>
           <div class="lead-info">
