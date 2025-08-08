@@ -15,7 +15,6 @@ import requests
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
-# Tokens desde entorno
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -144,55 +143,6 @@ def whatsapp_bot():
 
     return str(response)
 
-@app.route("/webhook_instagram", methods=["GET"])
-def verify_instagram():
-    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge, 200
-    else:
-        return "Token inválido", 403
-
-@app.route("/webhook_instagram", methods=["POST"])
-def recibir_instagram():
-    data = request.json
-    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
-    try:
-        for entry in data.get("entry", []):
-            for messaging_event in entry.get("messaging", []):
-                sender_id = messaging_event.get("sender", {}).get("id")
-                message = messaging_event.get("message", {})
-
-                if message.get("is_echo"):
-                    print("ℹ️ Mensaje tipo echo recibido. No se responderá.")
-                    continue
-
-                if sender_id and message.get("text"):
-                    print("📨 Texto recibido desde Instagram:", message["text"])
-                    enviar_respuesta_instagram(sender_id)
-        return "EVENT_RECEIVED", 200
-    except Exception as e:
-        print(f"❌ Error procesando mensaje de Instagram: {e}")
-        return "Error", 500
-
-def enviar_respuesta_instagram(psid):
-    url = "https://graph.facebook.com/v18.0/me/messages"
-    headers = {
-        "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_type": "RESPONSE",
-        "recipient": {"id": psid},
-        "message": {
-            "text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
-        }
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
-
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
@@ -209,7 +159,7 @@ def panel():
         with open("leads.json", "r") as f:
             leads = json.load(f)
 
-    return render_template("panel.html", leads=leads)
+    return render_template("panel.html", leads=leads, bots_config=bots_config)
 
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -263,15 +213,18 @@ def exportar():
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
-@app.route("/conversacion/<numero>")
-def chat_conversacion(numero):
+@app.route("/conversacion/<bot>/<numero>")
+def chat_conversacion(bot, numero):
     if not os.path.exists("leads.json"):
         return "No hay historial disponible", 404
 
     with open("leads.json", "r") as f:
         leads = json.load(f)
 
-    historial = leads.get(numero, {}).get("historial", [])
+    historial = []
+    lead = leads.get(numero)
+    if lead and lead.get("bot") == bot:
+        historial = lead.get("historial", [])
 
     mensajes = []
     for registro in historial:
