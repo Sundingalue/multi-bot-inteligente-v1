@@ -62,7 +62,7 @@ def guardar_lead(bot_nombre, numero, mensaje):
             json.dump(leads, f, indent=4)
 
     except Exception as e:
-        print(f"\u274c Error guardando lead: {e}")
+        print(f"❌ Error guardando lead: {e}")
 
 @app.after_request
 def permitir_iframe(response):
@@ -71,7 +71,7 @@ def permitir_iframe(response):
 
 @app.route("/", methods=["GET"])
 def home():
-    return "\u2705 Bot inteligente activo en Render."
+    return "✅ Bot inteligente activo en Render."
 
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
@@ -107,7 +107,10 @@ def whatsapp_bot():
     msg = response.message()
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
+        if bot["name"] == "Camila":
+            saludo = "Hola, soy Camila, de Galue Insurance. ¿Te ayudo con tu seguro hoy?"
+        else:
+            saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
         msg.body(saludo)
         last_message_time[clave_sesion] = time.time()
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
@@ -135,7 +138,7 @@ def whatsapp_bot():
                 json.dump(leads, f, indent=4)
 
     except Exception as e:
-        print(f"\u274c Error con GPT: {e}")
+        print(f"❌ Error con GPT: {e}")
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
