@@ -69,6 +69,28 @@ def permitir_iframe(response):
     response.headers["X-Frame-Options"] = "ALLOWALL"
     return response
 
+@app.route("/panel-bot/<bot_nombre>")
+def panel_exclusivo_bot(bot_nombre):
+    if not os.path.exists("leads.json"):
+        return "No hay leads disponibles", 404
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    leads_filtrados = {}
+    for clave, datos in leads.items():
+        if datos.get("bot") == bot_nombre:
+            leads_filtrados[clave] = datos
+
+    nombre_comercial = bot_nombre
+    for config in bots_config.values():
+        if config["name"] == bot_nombre:
+            nombre_comercial = config.get("business_name", bot_nombre)
+            break
+
+    return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_nombre, nombre_comercial=nombre_comercial)
+
+
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Bot inteligente activo en Render."
