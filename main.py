@@ -29,7 +29,7 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
-def guardar_lead(numero, mensaje):
+def guardar_lead(numero, mensaje, bot_name):
     try:
         archivo = "leads.json"
         if not os.path.exists(archivo):
@@ -49,6 +49,7 @@ def guardar_lead(numero, mensaje):
                 "messages": 1,
                 "status": "nuevo",
                 "notes": "",
+                "bot": bot_name,
                 "historial": [{"tipo": "user", "texto": mensaje, "hora": ahora}]
             }
         else:
@@ -58,6 +59,8 @@ def guardar_lead(numero, mensaje):
             if "historial" not in leads[numero]:
                 leads[numero]["historial"] = []
             leads[numero]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
+            if "bot" not in leads[numero]:
+                leads[numero]["bot"] = bot_name
 
         with open(archivo, "w") as f:
             json.dump(leads, f, indent=4)
@@ -91,14 +94,16 @@ def whatsapp_bot():
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
     clave_sesion = f"{bot_number}|{sender_number}"
-    guardar_lead(sender_number, incoming_msg)
+    bot = bots_config.get(bot_number)
 
     response = MessagingResponse()
     msg = response.message()
-    bot = bots_config.get(bot_number)
+
     if not bot:
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
+
+    guardar_lead(sender_number, incoming_msg, bot["business_name"])
 
     if clave_sesion not in session_history:
         session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
