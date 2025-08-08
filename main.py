@@ -108,7 +108,7 @@ def whatsapp_bot():
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
         if bot["name"] == "Camila":
-            saludo = "Hola, soy Camila, de Galue Insurance. ¿Te ayudo con tu seguro hoy?"
+            saludo = "Hola, soy Camila, especialista en polizas de gastos finales de Senior Life. ¿Con quien tengo el gusto?"
         else:
             saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
         msg.body(saludo)
