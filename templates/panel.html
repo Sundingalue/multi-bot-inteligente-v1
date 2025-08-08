@@ -2,202 +2,139 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Panel de Leads - In Houston Texas</title>
+    <title>Panel de Conversaciones</title>
     <style>
-        * {
-            box-sizing: border-box;
-        }
-
         body {
             font-family: 'Segoe UI', sans-serif;
-            background: #fff;
+            background-color: #f4f4f4;
             margin: 0;
             padding: 0;
         }
-
         .header {
-            background-color: #f7bd02;
-            padding: 20px;
-            color: #000;
-            font-size: 26px;
-            font-weight: bold;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-        }
-
-        .logout-form button {
             background-color: #000;
-            color: #f7bd02;
-            border: none;
-            padding: 10px 20px;
-            font-weight: bold;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-
-        .logout-form button:hover {
-            background-color: #ffd700;
-            color: #000;
-        }
-
-        .filter-container {
+            color: #F7BD02;
+            padding: 20px;
             text-align: center;
-            margin: 30px 0 10px 0;
+            font-size: 28px;
+            font-weight: bold;
+            letter-spacing: 1px;
         }
-
-        .filter-container select {
+        .container {
+            max-width: 1100px;
+            margin: 40px auto;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+        }
+        .selector {
+            padding: 20px;
+            background-color: #ffe97f;
+            text-align: center;
+        }
+        .selector form {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+        select {
             padding: 10px;
             font-size: 16px;
             border-radius: 8px;
             border: 1px solid #ccc;
-            width: 300px;
         }
-
-        table {
-            width: 95%;
-            margin: 20px auto 40px auto;
-            border-collapse: collapse;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
-        }
-
-        th {
-            background-color: #000;
-            color: #f7bd02;
-            padding: 14px;
-            font-size: 16px;
-        }
-
-        td {
-            padding: 12px;
-            border-bottom: 1px solid #eee;
-            text-align: center;
-        }
-
-        input[type="text"], select.estado {
-            padding: 6px;
-            width: 90%;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-        }
-
         button {
             background-color: #000;
-            color: #f7bd02;
+            color: #F7BD02;
             border: none;
-            padding: 6px 12px;
+            padding: 10px 20px;
+            border-radius: 8px;
             font-weight: bold;
-            border-radius: 5px;
             cursor: pointer;
+            transition: background 0.3s;
         }
-
         button:hover {
-            background-color: #ffd700;
+            background-color: #F7BD02;
             color: #000;
         }
-
-        a.numero-link {
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th {
+            background-color: #000;
+            color: #F7BD02;
+            padding: 12px;
+            text-align: left;
+        }
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #ccc;
+        }
+        tr:hover {
+            background-color: #f9f9f9;
+        }
+        .link {
             color: #000;
-            font-weight: bold;
             text-decoration: none;
+            font-weight: bold;
         }
-
-        a.numero-link:hover {
+        .link:hover {
             text-decoration: underline;
-            color: #f7bd02;
+        }
+        .no-leads {
+            text-align: center;
+            padding: 30px;
+            font-size: 18px;
+            color: #555;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div>📋 Panel de Leads - In Houston Texas</div>
-        <form class="logout-form" method="POST" action="/logout">
-            <button type="submit">Cerrar sesión</button>
-        </form>
-    </div>
+    <div class="header">Panel de Conversaciones</div>
+    <div class="container">
+        <div class="selector">
+            <form method="GET" action="/panel">
+                <label for="bot">Selecciona una compañía:</label>
+                <select name="bot" id="bot">
+                    <option value="">-- Ver todos --</option>
+                    {% for bot in bots %}
+                        <option value="{{ bot }}" {% if bot == seleccionado %}selected{% endif %}>{{ bot }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">Ver conversaciones</button>
+            </form>
+        </div>
 
-    <div class="filter-container">
-        <label for="botFilter">Selecciona la compañía:</label>
-        <select id="botFilter" onchange="filtrarBot()">
-            <option value="todos">-- Ver todos --</option>
-            {% for bot in bots_config.values() %}
-                <option value="{{ bot.business_name }}">{{ bot.business_name }}</option>
-            {% endfor %}
-        </select>
-    </div>
-
-    <table>
-        <thead>
+        {% if leads %}
+        <table>
             <tr>
                 <th>Número</th>
-                <th>Primer contacto</th>
                 <th>Último mensaje</th>
-                <th>Última vez</th>
-                <th>Mensajes</th>
-                <th>Estado</th>
+                <th>Fecha</th>
+                <th>Status</th>
                 <th>Notas</th>
-                <th>Guardar</th>
             </tr>
-        </thead>
-        <tbody id="tabla-leads">
-            {% for numero, datos in leads.items() %}
-            <tr class="fila-lead" data-bot="{{ datos.bot }}">
-                <td><a href="/conversacion/{{ datos.bot }}/{{ numero }}" class="numero-link">{{ numero }}</a></td>
-                <td>{{ datos.first_seen }}</td>
-                <td>{{ datos.last_message }}</td>
-                <td>{{ datos.last_seen }}</td>
-                <td>{{ datos.messages }}</td>
-                <td>
-                    <select class="estado" id="estado-{{ loop.index }}">
-                        <option value="nuevo" {% if datos.status == 'nuevo' %}selected{% endif %}>nuevo</option>
-                        <option value="pendiente" {% if datos.status == 'pendiente' %}selected{% endif %}>pendiente</option>
-                        <option value="agendado" {% if datos.status == 'agendado' %}selected{% endif %}>agendado</option>
-                        <option value="cerrado" {% if datos.status == 'cerrado' %}selected{% endif %}>cerrado</option>
-                    </select>
-                </td>
-                <td>
-                    <input type="text" id="nota-{{ loop.index }}" value="{{ datos.notes }}">
-                </td>
-                <td>
-                    <button onclick="guardar('{{ numero }}', {{ loop.index }})">📎</button>
-                </td>
+            {% for clave, lead in leads.items() %}
+            <tr>
+                <td><a class="link" href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a></td>
+                <td>{{ lead.last_message }}</td>
+                <td>{{ lead.last_seen }}</td>
+                <td>{{ lead.status }}</td>
+                <td>{{ lead.notes }}</td>
             </tr>
             {% endfor %}
-        </tbody>
-    </table>
-
-    <script>
-        function guardar(numero, index) {
-            const estado = document.getElementById('estado-' + index).value;
-            const nota = document.getElementById('nota-' + index).value;
-            fetch('/guardar-lead', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ numero, estado, nota })
-            })
-            .then(response => response.json())
-            .then(data => alert('✅ Lead actualizado'))
-            .catch(error => alert('❌ Error al guardar'));
-        }
-
-        function filtrarBot() {
-            const botSeleccionado = document.getElementById("botFilter").value;
-            const filas = document.querySelectorAll(".fila-lead");
-
-            filas.forEach(fila => {
-                const bot = fila.getAttribute("data-bot");
-                if (botSeleccionado === "todos" || bot === botSeleccionado) {
-                    fila.style.display = "";
-                } else {
-                    fila.style.display = "none";
-                }
-            });
-        }
-    </script>
+        </table>
+        {% else %}
+        <div class="no-leads">
+            {% if seleccionado %}
+                No hay conversaciones para la compañía <strong>{{ seleccionado }}</strong>.
+            {% else %}
+                No hay leads disponibles todavía.
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
 </body>
 </html>
