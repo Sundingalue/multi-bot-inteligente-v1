@@ -120,7 +120,7 @@
         <select name="bot" id="bot" onchange="document.getElementById('form-bot').submit();">
           <option value="">-- Ver todos --</option>
           {% for bot in bots %}
-            <option value="{{ bot }}" {% if bot == bot_seleccionado %}selected{% endif %}>{{ bot }}</option>
+            <option value="{{ bot }}" {% if bot == bot_seleccionado %}selected{% endif %}>{{ bots[bot] }}</option>
           {% endfor %}
         </select>
       </form>
