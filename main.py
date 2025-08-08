@@ -210,6 +210,10 @@ def panel():
 
 @app.route("/conversacion/<bot>/<numero>")
 def chat_conversacion(bot, numero):
+    """
+    Muestra el historial de una conversación específica.
+    Pasa la variable 'bot' a la plantilla para el enlace de regreso correcto.
+    """
     clave = f"{bot}|{numero}"
     if not os.path.exists("leads.json"):
         return "No hay historial disponible", 404
@@ -227,7 +231,8 @@ def chat_conversacion(bot, numero):
             "tipo": registro.get("tipo", "user")
         })
 
-    return render_template("chat.html", numero=numero, mensajes=mensajes)
+    # El cambio está aquí: pasamos la variable 'bot' a la plantilla.
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot)
 
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
