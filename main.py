@@ -90,6 +90,7 @@ def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
+    clave_sesion = f"{bot_number}|{sender_number}"
     guardar_lead(sender_number, incoming_msg)
 
     response = MessagingResponse()
@@ -99,28 +100,28 @@ def whatsapp_bot():
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
-    if sender_number not in session_history:
-        session_history[sender_number] = [{"role": "system", "content": bot["system_prompt"]}]
-        follow_up_flags[sender_number] = {"5min": False, "60min": False}
+    if clave_sesion not in session_history:
+        session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
+        follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de la revista, {bot['business_name']}. ¿Con quién tengo el gusto?"
+        saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
         msg.body(saludo)
-        last_message_time[sender_number] = time.time()
-        Thread(target=follow_up_task, args=(sender_number, bot_number)).start()
+        last_message_time[clave_sesion] = time.time()
+        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
         return str(response)
 
-    session_history[sender_number].append({"role": "user", "content": incoming_msg})
-    last_message_time[sender_number] = time.time()
-    Thread(target=follow_up_task, args=(sender_number, bot_number)).start()
+    session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
+    last_message_time[clave_sesion] = time.time()
+    Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
 
     try:
         completion = client.chat.completions.create(
             model="gpt-4o",
-            messages=session_history[sender_number]
+            messages=session_history[clave_sesion]
         )
         respuesta = completion.choices[0].message.content.strip()
-        session_history[sender_number].append({"role": "assistant", "content": respuesta})
+        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
         archivo = "leads.json"
@@ -290,15 +291,15 @@ def ver_leads_json():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def follow_up_task(sender_number, bot_number):
+def follow_up_task(clave_sesion, bot_number):
     time.sleep(300)
-    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 300 and not follow_up_flags[sender_number]["5min"]:
-        send_whatsapp_message(sender_number, "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊", bot_number)
-        follow_up_flags[sender_number]["5min"] = True
+    if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 300 and not follow_up_flags[clave_sesion]["5min"]:
+        send_whatsapp_message(clave_sesion.split("|")[1], "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊", bot_number)
+        follow_up_flags[clave_sesion]["5min"] = True
     time.sleep(3300)
-    if sender_number in last_message_time and time.time() - last_message_time[sender_number] >= 3600 and not follow_up_flags[sender_number]["60min"]:
-        send_whatsapp_message(sender_number, "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉", bot_number)
-        follow_up_flags[sender_number]["60min"] = True
+    if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 3600 and not follow_up_flags[clave_sesion]["60min"]:
+        send_whatsapp_message(clave_sesion.split("|")[1], "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉", bot_number)
+        follow_up_flags[clave_sesion]["60min"] = True
 
 def send_whatsapp_message(to_number, message, bot_number=None):
     from twilio.rest import Client
