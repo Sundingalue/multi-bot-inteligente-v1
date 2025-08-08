@@ -16,7 +16,6 @@ import requests
 load_dotenv("/etc/secrets/.env")
 
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
-
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
@@ -28,7 +27,7 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
-def guardar_lead(numero, mensaje, bot_name):
+def guardar_lead(bot_nombre, numero, mensaje):
     try:
         archivo = "leads.json"
         if not os.path.exists(archivo):
@@ -39,27 +38,25 @@ def guardar_lead(numero, mensaje, bot_name):
             leads = json.load(f)
 
         ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        clave = f"{bot_nombre}|{numero}"
 
-        if numero not in leads:
-            leads[numero] = {
+        if clave not in leads:
+            leads[clave] = {
+                "bot": bot_nombre,
+                "numero": numero,
                 "first_seen": ahora,
                 "last_message": mensaje,
                 "last_seen": ahora,
                 "messages": 1,
                 "status": "nuevo",
                 "notes": "",
-                "bot": bot_name,
                 "historial": [{"tipo": "user", "texto": mensaje, "hora": ahora}]
             }
         else:
-            leads[numero]["messages"] += 1
-            leads[numero]["last_message"] = mensaje
-            leads[numero]["last_seen"] = ahora
-            if "historial" not in leads[numero]:
-                leads[numero]["historial"] = []
-            leads[numero]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
-            if "bot" not in leads[numero]:
-                leads[numero]["bot"] = bot_name
+            leads[clave]["messages"] += 1
+            leads[clave]["last_message"] = mensaje
+            leads[clave]["last_seen"] = ahora
+            leads[clave]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
 
         with open(archivo, "w") as f:
             json.dump(leads, f, indent=4)
@@ -95,18 +92,19 @@ def whatsapp_bot():
     clave_sesion = f"{bot_number}|{sender_number}"
     bot = bots_config.get(bot_number)
 
-    response = MessagingResponse()
-    msg = response.message()
-
     if not bot:
-        msg.body("Lo siento, este número no está asignado a ningún bot.")
+        response = MessagingResponse()
+        response.message("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
-    guardar_lead(sender_number, incoming_msg, bot["business_name"])
+    guardar_lead(bot["name"], sender_number, incoming_msg)
 
     if clave_sesion not in session_history:
         session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+
+    response = MessagingResponse()
+    msg = response.message()
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
         saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
@@ -128,14 +126,13 @@ def whatsapp_bot():
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
-        archivo = "leads.json"
-        if os.path.exists(archivo):
-            with open(archivo, "r") as f:
-                leads = json.load(f)
-            if sender_number in leads:
-                leads[sender_number]["historial"].append({"tipo": "bot", "texto": respuesta, "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-                with open(archivo, "w") as f:
-                    json.dump(leads, f, indent=4)
+        with open("leads.json", "r") as f:
+            leads = json.load(f)
+        clave = f"{bot['name']}|{sender_number}"
+        if clave in leads:
+            leads[clave]["historial"].append({"tipo": "bot", "texto": respuesta, "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            with open("leads.json", "w") as f:
+                json.dump(leads, f, indent=4)
 
     except Exception as e:
         print(f"❌ Error con GPT: {e}")
@@ -153,13 +150,44 @@ def panel():
             return render_template("login.html", error=True)
         return render_template("login.html")
 
-    if not os.path.exists("leads.json"):
-        leads = {}
-    else:
+    leads_por_bot = {}
+    bots_disponibles = set()
+
+    if os.path.exists("leads.json"):
         with open("leads.json", "r") as f:
             leads = json.load(f)
+        for clave, data in leads.items():
+            bot = data.get("bot", "Desconocido")
+            bots_disponibles.add(bot)
+            if bot not in leads_por_bot:
+                leads_por_bot[bot] = {}
+            leads_por_bot[bot][clave] = data
 
-    return render_template("panel.html", leads=leads, bots_config=bots_config)
+    bot_seleccionado = request.args.get("bot")
+    leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
+
+    return render_template("panel.html", leads=leads_filtrados, bots=sorted(bots_disponibles), bot_seleccionado=bot_seleccionado)
+
+@app.route("/conversacion/<bot>/<numero>")
+def chat_conversacion(bot, numero):
+    clave = f"{bot}|{numero}"
+    if not os.path.exists("leads.json"):
+        return "No hay historial disponible", 404
+
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+
+    historial = leads.get(clave, {}).get("historial", [])
+
+    mensajes = []
+    for registro in historial:
+        mensajes.append({
+            "texto": registro.get("texto", ""),
+            "hora": registro.get("hora", ""),
+            "tipo": registro.get("tipo", "user")
+        })
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes)
 
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -198,10 +226,11 @@ def exportar():
 
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
-    for numero, datos in leads.items():
+    writer.writerow(["Bot", "Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
+    for clave, datos in leads.items():
         writer.writerow([
-            numero,
+            datos.get("bot", ""),
+            datos.get("numero", ""),
             datos.get("first_seen", ""),
             datos.get("last_message", ""),
             datos.get("last_seen", ""),
@@ -213,41 +242,50 @@ def exportar():
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
-@app.route("/conversacion/<bot>/<numero>")
-def chat_conversacion(bot, numero):
-    if not os.path.exists("leads.json"):
-        return "No hay historial disponible", 404
+@app.route("/webhook_instagram", methods=["GET"])
+def verify_instagram():
+    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    else:
+        return "Token inválido", 403
 
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-
-    historial = []
-    lead = leads.get(numero)
-    if lead and lead.get("bot") == bot:
-        historial = lead.get("historial", [])
-
-    mensajes = []
-    for registro in historial:
-        mensajes.append({
-            "texto": registro.get("texto", ""),
-            "hora": registro.get("hora", ""),
-            "tipo": registro.get("tipo", "user")
-        })
-
-    return render_template("chat.html", numero=numero, mensajes=mensajes)
-
-@app.route("/ver-leads-json")
-def ver_leads_json():
+@app.route("/webhook_instagram", methods=["POST"])
+def recibir_instagram():
+    data = request.json
+    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
     try:
-        if not os.path.exists("leads.json"):
-            return jsonify({"error": "El archivo leads.json no existe."}), 404
-
-        with open("leads.json", "r") as f:
-            leads = json.load(f)
-
-        return jsonify(leads)
+        for entry in data.get("entry", []):
+            for messaging_event in entry.get("messaging", []):
+                sender_id = messaging_event.get("sender", {}).get("id")
+                message = messaging_event.get("message", {})
+                if message.get("is_echo"):
+                    continue
+                if sender_id and message.get("text"):
+                    enviar_respuesta_instagram(sender_id)
+        return "EVENT_RECEIVED", 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"❌ Error procesando mensaje de Instagram: {e}")
+        return "Error", 500
+
+def enviar_respuesta_instagram(psid):
+    url = "https://graph.facebook.com/v18.0/me/messages"
+    headers = {
+        "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_type": "RESPONSE",
+        "recipient": {"id": psid},
+        "message": {
+            "text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
+        }
+    }
+    r = requests.post(url, headers=headers, json=payload)
+    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
 
 def follow_up_task(clave_sesion, bot_number):
     time.sleep(300)
