@@ -77,19 +77,30 @@ def panel_exclusivo_bot(bot_nombre):
     with open("leads.json", "r") as f:
         leads = json.load(f)
 
-    leads_filtrados = {}
-    for clave, datos in leads.items():
-        if datos.get("bot") == bot_nombre:
-            leads_filtrados[clave] = datos
-
-    nombre_comercial = bot_nombre
+    # Normalizar bot_nombre (buscarlo tal como aparece en bots_config)
+    bot_normalizado = None
     for config in bots_config.values():
-        if config["name"] == bot_nombre:
-            nombre_comercial = config.get("business_name", bot_nombre)
+        if config["name"].lower() == bot_nombre.lower():
+            bot_normalizado = config["name"]
             break
 
-    return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_nombre, nombre_comercial=nombre_comercial)
+    if not bot_normalizado:
+        return f"Bot '{bot_nombre}' no encontrado", 404
 
+    leads_filtrados = {
+        clave: datos
+        for clave, datos in leads.items()
+        if datos.get("bot") == bot_normalizado
+    }
+
+    nombre_comercial = next(
+        (config.get("business_name", bot_normalizado)
+         for config in bots_config.values()
+         if config["name"] == bot_normalizado),
+        bot_normalizado
+    )
+
+    return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
 
 @app.route("/", methods=["GET"])
 def home():
