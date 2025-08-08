@@ -101,7 +101,8 @@ def panel_exclusivo_bot(bot_nombre):
         bot_normalizado
     )
 
-    # Nota: El enlace a la conversación ahora debe usar 'conversacion_bot'
+    # Importante: El enlace a la conversación ahora debe usar 'conversacion_bot'
+    # Esta plantilla debe contener un enlace a la ruta 'conversacion_bot'
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
 
 @app.route("/", methods=["GET"])
@@ -239,7 +240,8 @@ def panel():
     bot_seleccionado = request.args.get("bot")
     leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
 
-    # Nota: El enlace a la conversación ahora debe usar 'conversacion_general'
+    # Importante: El enlace a la conversación ahora debe usar 'conversacion_general'
+    # Esta plantilla debe contener un enlace a la ruta 'conversacion_general'
     return render_template("panel.html", leads=leads_filtrados, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
 
 
