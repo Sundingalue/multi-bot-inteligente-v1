@@ -62,7 +62,7 @@ def guardar_lead(bot_nombre, numero, mensaje):
             json.dump(leads, f, indent=4)
 
     except Exception as e:
-        print(f"❌ Error guardando lead: {e}")
+        print(f"\u274c Error guardando lead: {e}")
 
 @app.after_request
 def permitir_iframe(response):
@@ -71,7 +71,7 @@ def permitir_iframe(response):
 
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Bot inteligente activo en Render."
+    return "\u2705 Bot inteligente activo en Render."
 
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
@@ -135,7 +135,7 @@ def whatsapp_bot():
                 json.dump(leads, f, indent=4)
 
     except Exception as e:
-        print(f"❌ Error con GPT: {e}")
+        print(f"\u274c Error con GPT: {e}")
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
@@ -151,22 +151,26 @@ def panel():
         return render_template("login.html")
 
     leads_por_bot = {}
-    bots_disponibles = set()
+    bots_disponibles = {}
 
     if os.path.exists("leads.json"):
         with open("leads.json", "r") as f:
             leads = json.load(f)
         for clave, data in leads.items():
             bot = data.get("bot", "Desconocido")
-            bots_disponibles.add(bot)
             if bot not in leads_por_bot:
                 leads_por_bot[bot] = {}
             leads_por_bot[bot][clave] = data
 
+            for config in bots_config.values():
+                if config["name"] == bot:
+                    bots_disponibles[bot] = config.get("business_name", bot)
+                    break
+
     bot_seleccionado = request.args.get("bot")
     leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
 
-    return render_template("panel.html", leads=leads_filtrados, bots=sorted(bots_disponibles), bot_seleccionado=bot_seleccionado)
+    return render_template("panel.html", leads=leads_filtrados, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
 
 @app.route("/conversacion/<bot>/<numero>")
 def chat_conversacion(bot, numero):
@@ -256,7 +260,7 @@ def verify_instagram():
 @app.route("/webhook_instagram", methods=["POST"])
 def recibir_instagram():
     data = request.json
-    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
+    print("\ud83d\udce5 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
     try:
         for entry in data.get("entry", []):
             for messaging_event in entry.get("messaging", []):
@@ -268,7 +272,7 @@ def recibir_instagram():
                     enviar_respuesta_instagram(sender_id)
         return "EVENT_RECEIVED", 200
     except Exception as e:
-        print(f"❌ Error procesando mensaje de Instagram: {e}")
+        print(f"\u274c Error procesando mensaje de Instagram: {e}")
         return "Error", 500
 
 def enviar_respuesta_instagram(psid):
@@ -281,11 +285,11 @@ def enviar_respuesta_instagram(psid):
         "messaging_type": "RESPONSE",
         "recipient": {"id": psid},
         "message": {
-            "text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
+            "text": "\u00a1Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
         }
     }
     r = requests.post(url, headers=headers, json=payload)
-    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
+    print("\ud83d\udce4 Respuesta enviada a Instagram:", r.status_code, r.text)
 
 def follow_up_task(clave_sesion, bot_number):
     time.sleep(300)
