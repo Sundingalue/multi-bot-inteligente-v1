@@ -29,7 +29,7 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
-def guardar_lead(numero, mensaje):
+def guardar_lead(numero, mensaje, bot_nombre):
     try:
         archivo = "leads.json"
         if not os.path.exists(archivo):
@@ -49,12 +49,14 @@ def guardar_lead(numero, mensaje):
                 "messages": 1,
                 "status": "nuevo",
                 "notes": "",
+                "bot": bot_nombre,
                 "historial": [{"tipo": "user", "texto": mensaje, "hora": ahora}]
             }
         else:
             leads[numero]["messages"] += 1
             leads[numero]["last_message"] = mensaje
             leads[numero]["last_seen"] = ahora
+            leads[numero]["bot"] = bot_nombre
             if "historial" not in leads[numero]:
                 leads[numero]["historial"] = []
             leads[numero]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
@@ -91,14 +93,17 @@ def whatsapp_bot():
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
     clave_sesion = f"{bot_number}|{sender_number}"
-    guardar_lead(sender_number, incoming_msg)
+    bot = bots_config.get(bot_number)
+
+    if not bot:
+        response = MessagingResponse()
+        response.message("Lo siento, este número no está asignado a ningún bot.")
+        return str(response)
+
+    guardar_lead(sender_number, incoming_msg, bot["name"])
 
     response = MessagingResponse()
     msg = response.message()
-    bot = bots_config.get(bot_number)
-    if not bot:
-        msg.body("Lo siento, este número no está asignado a ningún bot.")
-        return str(response)
 
     if clave_sesion not in session_history:
         session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
@@ -139,55 +144,6 @@ def whatsapp_bot():
 
     return str(response)
 
-@app.route("/webhook_instagram", methods=["GET"])
-def verify_instagram():
-    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge, 200
-    else:
-        return "Token inválido", 403
-
-@app.route("/webhook_instagram", methods=["POST"])
-def recibir_instagram():
-    data = request.json
-    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
-    try:
-        for entry in data.get("entry", []):
-            for messaging_event in entry.get("messaging", []):
-                sender_id = messaging_event.get("sender", {}).get("id")
-                message = messaging_event.get("message", {})
-
-                if message.get("is_echo"):
-                    print("ℹ️ Mensaje tipo echo recibido. No se responderá.")
-                    continue
-
-                if sender_id and message.get("text"):
-                    print("📨 Texto recibido desde Instagram:", message["text"])
-                    enviar_respuesta_instagram(sender_id)
-        return "EVENT_RECEIVED", 200
-    except Exception as e:
-        print(f"❌ Error procesando mensaje de Instagram: {e}")
-        return "Error", 500
-
-def enviar_respuesta_instagram(psid):
-    url = "https://graph.facebook.com/v18.0/me/messages"
-    headers = {
-        "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_type": "RESPONSE",
-        "recipient": {"id": psid},
-        "message": {
-            "text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
-        }
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
-
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
@@ -198,13 +154,20 @@ def panel():
             return render_template("login.html", error=True)
         return render_template("login.html")
 
+    bot_filter = request.args.get("bot")
+
     if not os.path.exists("leads.json"):
         leads = {}
     else:
         with open("leads.json", "r") as f:
             leads = json.load(f)
 
-    return render_template("panel.html", leads=leads)
+    if bot_filter:
+        leads = {k: v for k, v in leads.items() if v.get("bot") == bot_filter}
+
+    nombres_bots = list({v.get("bot", "Desconocido") for v in leads.values()})
+
+    return render_template("panel.html", leads=leads, bots=nombres_bots, bot_filter=bot_filter)
 
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -243,7 +206,7 @@ def exportar():
 
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
+    writer.writerow(["Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas", "Bot"])
     for numero, datos in leads.items():
         writer.writerow([
             numero,
@@ -252,7 +215,8 @@ def exportar():
             datos.get("last_seen", ""),
             datos.get("messages", ""),
             datos.get("status", ""),
-            datos.get("notes", "")
+            datos.get("notes", ""),
+            datos.get("bot", "")
         ])
 
     output.seek(0)
@@ -277,37 +241,6 @@ def chat_conversacion(numero):
         })
 
     return render_template("chat.html", numero=numero, mensajes=mensajes)
-
-@app.route("/ver-leads-json")
-def ver_leads_json():
-    try:
-        if not os.path.exists("leads.json"):
-            return jsonify({"error": "El archivo leads.json no existe."}), 404
-
-        with open("leads.json", "r") as f:
-            leads = json.load(f)
-
-        return jsonify(leads)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-def follow_up_task(clave_sesion, bot_number):
-    time.sleep(300)
-    if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 300 and not follow_up_flags[clave_sesion]["5min"]:
-        send_whatsapp_message(clave_sesion.split("|")[1], "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊", bot_number)
-        follow_up_flags[clave_sesion]["5min"] = True
-    time.sleep(3300)
-    if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 3600 and not follow_up_flags[clave_sesion]["60min"]:
-        send_whatsapp_message(clave_sesion.split("|")[1], "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉", bot_number)
-        follow_up_flags[clave_sesion]["60min"] = True
-
-def send_whatsapp_message(to_number, message, bot_number=None):
-    from twilio.rest import Client
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
-    client_twilio = Client(account_sid, auth_token)
-    client_twilio.messages.create(body=message, from_=from_number, to=to_number)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
