@@ -39,11 +39,25 @@
     .login-box input {
       width: 100%;
       padding: 14px;
-      margin-bottom: 25px;
+      margin-bottom: 15px;
       border: 1px solid #ccc;
       border-radius: 8px;
       font-size: 16px;
       background: #f9f9f9;
+    }
+
+    .remember-container {
+      display: flex;
+      align-items: center;
+      justify-content: start;
+      gap: 10px;
+      font-size: 14px;
+      margin-bottom: 25px;
+    }
+
+    .remember-container input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
     }
 
     .login-box button {
@@ -76,8 +90,12 @@
     <div class="login-box">
       <h1>Acceso al Panel</h1>
       <form method="POST" action="/panel">
-        <input type="text" name="usuario" placeholder="Usuario" required>
-        <input type="password" name="clave" placeholder="Contraseña" required>
+        <input type="text" name="usuario" placeholder="Usuario" required autocomplete="username">
+        <input type="password" name="clave" placeholder="Contraseña" required autocomplete="current-password">
+        <div class="remember-container">
+          <input type="checkbox" name="remember" id="remember">
+          <label for="remember">Recuérdame</label>
+        </div>
         <button type="submit">Entrar</button>
       </form>
       <div class="footer">In Houston Texas - Sistema de Leads © 2025</div>
