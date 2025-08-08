@@ -2,8 +2,8 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Conversaciones</title>
+    <title>Panel de Leads</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body {
             font-family: 'Segoe UI', sans-serif;
@@ -11,182 +11,183 @@
             margin: 0;
             padding: 0;
         }
-
-        .header {
-            background-color: #000;
-            color: #F7BD02;
-            padding: 20px;
-            text-align: center;
-            font-size: 28px;
-            font-weight: bold;
-            letter-spacing: 1px;
-        }
-
         .container {
-            max-width: 1100px;
-            margin: 20px auto;
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 20px;
             background: #fff;
             border-radius: 16px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
-            overflow: hidden;
         }
-
-        .selector {
-            padding: 20px;
-            background-color: #ffe97f;
+        h1 {
             text-align: center;
-        }
-
-        .selector form {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            align-items: center;
-        }
-
-        select {
-            padding: 12px;
-            font-size: 18px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            width: 90%;
-            max-width: 400px;
-        }
-
-        button {
-            background-color: #000;
             color: #F7BD02;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        select, input, button {
+            padding: 14px;
+            margin: 10px 0;
+            border-radius: 10px;
+            border: 1px solid #ccc;
+            width: 100%;
             font-size: 18px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background 0.3s;
         }
-
-        button:hover {
-            background-color: #F7BD02;
-            color: #000;
-        }
-
-        .table-container {
-            overflow-x: auto;
-        }
-
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 18px;
+            margin-top: 25px;
         }
-
+        th, td {
+            padding: 14px;
+            text-align: center;
+            border-bottom: 1px solid #ddd;
+            font-size: 16px;
+        }
         th {
+            background-color: #F7BD02;
+            color: #000;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        .btn-guardar {
             background-color: #000;
             color: #F7BD02;
-            padding: 14px;
-            text-align: left;
-            white-space: nowrap;
-        }
-
-        td {
-            padding: 14px;
-            border-bottom: 1px solid #ccc;
-            white-space: nowrap;
-        }
-
-        tr:hover {
-            background-color: #f9f9f9;
-        }
-
-        .link {
-            color: #000;
-            text-decoration: none;
             font-weight: bold;
+            cursor: pointer;
         }
-
-        .link:hover {
-            text-decoration: underline;
+        .btn-guardar:hover {
+            background-color: #F7BD02;
+            color: #000;
         }
-
-        .no-leads {
+        .logout {
             text-align: center;
-            padding: 30px;
-            font-size: 20px;
-            color: #555;
+            margin-top: 40px;
         }
-
-        @media screen and (max-width: 600px) {
-            .header {
-                font-size: 24px;
-                padding: 16px;
+        .logout form button {
+            background-color: #000;
+            color: #F7BD02;
+            font-weight: bold;
+            padding: 14px 28px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 18px;
+        }
+        .logout form button:hover {
+            background-color: #F7BD02;
+            color: #000;
+        }
+        @media only screen and (max-width: 768px) {
+            table, thead, tbody, th, td, tr {
+                display: block;
             }
-
-            .selector form {
-                flex-direction: column;
+            th {
+                position: sticky;
+                top: 0;
+                background-color: #F7BD02;
+                text-align: center;
             }
-
-            select, button {
-                font-size: 18px;
-                width: 100%;
+            td {
+                text-align: left;
+                padding-left: 50%;
+                position: relative;
             }
-
-            table {
-                font-size: 16px;
+            td::before {
+                position: absolute;
+                left: 15px;
+                top: 14px;
+                white-space: nowrap;
+                font-weight: bold;
+                color: #555;
             }
-
-            th, td {
-                padding: 12px;
-            }
+            td:nth-of-type(1)::before { content: "WhatsApp"; }
+            td:nth-of-type(2)::before { content: "Primer contacto"; }
+            td:nth-of-type(3)::before { content: "Último mensaje"; }
+            td:nth-of-type(4)::before { content: "Última vez"; }
+            td:nth-of-type(5)::before { content: "Mensajes"; }
+            td:nth-of-type(6)::before { content: "Estado"; }
+            td:nth-of-type(7)::before { content: "Notas"; }
+            td:nth-of-type(8)::before { content: "Guardar"; }
         }
     </style>
 </head>
 <body>
-    <div class="header">Panel de Conversaciones</div>
-
     <div class="container">
-        <div class="selector">
-            <form method="GET" action="/panel">
-                <label for="bot" style="font-weight: bold;">Selecciona una compañía:</label>
-                <select name="bot" id="bot">
-                    <option value="">-- Ver todos --</option>
-                    {% for bot in bots %}
-                        <option value="{{ bot }}" {% if bot == seleccionado %}selected{% endif %}>{{ bot }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit">Ver conversaciones</button>
+        <h1>Panel de Leads</h1>
+
+        <form method="get" action="/panel">
+            <label for="filtro_bot">Selecciona la compañía:</label>
+            <select name="bot" id="filtro_bot" onchange="this.form.submit()">
+                <option value="">Ver todos</option>
+                {% for nombre_bot in bots_disponibles %}
+                    <option value="{{ nombre_bot }}" {% if nombre_bot == bot_seleccionado %}selected{% endif %}>{{ nombre_bot }}</option>
+                {% endfor %}
+            </select>
+        </form>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>WhatsApp</th>
+                    <th>Primer contacto</th>
+                    <th>Último mensaje</th>
+                    <th>Última vez</th>
+                    <th>Mensajes</th>
+                    <th>Estado</th>
+                    <th>Notas</th>
+                    <th>Guardar</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for numero, datos in leads.items() %}
+                    <tr>
+                        <td><a href="/conversacion/{{ datos.bot|urlencode }}/{{ numero }}" target="_blank">{{ numero }}</a></td>
+                        <td>{{ datos.first_seen }}</td>
+                        <td>{{ datos.last_message }}</td>
+                        <td>{{ datos.last_seen }}</td>
+                        <td>{{ datos.messages }}</td>
+                        <td>
+                            <input type="text" value="{{ datos.status }}" id="estado-{{ numero }}">
+                        </td>
+                        <td>
+                            <input type="text" value="{{ datos.notes }}" id="nota-{{ numero }}">
+                        </td>
+                        <td>
+                            <button class="btn-guardar" onclick="guardarLead('{{ numero }}')">Guardar</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="logout">
+            <form action="/logout" method="post">
+                <button type="submit">Cerrar sesión</button>
             </form>
         </div>
-
-        <div class="table-container">
-            {% if leads %}
-            <table>
-                <tr>
-                    <th>Número</th>
-                    <th>Último mensaje</th>
-                    <th>Fecha</th>
-                    <th>Status</th>
-                    <th>Notas</th>
-                </tr>
-                {% for clave, lead in leads.items() %}
-                <tr>
-                    <td><a class="link" href="/conversacion/{{ lead.bot }}/{{ lead.numero }}">{{ lead.numero }}</a></td>
-                    <td>{{ lead.last_message }}</td>
-                    <td>{{ lead.last_seen }}</td>
-                    <td>{{ lead.status }}</td>
-                    <td>{{ lead.notes }}</td>
-                </tr>
-                {% endfor %}
-            </table>
-            {% else %}
-            <div class="no-leads">
-                {% if seleccionado %}
-                    No hay conversaciones para la compañía <strong>{{ seleccionado }}</strong>.
-                {% else %}
-                    No hay leads disponibles todavía.
-                {% endif %}
-            </div>
-            {% endif %}
-        </div>
     </div>
+
+    <script>
+        function guardarLead(numero) {
+            const estado = document.getElementById("estado-" + numero).value;
+            const nota = document.getElementById("nota-" + numero).value;
+
+            fetch("/guardar-lead", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    numero: numero,
+                    estado: estado,
+                    nota: nota
+                })
+            }).then(res => {
+                if (res.ok) alert("✅ Lead actualizado");
+                else alert("❌ Error al actualizar");
+            });
+        }
+    </script>
 </body>
 </html>
