@@ -35,7 +35,6 @@
             font-weight: bold;
             border-radius: 6px;
             cursor: pointer;
-            transition: background-color 0.3s ease;
         }
 
         .logout-form button:hover {
@@ -124,12 +123,8 @@
         <label for="botFilter">Selecciona la compañía:</label>
         <select id="botFilter" onchange="filtrarBot()">
             <option value="todos">-- Ver todos --</option>
-            {% set bots_vistos = [] %}
-            {% for numero, datos in leads.items() %}
-                {% if datos.bot not in bots_vistos %}
-                    <option value="{{ datos.bot }}">{{ datos.bot }}</option>
-                    {% set _ = bots_vistos.append(datos.bot) %}
-                {% endif %}
+            {% for bot in bots_config.values() %}
+                <option value="{{ bot.business_name }}">{{ bot.business_name }}</option>
             {% endfor %}
         </select>
     </div>
@@ -150,7 +145,7 @@
         <tbody id="tabla-leads">
             {% for numero, datos in leads.items() %}
             <tr class="fila-lead" data-bot="{{ datos.bot }}">
-                <td><a href="/conversacion/{{ numero }}" class="numero-link">{{ numero }}</a></td>
+                <td><a href="/conversacion/{{ datos.bot }}/{{ numero }}" class="numero-link">{{ numero }}</a></td>
                 <td>{{ datos.first_seen }}</td>
                 <td>{{ datos.last_message }}</td>
                 <td>{{ datos.last_seen }}</td>
