@@ -43,9 +43,22 @@
             color: #000;
         }
 
+        .filter-container {
+            text-align: center;
+            margin: 30px 0 10px 0;
+        }
+
+        .filter-container select {
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            width: 300px;
+        }
+
         table {
             width: 95%;
-            margin: 40px auto;
+            margin: 20px auto 40px auto;
             border-collapse: collapse;
             border-radius: 12px;
             overflow: hidden;
@@ -65,7 +78,7 @@
             text-align: center;
         }
 
-        input[type="text"], select {
+        input[type="text"], select.estado {
             padding: 6px;
             width: 90%;
             border: 1px solid #ccc;
@@ -107,6 +120,19 @@
         </form>
     </div>
 
+    <div class="filter-container">
+        <label for="botFilter">Selecciona la compañía:</label>
+        <select id="botFilter" onchange="filtrarBot()">
+            <option value="todos">-- Ver todos --</option>
+            {% for numero, datos in leads.items() %}
+                {% if datos.bot not in bots_vistos %}
+                    {% set _ = bots_vistos.append(datos.bot) %}
+                    <option value="{{ datos.bot }}">{{ datos.bot }}</option>
+                {% endif %}
+            {% endfor %}
+        </select>
+    </div>
+
     <table>
         <thead>
             <tr>
@@ -120,16 +146,17 @@
                 <th>Guardar</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="tabla-leads">
+            {% set bots_vistos = [] %}
             {% for numero, datos in leads.items() %}
-            <tr>
+            <tr class="fila-lead" data-bot="{{ datos.bot }}">
                 <td><a href="/conversacion/{{ numero }}" class="numero-link">{{ numero }}</a></td>
                 <td>{{ datos.first_seen }}</td>
                 <td>{{ datos.last_message }}</td>
                 <td>{{ datos.last_seen }}</td>
                 <td>{{ datos.messages }}</td>
                 <td>
-                    <select id="estado-{{ loop.index }}">
+                    <select class="estado" id="estado-{{ loop.index }}">
                         <option value="nuevo" {% if datos.status == 'nuevo' %}selected{% endif %}>nuevo</option>
                         <option value="pendiente" {% if datos.status == 'pendiente' %}selected{% endif %}>pendiente</option>
                         <option value="agendado" {% if datos.status == 'agendado' %}selected{% endif %}>agendado</option>
@@ -161,6 +188,20 @@
             .then(response => response.json())
             .then(data => alert('✅ Lead actualizado'))
             .catch(error => alert('❌ Error al guardar'));
+        }
+
+        function filtrarBot() {
+            const botSeleccionado = document.getElementById("botFilter").value;
+            const filas = document.querySelectorAll(".fila-lead");
+
+            filas.forEach(fila => {
+                const bot = fila.getAttribute("data-bot");
+                if (botSeleccionado === "todos" || bot === botSeleccionado) {
+                    fila.style.display = "";
+                } else {
+                    fila.style.display = "none";
+                }
+            });
         }
     </script>
 </body>
