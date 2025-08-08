@@ -18,6 +18,7 @@ load_dotenv("/etc/secrets/.env")
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 app = Flask(__name__)
+# Sugerencia: Mover esta clave a una variable de entorno para mayor seguridad.
 app.secret_key = "supersecreto_sundin_panel_2025"
 
 with open("bots_config.json", "r") as f:
@@ -100,6 +101,7 @@ def panel_exclusivo_bot(bot_nombre):
         bot_normalizado
     )
 
+    # Nota: El enlace a la conversación ahora debe usar 'conversacion_bot'
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
 
 @app.route("/", methods=["GET"])
@@ -176,9 +178,40 @@ def whatsapp_bot():
 
     return str(response)
 
+# ----- Rutas de chat actualizadas -----
+# Esta ruta maneja el chat para el panel general y renderiza 'chat.html'
+@app.route("/conversacion_general/<bot>/<numero>")
+def chat_general(bot, numero):
+    clave = f"{bot}|{numero}"
+    if not os.path.exists("leads.json"):
+        return "No hay historial disponible", 404
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+    historial = leads.get(clave, {}).get("historial", [])
+    mensajes = []
+    for registro in historial:
+        mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot)
+
+# Esta ruta maneja el chat para los bots individuales y renderiza 'chat_bot.html'
+@app.route("/conversacion_bot/<bot>/<numero>")
+def chat_bot(bot, numero):
+    clave = f"{bot}|{numero}"
+    if not os.path.exists("leads.json"):
+        return "No hay historial disponible", 404
+    with open("leads.json", "r") as f:
+        leads = json.load(f)
+    historial = leads.get(clave, {}).get("historial", [])
+    mensajes = []
+    for registro in historial:
+        mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot)
+# ----- Fin de las rutas de chat actualizadas -----
+
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
+        # Sugerencia: Mover usuario y clave a variables de entorno para mayor seguridad.
         if request.method == "POST":
             if request.form.get("usuario") == "sundin" and request.form.get("clave") == "inhouston2025":
                 session["autenticado"] = True
@@ -206,33 +239,9 @@ def panel():
     bot_seleccionado = request.args.get("bot")
     leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
 
+    # Nota: El enlace a la conversación ahora debe usar 'conversacion_general'
     return render_template("panel.html", leads=leads_filtrados, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
 
-@app.route("/conversacion/<bot>/<numero>")
-def chat_conversacion(bot, numero):
-    """
-    Muestra el historial de una conversación específica.
-    Pasa la variable 'bot' a la plantilla para el enlace de regreso correcto.
-    """
-    clave = f"{bot}|{numero}"
-    if not os.path.exists("leads.json"):
-        return "No hay historial disponible", 404
-
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-
-    historial = leads.get(clave, {}).get("historial", [])
-
-    mensajes = []
-    for registro in historial:
-        mensajes.append({
-            "texto": registro.get("texto", ""),
-            "hora": registro.get("hora", ""),
-            "tipo": registro.get("tipo", "user")
-        })
-
-    # El cambio está aquí: pasamos la variable 'bot' a la plantilla.
-    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot)
 
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
