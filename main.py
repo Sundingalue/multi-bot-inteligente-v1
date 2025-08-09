@@ -118,6 +118,24 @@ def _user_can_access_bot(bot_name):
     bots = session.get("bots_permitidos", [])
     return bot_name in bots
 
+def _normalize_bot_name(name: str):
+    """Devuelve el nombre oficial del bot según bots_config (o None si no existe)."""
+    for config in bots_config.values():
+        if config["name"].lower() == name.lower():
+            return config["name"]
+    return None
+
+def _hora_to_epoch_ms(hora_str: str) -> int:
+    """
+    Convierte 'YYYY-MM-DD HH:MM:SS' a epoch (ms).
+    Si falla, devuelve 0 para no romper la lógica.
+    """
+    try:
+        dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return 0
+
 # =======================
 #   Leads y WhatsApp
 # =======================
@@ -170,11 +188,7 @@ def panel_exclusivo_bot(bot_nombre):
         return redirect(url_for("panel"))
     # 🔒 Permisos por bot
     # Normalizar bot_nombre contra bots_config para chequear permisos por nombre oficial
-    bot_normalizado = None
-    for config in bots_config.values():
-        if config["name"].lower() == bot_nombre.lower():
-            bot_normalizado = config["name"]
-            break
+    bot_normalizado = _normalize_bot_name(bot_nombre)
     if not bot_normalizado:
         return f"Bot '{bot_nombre}' no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
@@ -286,11 +300,7 @@ def chat_general(bot, numero):
         return redirect(url_for("panel"))
     # 🔒 Permisos por bot (el parámetro 'bot' debe estar permitido)
     # Normalizamos para comparar contra bots_config (nombres oficiales)
-    bot_normalizado = None
-    for config in bots_config.values():
-        if config["name"].lower() == bot.lower():
-            bot_normalizado = config["name"]
-            break
+    bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
@@ -314,11 +324,7 @@ def chat_bot(bot, numero):
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
     # 🔒 Permisos por bot
-    bot_normalizado = None
-    for config in bots_config.values():
-        if config["name"].lower() == bot.lower():
-            bot_normalizado = config["name"]
-            break
+    bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
@@ -335,6 +341,66 @@ def chat_bot(bot, numero):
         mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
 # ----- Fin de las rutas de chat actualizadas -----
+
+# ✅ API de polling en tiempo (casi) real
+@app.route("/api/chat/<bot>/<numero>", methods=["GET"])
+def api_chat(bot, numero):
+    # 🔒 Protección de sesión
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return jsonify({"error": "Bot no encontrado"}), 404
+    if not _user_can_access_bot(bot_normalizado):
+        return jsonify({"error": "No autorizado"}), 403
+
+    archivo = "leads.json"
+    if not os.path.exists(archivo):
+        return jsonify({"mensajes": [], "last_ts": 0})
+
+    since_param = request.args.get("since", "").strip()
+    try:
+        since_ms = int(since_param) if since_param else 0
+    except ValueError:
+        since_ms = 0
+
+    clave = f"{bot_normalizado}|{numero}"
+    with open(archivo, "r") as f:
+        leads = json.load(f)
+
+    historial = leads.get(clave, {}).get("historial", [])
+    nuevos = []
+    last_ts = since_ms
+    for reg in historial:
+        ts = _hora_to_epoch_ms(reg.get("hora", ""))
+        if ts > since_ms:
+            nuevos.append({
+                "texto": reg.get("texto", ""),
+                "hora": reg.get("hora", ""),
+                "tipo": reg.get("tipo", "user"),
+                "ts": ts
+            })
+        if ts > last_ts:
+            last_ts = ts
+
+    # Si no hay since, devolvemos todo el historial
+    if since_ms == 0 and not nuevos and historial:
+        for reg in historial:
+            ts = _hora_to_epoch_ms(reg.get("hora", ""))
+            if ts > last_ts:
+                last_ts = ts
+        nuevos = [
+            {
+                "texto": reg.get("texto", ""),
+                "hora": reg.get("hora", ""),
+                "tipo": reg.get("tipo", "user"),
+                "ts": _hora_to_epoch_ms(reg.get("hora", ""))
+            }
+            for reg in historial
+        ]
+
+    return jsonify({"mensajes": nuevos, "last_ts": last_ts})
 
 # ✅ Rutas para que /login y /login.html funcionen y lleven al login del panel
 @app.route("/login", methods=["GET"])
@@ -428,7 +494,8 @@ def guardar_edicion():
 
     return jsonify({"mensaje": "Lead actualizado"})
 
-@app.route("/logout", methods=["POST"])
+# 🔁 AHORA ACEPTA GET y POST PARA PODER USAR UN ENLACE SIMPLE
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
     session.clear()
     return redirect(url_for("panel"))
