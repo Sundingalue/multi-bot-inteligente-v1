@@ -28,6 +28,71 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
+# =======================
+#  Gestión de usuarios
+# =======================
+def _load_users():
+    """
+    Lee los usuarios desde la variable de entorno PANEL_USERS_JSON.
+    Formato esperado (ejemplo):
+    {
+      "sundin":   { "password": "inhouston2025", "bots": ["*"] },
+      "abogado1": { "password": "ClaveSegura!",  "bots": ["Sara"] }
+    }
+    - bots=["*"] => Admin (acceso total)
+    - bots=["Sara","Camila"] => acceso solo a esos bots
+    """
+    default_users = {
+        "sundin": {"password": "inhouston2025", "bots": ["*"]}  # fallback para no romper tu flujo actual
+    }
+    raw = os.getenv("PANEL_USERS_JSON")
+    if not raw:
+        return default_users
+    try:
+        data = json.loads(raw)
+        # Validación mínima
+        if not isinstance(data, dict):
+            return default_users
+        # Normalizar: asegurar que cada usuario tenga "password" y "bots"
+        norm = {}
+        for user, rec in data.items():
+            pwd = rec.get("password") if isinstance(rec, dict) else None
+            bots = rec.get("bots") if isinstance(rec, dict) else None
+            if isinstance(pwd, str) and isinstance(bots, list) and bots:
+                norm[user] = {"password": pwd, "bots": bots}
+        return norm or default_users
+    except Exception as e:
+        print(f"⚠️ PANEL_USERS_JSON inválido: {e}")
+        return default_users
+
+def _auth_user(username, password):
+    users = _load_users()
+    rec = users.get(username)
+    if rec and rec.get("password") == password:
+        return {"username": username, "bots": rec.get("bots", [])}
+    return None
+
+def _is_admin():
+    bots = session.get("bots_permitidos", [])
+    return isinstance(bots, list) and ("*" in bots)
+
+def _first_allowed_bot():
+    bots = session.get("bots_permitidos", [])
+    if isinstance(bots, list):
+        for b in bots:
+            if b != "*":
+                return b
+    return None
+
+def _user_can_access_bot(bot_name):
+    if _is_admin():
+        return True
+    bots = session.get("bots_permitidos", [])
+    return bot_name in bots
+
+# =======================
+#   Leads y WhatsApp
+# =======================
 def guardar_lead(bot_nombre, numero, mensaje):
     try:
         archivo = "leads.json"
@@ -75,22 +140,23 @@ def panel_exclusivo_bot(bot_nombre):
     # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
+    # 🔒 Permisos por bot
+    # Normalizar bot_nombre contra bots_config para chequear permisos por nombre oficial
+    bot_normalizado = None
+    for config in bots_config.values():
+        if config["name"].lower() == bot_nombre.lower():
+            bot_normalizado = config["name"]
+            break
+    if not bot_normalizado:
+        return f"Bot '{bot_nombre}' no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
 
     if not os.path.exists("leads.json"):
         return "No hay leads disponibles", 404
 
     with open("leads.json", "r") as f:
         leads = json.load(f)
-
-    # Normalizar bot_nombre (buscarlo tal como aparece en bots_config)
-    bot_normalizado = None
-    for config in bots_config.values():
-        if config["name"].lower() == bot_nombre.lower():
-            bot_normalizado = config["name"]
-            break
-
-    if not bot_normalizado:
-        return f"Bot '{bot_nombre}' no encontrado", 404
 
     leads_filtrados = {
         clave: datos
@@ -190,8 +256,19 @@ def chat_general(bot, numero):
     # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
+    # 🔒 Permisos por bot (el parámetro 'bot' debe estar permitido)
+    # Normalizamos para comparar contra bots_config (nombres oficiales)
+    bot_normalizado = None
+    for config in bots_config.values():
+        if config["name"].lower() == bot.lower():
+            bot_normalizado = config["name"]
+            break
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
 
-    clave = f"{bot}|{numero}"
+    clave = f"{bot_normalizado}|{numero}"
     if not os.path.exists("leads.json"):
         return "No hay historial disponible", 404
     with open("leads.json", "r") as f:
@@ -200,7 +277,7 @@ def chat_general(bot, numero):
     mensajes = []
     for registro in historial:
         mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
-    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot)
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
 
 # Esta ruta maneja el chat para los bots individuales y renderiza 'chat_bot.html'
 @app.route("/conversacion_bot/<bot>/<numero>")
@@ -208,8 +285,18 @@ def chat_bot(bot, numero):
     # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
+    # 🔒 Permisos por bot
+    bot_normalizado = None
+    for config in bots_config.values():
+        if config["name"].lower() == bot.lower():
+            bot_normalizado = config["name"]
+            break
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
 
-    clave = f"{bot}|{numero}"
+    clave = f"{bot_normalizado}|{numero}"
     if not os.path.exists("leads.json"):
         return "No hay historial disponible", 404
     with open("leads.json", "r") as f:
@@ -218,10 +305,10 @@ def chat_bot(bot, numero):
     mensajes = []
     for registro in historial:
         mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
-    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot)
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
 # ----- Fin de las rutas de chat actualizadas -----
 
-# ✅ NUEVO: rutas para que /login y /login.html funcionen y lleven al login del panel
+# ✅ Rutas para que /login y /login.html funcionen y lleven al login del panel
 @app.route("/login", methods=["GET"])
 def login_redirect():
     # Redirige a /panel, que ya muestra login.html si no hay sesión
@@ -234,18 +321,43 @@ def login_html_redirect():
 
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
+    # 1) Si no hay sesión, manejar login
     if not session.get("autenticado"):
-        # Sugerencia: Mover usuario y clave a variables de entorno para mayor seguridad.
         if request.method == "POST":
-            if request.form.get("usuario") == "sundin" and request.form.get("clave") == "inhouston2025":
+            usuario = request.form.get("usuario", "").strip()
+            clave = request.form.get("clave", "").strip()
+            auth = _auth_user(usuario, clave)
+            if auth:
+                # Guardar sesión
                 session["autenticado"] = True
+                session["usuario"] = auth["username"]
+                session["bots_permitidos"] = auth["bots"]
+                # Redirección según rol
+                if "*" in auth["bots"]:
+                    return redirect(url_for("panel"))  # Admin → Panel general
+                # Cliente → primer bot permitido
+                destino = _first_allowed_bot()
+                if destino:
+                    return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
+                # Si por alguna razón no hay bot, igual al panel (no debería pasar)
                 return redirect(url_for("panel"))
+
+            # Falla de login
             return render_template("login.html", error=True)
+        # GET sin sesión → mostrar login
         return render_template("login.html")
 
+    # 2) Si hay sesión: si NO es admin, redirigir al panel exclusivo
+    if not _is_admin():
+        destino = _first_allowed_bot()
+        if destino:
+            return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
+
+    # 3) Admin: construir panel general como siempre
     leads_por_bot = {}
     bots_disponibles = {}
 
+    leads = {}
     if os.path.exists("leads.json"):
         with open("leads.json", "r") as f:
             leads = json.load(f)
@@ -261,6 +373,7 @@ def panel():
                     break
 
     bot_seleccionado = request.args.get("bot")
+    # Para admin, se mantiene la lógica previa; si quisieras filtrar aquí, se puede más adelante
     leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
 
     # Importante: El enlace a la conversación ahora debe usar 'conversacion_general'
