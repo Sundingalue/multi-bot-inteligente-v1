@@ -1,142 +1,177 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <title>Conversación - In Houston Texas</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            background-color: #f7f7f7;
-            margin: 0;
-            padding: 0;
-        }
+  <meta charset="UTF-8" />
+  <title>Conversación - In Houston Texas</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <style>
+    :root{
+      --brand:#F7BD02;
+      --bg:#0a0a0a;
+      --paper:#ffffff;
+      --text:#111;
+      --muted:#8a8a8a;
+      --bubble-user:#fff6bf;     /* amarillo claro */
+      --bubble-bot:#000000;      /* negro */
+      --bubble-bot-text:#F7BD02; /* amarillo marca */
+      --radius:18px;
+    }
+    *{ box-sizing:border-box; }
+    html,body{
+      margin:0; padding:0; height:100%;
+      background:#f5f5f5; color:#000;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;
+      font-size:16px;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+    .app{
+      min-height:100vh;
+      display:flex; flex-direction:column;
+      background:#fafafa;
+    }
 
-        .container {
-            max-width: 100%;
-            margin: 0 auto;
-            background: #fff;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
+    /* ===== Header fijo ===== */
+    .topbar{
+      position:sticky; top:0; z-index:10;
+      background:var(--brand);
+      color:#000;
+      padding: env(safe-area-inset-top) 12px 10px 12px;
+      box-shadow:0 2px 8px rgba(0,0,0,.12);
+    }
+    .topbar-row{
+      display:flex; align-items:center; gap:12px;
+    }
+    .back{
+      display:inline-flex; align-items:center; gap:8px;
+      text-decoration:none; color:#000; font-weight:800;
+      background:#fff; border:2px solid #000;
+      padding:8px 12px; border-radius:12px;
+      transition:transform .06s ease, box-shadow .2s ease;
+    }
+    .back:active{ transform:translateY(1px); }
+    .title{
+      flex:1;
+      text-align:center;
+      font-weight:900;
+      letter-spacing:.2px;
+    }
+    .whats{
+      text-decoration:none; color:#000; font-weight:700;
+      background:rgba(0,0,0,.08);
+      padding:8px 10px; border-radius:10px;
+      border:1px dashed #000;
+    }
 
-        .header {
-            background-color: #F7BD02;
-            color: #000;
-            padding: 20px;
-            font-size: 22px;
-            font-weight: bold;
-            text-align: center;
-            letter-spacing: 1px;
-        }
+    /* ===== Área de mensajes ===== */
+    .chat{
+      flex:1;
+      padding:14px;
+      overflow-y:auto;
+      background:linear-gradient(180deg,#ffffff 0%, #f7f7f7 100%);
+    }
+    .group{ margin:10px 0; display:flex; flex-direction:column; gap:8px; }
+    .bubble{
+      position:relative;
+      max-width:86%;
+      padding:14px 16px;
+      border-radius:var(--radius);
+      line-height:1.45;
+      word-wrap:break-word;
+      box-shadow:0 8px 18px rgba(0,0,0,.06);
+      font-size:16px;
+    }
+    /* Usuario (izquierda) */
+    .user{
+      align-self:flex-start;
+      background:var(--bubble-user);
+      color:#111;
+      border-top-left-radius:8px;
+    }
+    .user::after{
+      content:"";
+      position:absolute; left:10px; bottom:-8px;
+      width:14px; height:14px; background:var(--bubble-user);
+      transform:rotate(45deg);
+      box-shadow: 2px 2px 4px rgba(0,0,0,.05);
+    }
+    /* Bot (derecha) */
+    .bot{
+      align-self:flex-end;
+      background:var(--bubble-bot);
+      color:var(--bubble-bot-text);
+      border-top-right-radius:8px;
+      text-align:left;
+    }
+    .bot::after{
+      content:"";
+      position:absolute; right:10px; bottom:-8px;
+      width:14px; height:14px; background:var(--bubble-bot);
+      transform:rotate(45deg);
+      box-shadow: 2px 2px 4px rgba(0,0,0,.15);
+    }
 
-        .chat-box {
-            flex: 1;
-            padding: 16px;
-            overflow-y: auto;
-            background: #fafafa;
-        }
+    .time{
+      margin-top:6px;
+      font-size:12px;
+      color:var(--muted);
+    }
 
-        .message {
-            padding: 14px 18px;
-            margin: 12px 0;
-            border-radius: 18px;
-            max-width: 85%;
-            clear: both;
-            font-size: 16px;
-            line-height: 1.5;
-            word-wrap: break-word;
-            position: relative;
-        }
+    /* ===== Footer informativo (opcional) ===== */
+    .foot{
+      padding:10px 14px env(safe-area-inset-bottom);
+      text-align:center; font-size:12px; color:#777;
+    }
 
-        .user {
-            background-color: #ffe97f;
-            float: left;
-            color: #000;
-            border-top-left-radius: 4px;
-            border-bottom-right-radius: 18px;
-        }
-
-        .bot {
-            background-color: #000;
-            color: #F7BD02;
-            float: right;
-            text-align: right;
-            border-top-right-radius: 4px;
-            border-bottom-left-radius: 18px;
-        }
-
-        .timestamp {
-            font-size: 12px;
-            color: #888;
-            margin-top: 6px;
-        }
-
-        .volver {
-            text-align: center;
-            padding: 20px;
-            background: #000;
-        }
-
-        .volver a {
-            text-decoration: none;
-            color: #F7BD02;
-            background: transparent;
-            padding: 10px 25px;
-            border: 2px solid #F7BD02;
-            border-radius: 30px;
-            font-weight: bold;
-            transition: all 0.3s ease;
-        }
-
-        .volver a:hover {
-            background: #F7BD02;
-            color: #000;
-        }
-
-        .clearfix::after {
-            content: "";
-            clear: both;
-            display: table;
-        }
-
-        @media screen and (max-width: 600px) {
-            .header {
-                font-size: 18px;
-                padding: 16px;
-            }
-
-            .message {
-                font-size: 15px;
-                padding: 12px 16px;
-                margin: 10px 0;
-            }
-
-            .chat-box {
-                padding: 12px;
-            }
-        }
-    </style>
+    /* Responsive fino */
+    @media (max-width:480px){
+      .chat{ padding:12px; }
+      .bubble{ font-size:15.5px; }
+      .back{ padding:8px 10px; }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            Conversación con {{ numero }}
+  <div class="app">
+    <!-- Header fijo con "Volver al panel" y WhatsApp -->
+    <header class="topbar">
+      <div class="topbar-row">
+        <a class="back" href="{{ url_for('panel') }}" aria-label="Volver al panel">
+          ⬅ Volver
+        </a>
+        <div class="title">
+          {% if bot %}{{ bot }}{% else %}Conversación{% endif %}
         </div>
-        <div class="chat-box">
-            {% for msg in mensajes %}
-                <div class="message {{ msg.tipo }} clearfix">
-                    <div>{{ msg.texto }}</div>
-                    <div class="timestamp">{{ msg.hora }}</div>
-                </div>
-            {% endfor %}
-        </div>
-        <div class="volver">
-            <a href="{{ url_for('panel') }}">
-                ⬅ Volver al panel general
-            </a>
-        </div>
-    </div>
+        <a class="whats" href="https://wa.me/{{ numero | replace('+','') }}" target="_blank" rel="noopener">
+          WhatsApp
+        </a>
+      </div>
+    </header>
+
+    <!-- Lista de mensajes -->
+    <main id="chat" class="chat">
+      <div class="group">
+        {% for msg in mensajes %}
+          <div class="bubble {{ msg.tipo }}">
+            <div>{{ msg.texto }}</div>
+            <div class="time">{{ msg.hora }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    </main>
+
+    <div class="foot">In Houston Texas · Sistema de Leads © 2025</div>
+  </div>
+
+  <script>
+    // Auto-scroll al final para ver el último mensaje
+    (function(){
+      const el = document.getElementById('chat');
+      if (!el) return;
+      // scroll suave al cargar
+      setTimeout(()=>{ el.scrollTop = el.scrollHeight; }, 50);
+    })();
+  </script>
 </body>
 </html>
