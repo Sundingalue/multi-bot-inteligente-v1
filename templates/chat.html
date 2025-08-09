@@ -4,158 +4,167 @@
   <meta charset="UTF-8" />
   <title>Conversación - In Houston Texas</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#000000" />
+  <meta name="theme-color" content="#F7BD02" />
   <style>
     :root{
-      --brand:#F7BD02;
-      --bg:#0a0a0a;
-      --paper:#ffffff;
-      --text:#111;
-      --muted:#8a8a8a;
-      --bubble-user:#fff6bf;     /* amarillo claro */
-      --bubble-bot:#000000;      /* negro */
-      --bubble-bot-text:#F7BD02; /* amarillo marca */
+      --brand:#F7BD02;      /* amarillo marca (fondo) */
+      --ink:#000000;        /* negro */
+      --paper:#ffffff;      /* blanco (burbujas usuario y botón volver) */
+      --botText:#F7BD02;    /* texto de burbuja bot */
       --radius:18px;
     }
-    *{ box-sizing:border-box; }
-    html,body{
+
+    *{ box-sizing: border-box; }
+    html, body{
       margin:0; padding:0; height:100%;
-      background:#f5f5f5; color:#000;
-      font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;
-      font-size:16px;
-      -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
+
+    /* ===== Lienzo principal con fondo amarillo ===== */
     .app{
       min-height:100vh;
       display:flex; flex-direction:column;
-      background:#fafafa;
+      background: var(--brand);
     }
 
-    /* ===== Header fijo ===== */
-    .topbar{
-      position:sticky; top:0; z-index:10;
-      background:var(--brand);
-      color:#000;
-      padding: env(safe-area-inset-top) 12px 10px 12px;
-      box-shadow:0 2px 8px rgba(0,0,0,.12);
+    /* ===== Barra superior negra con nombre en amarillo ===== */
+    .brandbar{
+      background: var(--ink);
+      color: var(--brand);
+      padding: calc(env(safe-area-inset-top) + 10px) 14px 12px 14px;
+      font-weight: 900;
+      letter-spacing: .2px;
+      text-align:center;
+      position:sticky; top:0; z-index:20;
     }
-    .topbar-row{
-      display:flex; align-items:center; gap:12px;
+    .brandbar .company{
+      max-width: 100%;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    /* ===== Franja tipo WhatsApp con Volver + identificador ===== */
+    .toolbar{
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding: 10px 12px;
+      position:sticky; top: calc(env(safe-area-inset-top) + 48px); z-index:15;
+      /* la franja vive sobre el fondo amarillo */
     }
     .back{
       display:inline-flex; align-items:center; gap:8px;
-      text-decoration:none; color:#000; font-weight:800;
-      background:#fff; border:2px solid #000;
-      padding:8px 12px; border-radius:12px;
-      transition:transform .06s ease, box-shadow .2s ease;
+      background: var(--paper);
+      color: var(--ink);
+      border: 2px solid var(--ink);
+      border-radius: 12px;
+      padding: 10px 14px;
+      text-decoration:none;
+      font-weight: 800;
+      box-shadow: 0 6px 16px rgba(0,0,0,.15);
+      transition: transform .06s ease, box-shadow .2s ease;
     }
-    .back:active{ transform:translateY(1px); }
-    .title{
-      flex:1;
-      text-align:center;
-      font-weight:900;
-      letter-spacing:.2px;
-    }
-    .whats{
-      text-decoration:none; color:#000; font-weight:700;
-      background:rgba(0,0,0,.08);
-      padding:8px 10px; border-radius:10px;
-      border:1px dashed #000;
-    }
+    .back:active{ transform:translateY(1px); box-shadow:0 4px 12px rgba(0,0,0,.12); }
 
-    /* ===== Área de mensajes ===== */
+    .idpill{
+      background: var(--ink);
+      color: var(--brand);
+      border: 2px solid var(--ink);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 800;
+      box-shadow: 0 6px 16px rgba(0,0,0,.15);
+      text-decoration:none;
+    }
+    .idpill a{ color: var(--brand); text-decoration: underline; }
+
+    /* ===== Área de chat ===== */
     .chat{
       flex:1;
-      padding:14px;
+      padding: 10px 12px 14px 12px;
       overflow-y:auto;
-      background:linear-gradient(180deg,#ffffff 0%, #f7f7f7 100%);
     }
-    .group{ margin:10px 0; display:flex; flex-direction:column; gap:8px; }
+    .group{ display:flex; flex-direction:column; gap:10px; }
+
     .bubble{
-      position:relative;
-      max-width:86%;
-      padding:14px 16px;
-      border-radius:var(--radius);
-      line-height:1.45;
-      word-wrap:break-word;
-      box-shadow:0 8px 18px rgba(0,0,0,.06);
-      font-size:16px;
+      max-width: 86%;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      line-height: 1.45;
+      word-wrap: break-word;
+      box-shadow: 0 10px 22px rgba(0,0,0,.15);
+      position: relative;
+      font-size: 16px;
     }
-    /* Usuario (izquierda) */
+
+    /* Usuario = burbuja blanca, a la izquierda */
     .user{
-      align-self:flex-start;
-      background:var(--bubble-user);
-      color:#111;
-      border-top-left-radius:8px;
+      align-self: flex-start;
+      background: var(--paper);
+      color: var(--ink);
+      border-top-left-radius: 8px;
     }
     .user::after{
-      content:"";
-      position:absolute; left:10px; bottom:-8px;
-      width:14px; height:14px; background:var(--bubble-user);
-      transform:rotate(45deg);
-      box-shadow: 2px 2px 4px rgba(0,0,0,.05);
+      content:""; position:absolute; left:12px; bottom:-8px;
+      width:14px; height:14px; background: var(--paper); transform: rotate(45deg);
+      box-shadow: 2px 2px 4px rgba(0,0,0,.08);
     }
-    /* Bot (derecha) */
+
+    /* Bot = burbuja negra con texto amarillo, a la derecha */
     .bot{
-      align-self:flex-end;
-      background:var(--bubble-bot);
-      color:var(--bubble-bot-text);
-      border-top-right-radius:8px;
-      text-align:left;
+      align-self: flex-end;
+      background: var(--ink);
+      color: var(--botText);
+      border-top-right-radius: 8px;
+      text-align: left;
     }
     .bot::after{
-      content:"";
-      position:absolute; right:10px; bottom:-8px;
-      width:14px; height:14px; background:var(--bubble-bot);
-      transform:rotate(45deg);
-      box-shadow: 2px 2px 4px rgba(0,0,0,.15);
+      content:""; position:absolute; right:12px; bottom:-8px;
+      width:14px; height:14px; background: var(--ink); transform: rotate(45deg);
+      box-shadow: 2px 2px 4px rgba(0,0,0,.25);
     }
 
     .time{
+      display:block;
       margin-top:6px;
       font-size:12px;
-      color:var(--muted);
+      opacity:.8;
     }
 
-    /* ===== Footer informativo (opcional) ===== */
     .foot{
-      padding:10px 14px env(safe-area-inset-bottom);
-      text-align:center; font-size:12px; color:#777;
+      padding: 8px 12px calc(env(safe-area-inset-bottom) + 8px);
+      text-align:center; font-size:12px; color:#3a3000;
+      font-weight:600;
     }
 
-    /* Responsive fino */
+    /* Responsive */
     @media (max-width:480px){
-      .chat{ padding:12px; }
-      .bubble{ font-size:15.5px; }
-      .back{ padding:8px 10px; }
+      .bubble{ font-size: 15.5px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <!-- Header fijo con "Volver al panel" y WhatsApp -->
-    <header class="topbar">
-      <div class="topbar-row">
-        <a class="back" href="{{ url_for('panel') }}" aria-label="Volver al panel">
-          ⬅ Volver
-        </a>
-        <div class="title">
-          {% if bot %}{{ bot }}{% else %}Conversación{% endif %}
-        </div>
-        <a class="whats" href="https://wa.me/{{ numero | replace('+','') }}" target="_blank" rel="noopener">
-          WhatsApp
-        </a>
-      </div>
-    </header>
+    <!-- Barra superior negra con nombre de la compañía en amarillo -->
+    <div class="brandbar">
+      <div class="company">{{ bot if bot else 'Panel de Conversaciones' }}</div>
+    </div>
 
-    <!-- Lista de mensajes -->
+    <!-- Franja tipo WhatsApp: botón Volver (blanco/negro) + identificador del contacto -->
+    <div class="toolbar">
+      <a class="back" href="{{ url_for('panel') }}" aria-label="Volver al panel">⬅ Volver</a>
+      <div class="idpill">
+        whatsapp: <a href="https://wa.me/{{ numero | replace('+','') }}" target="_blank" rel="noopener">+{{ numero | replace('+','') }}</a>
+      </div>
+    </div>
+
+    <!-- Mensajes -->
     <main id="chat" class="chat">
       <div class="group">
         {% for msg in mensajes %}
           <div class="bubble {{ msg.tipo }}">
             <div>{{ msg.texto }}</div>
-            <div class="time">{{ msg.hora }}</div>
+            <small class="time">{{ msg.hora }}</small>
           </div>
         {% endfor %}
       </div>
@@ -165,11 +174,10 @@
   </div>
 
   <script>
-    // Auto-scroll al final para ver el último mensaje
+    // Autoscroll al último mensaje
     (function(){
       const el = document.getElementById('chat');
       if (!el) return;
-      // scroll suave al cargar
       setTimeout(()=>{ el.scrollTop = el.scrollHeight; }, 50);
     })();
   </script>
