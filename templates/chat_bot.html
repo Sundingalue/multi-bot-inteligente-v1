@@ -40,7 +40,7 @@
       position:sticky; top:0; z-index:50;
       background: var(--ink);
       color:#fff;
-      margin-top: 0px; /* si quieres ver amarillo arriba, sube a 8px */
+      margin-top: 0px;
       padding: calc(env(safe-area-inset-top) + 12px) 16px 14px;
       text-align:center;
       font-weight: 900;
@@ -141,8 +141,12 @@
       <div class="chip-bot">{{ bot or 'SARA' }}</div>
     </div>
 
-    <main id="chat" class="chat">
-      <div class="stack">
+    <!-- data-* para JS: bot, numero y la última hora visible -->
+    <main id="chat" class="chat"
+          data-bot="{{ bot }}"
+          data-numero="{{ numero }}"
+          data-last-hora="{% if mensajes and mensajes|length>0 %}{{ mensajes[-1].hora }}{% endif %}">
+      <div class="stack" id="stack">
         {% for msg in mensajes %}
           <div class="bubble {% if msg.tipo == 'user' %}user{% else %}bot{% endif %}">
             {{ msg.texto }}
@@ -153,10 +157,74 @@
   </div>
 
   <script>
-    // Autoscroll al último mensaje al cargar
+    // Autoscroll inicial
     (function(){
       const el = document.getElementById('chat');
       if (el) setTimeout(()=>{ el.scrollTop = el.scrollHeight; }, 60);
+    })();
+
+    // ===== Polling cada ~3s para mensajes nuevos (igual al chat general) =====
+    (function(){
+      const chatEl  = document.getElementById('chat');
+      const stackEl = document.getElementById('stack');
+      if (!chatEl || !stackEl) return;
+
+      // Utilidad: "YYYY-MM-DD HH:MM:SS" -> epoch ms
+      const toEpochMs = (horaStr) => {
+        if (!horaStr) return 0;
+        const iso = horaStr.replace(' ', 'T');
+        const d = new Date(iso);
+        const t = d.getTime();
+        return isNaN(t) ? 0 : t;
+        // Nota: el backend ya devuelve ts (ms). Esto es para inicializar desde el HTML.
+      };
+
+      // last_ts inicial desde el último mensaje renderizado
+      let lastTs = 0;
+      const lastHoraAttr = chatEl.getAttribute('data-last-hora');
+      if (lastHoraAttr) lastTs = toEpochMs(lastHoraAttr);
+
+      // Construir URL de API
+      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
+      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
+      const apiBase = `/api/chat/${bot}/${numero}`;
+
+      const appendMessage = (tipo, texto) => {
+        const div = document.createElement('div');
+        div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
+        div.textContent = texto || '';
+        stackEl.appendChild(div);
+        // autoscroll
+        chatEl.scrollTop = chatEl.scrollHeight;
+      };
+
+      const tick = async () => {
+        try {
+          const url = `${apiBase}?since=${lastTs}`;
+          const res = await fetch(url, { credentials: 'same-origin' });
+          if (!res.ok) return; // 401/403/404: no romper UI
+          const data = await res.json();
+          if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0) {
+            // Ordenar por ts ascendente y renderizar
+            data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
+            for (const m of data.mensajes) {
+              appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
+            }
+            // Actualizar lastTs
+            if (typeof data.last_ts === 'number' && data.last_ts > (lastTs||0)) {
+              lastTs = data.last_ts;
+            } else {
+              const maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), lastTs);
+              if (maxTs > lastTs) lastTs = maxTs;
+            }
+          }
+        } catch (e) {
+          // Silencioso para no molestar al usuario
+        }
+      };
+
+      // Intervalo: 3s
+      setInterval(tick, 3000);
     })();
   </script>
 </body>
