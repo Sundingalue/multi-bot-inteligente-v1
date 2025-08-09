@@ -209,6 +209,17 @@ def chat_bot(bot, numero):
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot)
 # ----- Fin de las rutas de chat actualizadas -----
 
+# ✅ NUEVO: rutas para que /login y /login.html funcionen y lleven al login del panel
+@app.route("/login", methods=["GET"])
+def login_redirect():
+    # Redirige a /panel, que ya muestra login.html si no hay sesión
+    return redirect(url_for("panel"))
+
+@app.route("/login.html", methods=["GET"])
+def login_html_redirect():
+    # Mantiene tu URL pública y te lleva al mismo flujo de /panel
+    return redirect(url_for("panel"))
+
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
     if not session.get("autenticado"):
