@@ -5,107 +5,114 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Panel de Conversaciones</title>
   <style>
+    :root{
+      --brand:#F7BD02;
+      --ink:#000;
+      --paper:#fff;
+      --radius:14px;
+      --shadow:0 6px 14px rgba(0,0,0,.25);
+    }
+
+    *{box-sizing:border-box}
     body {
       margin: 0;
       padding: 0;
-      font-family: 'Segoe UI', sans-serif;
-      background-color: #F7BD02;
-      color: #000;
+      font-family: 'Segoe UI', system-ui, -apple-system, Roboto, Arial, sans-serif;
+      background-color: var(--brand);
+      color: var(--ink);
     }
 
-    /* ===== Header ===== */
+    /* ===== Header negro ===== */
     .header {
       position: sticky;
       top: 0;
-      z-index: 10;
+      z-index: 20;
       background-color: #000;
-      color: #F7BD02;
+      color: var(--brand);
       padding: 16px 20px;
+      text-align: center;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing:.3px;
+      text-transform: uppercase;
       box-shadow: 0 2px 10px rgba(0,0,0,.35);
     }
 
-    .header-inner{
-      display: flex;
-      align-items: center;
-      justify-content: center; /* centramos el título visualmente */
-      position: relative;      /* para anclar el botón a la derecha sin mover el título */
-      max-width: 1200px;
+    .container {
+      padding: 18px;
+      max-width: 1080px;
       margin: 0 auto;
     }
 
-    .header-title{
-      font-size: 28px;
-      font-weight: bold;
-      text-align: center;
-      margin: 0;
-      line-height: 1;
-      letter-spacing: .3px;
-      text-transform: uppercase;
+    /* ===== Fila de controles: selector + cerrar sesión ===== */
+    .controls{
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content:center;  /* centrado en móvil */
+      flex-wrap:wrap;
+      margin: 6px auto 18px;
     }
 
-    .logout-wrap{
-      position: absolute;
-      right: 0;
-      top: 50%;
-      transform: translateY(-50%);
-    }
-
-    .btn-logout{
-      appearance: none;
-      border: 1px solid #F7BD02;
-      background: #FFFFFF;
-      color: #000;
+    /* Pastilla base para que ambos (select y botón) se vean iguales */
+    .pill{
+      height: 46px;
+      border-radius: var(--radius);
+      border: 1.5px solid var(--ink);
+      background: var(--paper);
+      color: var(--ink);
       font-weight: 700;
-      padding: 10px 16px;
-      border-radius: 12px;
-      text-decoration: none;
+      font-size: 15px;
+      padding: 0 14px;
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      box-shadow: 0 6px 12px rgba(0,0,0,.20);
-      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      gap:10px;
+      box-shadow: var(--shadow);
       -webkit-tap-highlight-color: transparent;
-      font-size: 14px;
-      white-space: nowrap;
-    }
-    .btn-logout:active{
-      transform: translateY(1px);
-      box-shadow: 0 3px 8px rgba(0,0,0,.20);
-    }
-    .btn-logout:hover{
-      background: #F7BD02;
-      color: #000;
     }
 
-    /* ===== Contenido ===== */
-    .container {
-      padding: 20px;
-      max-width: 1200px;
-      margin: 0 auto;
+    /* Select estilizado como botón */
+    .select-wrap{
+      position: relative;
+      display:inline-flex;
+      align-items:center;
+    }
+    .select-wrap select{
+      appearance:none;
+      -webkit-appearance:none;
+      -moz-appearance:none;
+      border:none;
+      background: transparent;
+      font: inherit;
+      color: inherit;
+      padding: 0 28px 0 8px; /* espacio para la flecha */
+      height: 100%;
+      outline: none;
+      cursor: pointer;
+    }
+    .select-wrap .chev{
+      position:absolute;
+      right:10px;
+      pointer-events:none;
+      font-size: 16px;
+    }
+    .select-label{
+      font-weight:800;
+      margin: 6px 0 2px;
+      text-align:center;
+      width:100%;
     }
 
-    .selector {
-      margin-bottom: 20px;
-      text-align: center;
+    /* Botón cerrar sesión */
+    .btn-logout{
+      text-decoration:none;
+      cursor:pointer;
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
     }
+    .btn-logout:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+    .btn-logout:hover{ background: #f5f5f5; }
 
-    .selector label {
-      font-weight: bold;
-      display: block;
-      margin-bottom: 10px;
-      font-size: 18px;
-    }
-
-    .selector select {
-      padding: 12px;
-      font-size: 18px;
-      border-radius: 30px;
-      border: none;
-      width: 80%;
-      max-width: 400px;
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-    }
-
+    /* Tarjetas de lead */
     .lead-card {
       background-color: #1a1a1a;
       color: #fff;
@@ -116,10 +123,11 @@
     }
 
     .lead-card a {
-      color: #F7BD02;
+      color: var(--brand);
       font-weight: bold;
       text-decoration: none;
-      font-size: 20px;
+      font-size: 19px;
+      word-break: break-all;
     }
 
     .lead-card a:hover {
@@ -128,16 +136,16 @@
 
     .lead-info {
       margin-top: 10px;
-      font-size: 16px;
+      font-size: 15px;
     }
 
     .lead-select {
       margin-top: 10px;
-      font-size: 16px;
-      padding: 8px;
-      border-radius: 8px;
+      font-size: 15px;
+      padding: 8px 10px;
+      border-radius: 10px;
       border: none;
-      background-color: #F7BD02;
+      background-color: var(--brand);
       color: #000;
       font-weight: bold;
       cursor: pointer;
@@ -145,62 +153,49 @@
 
     .no-leads {
       text-align: center;
-      font-size: 20px;
+      font-size: 18px;
       color: #333;
       background: #fff3cd;
-      padding: 20px;
+      padding: 18px;
       border-radius: 12px;
+      margin-top: 8px;
     }
 
-    @media screen and (max-width: 600px) {
-      .header-title {
-        font-size: 22px;
-      }
-      .btn-logout{
-        padding: 9px 14px;
-        font-size: 13px;
-        border-radius: 10px;
-      }
-      .selector select {
-        font-size: 16px;
-      }
-      .lead-card {
-        font-size: 16px;
+    /* En pantallas anchas, alineamos controles a los lados */
+    @media (min-width: 720px){
+      .controls{
+        justify-content: space-between; /* selector a la izquierda, logout a la derecha */
       }
     }
   </style>
 </head>
 <body>
-  <!-- Header con título centrado y botón de cerrar sesión a la derecha -->
-  <header class="header">
-    <div class="header-inner">
-      <h1 class="header-title">Panel de Conversaciones</h1>
-      <div class="logout-wrap">
-        <a class="btn-logout" href="{{ url_for('logout') }}" title="Cerrar sesión" aria-label="Cerrar sesión">
-          <!-- pequeño ícono usando unicode -->
-          ⎋ Cerrar sesión
-        </a>
-      </div>
-    </div>
-  </header>
+  <div class="header">Panel de Conversaciones</div>
 
   <div class="container">
-    <div class="selector">
-      <form method="GET" action="/panel" id="form-bot">
-        <label for="bot">Selecciona una compañía:</label>
-        <select name="bot" id="bot" onchange="document.getElementById('form-bot').submit();">
-          <option value="">-- Ver todos --</option>
-          {% for bot in bots %}
-            <option value="{{ bot }}" {% if bot == bot_seleccionado %}selected{% endif %}>{{ bots[bot] }}</option>
-          {% endfor %}
-        </select>
+
+    <!-- ===== Controles: selector (igual a un botón) + cerrar sesión (misma talla) ===== -->
+    <div class="controls">
+      <form method="GET" action="/panel" id="form-bot" style="margin:0">
+        <div class="select-wrap pill" role="group" aria-label="Filtrar por compañía">
+          <span style="font-weight:800;margin-right:6px;">Empresa:</span>
+          <select name="bot" id="bot" onchange="document.getElementById('form-bot').submit();">
+            <option value="">-- Ver todos --</option>
+            {% for bot in bots %}
+              <option value="{{ bot }}" {% if bot == bot_seleccionado %}selected{% endif %}>{{ bots[bot] }}</option>
+            {% endfor %}
+          </select>
+          <span class="chev">▾</span>
+        </div>
       </form>
+
+      <a class="btn-logout pill" href="{{ url_for('logout') }}" title="Cerrar sesión" aria-label="Cerrar sesión">⎋ Cerrar sesión</a>
     </div>
 
     {% if leads %}
       {% for clave, lead in leads.items() %}
         <div class="lead-card">
-          <!-- Se usa la ruta 'chat_general' (ya existente) -->
+          <!-- Se mantiene la ruta a chat_general -->
           <a href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">{{ lead.numero }}</a>
           <div class="lead-info">📩 {{ lead.last_message }}</div>
           <div class="lead-info">📅 {{ lead.last_seen }}</div>
@@ -229,22 +224,16 @@
     function actualizarEstado(bot, numero, estado) {
       fetch('/guardar-lead', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           numero: `${bot}|${numero}`,
           estado: estado,
           nota: ""
         })
       })
-      .then(response => response.json())
-      .then(data => {
-        console.log("✅ Estado actualizado:", data);
-      })
-      .catch(error => {
-        console.error("❌ Error actualizando estado:", error);
-      });
+      .then(r => r.json())
+      .then(d => console.log("✅ Estado actualizado:", d))
+      .catch(e => console.error("❌ Error actualizando estado:", e));
     }
   </script>
 </body>
