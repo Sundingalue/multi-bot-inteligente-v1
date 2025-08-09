@@ -5,35 +5,44 @@
     <title>Panel Exclusivo - {{ bot }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <style>
+        :root{
+            --brand:#F7BD02;
+            --ink:#000;
+            --paper:#fff;
+            --radius:14px;
+            --shadow:0 6px 14px rgba(0,0,0,.25);
+        }
+
+        *{box-sizing:border-box}
         body {
             margin: 0;
             padding: 0;
-            font-family: 'Segoe UI', sans-serif;
-            background-color: #F7BD02;
-            color: #000;
+            font-family: 'Segoe UI', system-ui, -apple-system, Roboto, Arial, sans-serif;
+            background-color: var(--brand);
+            color: var(--ink);
         }
 
-        /* ===== Header ===== */
+        /* ===== Header negro con título centrado y botón a la derecha ===== */
         .header {
             position: sticky;
             top: 0;
-            z-index: 10;
+            z-index: 20;
             background-color: #000;
-            color: #F7BD02;
+            color: var(--brand);
             padding: 16px 20px;
             box-shadow: 0 2px 10px rgba(0,0,0,.35);
         }
         .header-inner{
             display: flex;
             align-items: center;
-            justify-content: center; /* centramos título */
-            position: relative;      /* para fijar botón a la derecha */
+            justify-content: center; /* centramos el título */
+            position: relative;      /* para posicionar el botón a la derecha */
             max-width: 1200px;
             margin: 0 auto;
         }
         .header-title{
             font-size: 28px;
-            font-weight: bold;
+            font-weight: 800;
             text-align: center;
             margin: 0;
             line-height: 1;
@@ -46,32 +55,30 @@
             top: 50%;
             transform: translateY(-50%);
         }
+
+        /* Botón “Cerrar sesión” como pastilla (igual al panel general) */
         .btn-logout{
-            appearance: none;
-            border: 1px solid #F7BD02;
-            background: #FFFFFF;
-            color: #000;
-            font-weight: 700;
-            padding: 10px 16px;
-            border-radius: 12px;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            box-shadow: 0 6px 12px rgba(0,0,0,.20);
+            gap:10px;
+
+            height: 46px;
+            padding: 0 14px;
+            border-radius: var(--radius);
+            border: 1.5px solid var(--ink);
+            background: var(--paper);
+            color: var(--ink);
+            font-weight: 700;
+            font-size: 15px;
+            box-shadow: var(--shadow);
+
             transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
             -webkit-tap-highlight-color: transparent;
-            font-size: 14px;
             white-space: nowrap;
         }
-        .btn-logout:active{
-            transform: translateY(1px);
-            box-shadow: 0 3px 8px rgba(0,0,0,.20);
-        }
-        .btn-logout:hover{
-            background: #F7BD02;
-            color: #000;
-        }
+        .btn-logout:hover{ background:#f5f5f5; }
+        .btn-logout:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
 
         /* ===== Contenido ===== */
         .container {
@@ -90,10 +97,11 @@
         }
 
         .lead-card a {
-            color: #F7BD02;
+            color: var(--brand);
             font-weight: bold;
             text-decoration: none;
-            font-size: 20px;
+            font-size: 19px;
+            word-break: break-all;
         }
 
         .lead-card a:hover {
@@ -102,29 +110,26 @@
 
         .lead-info {
             margin-top: 10px;
-            font-size: 16px;
+            font-size: 15px;
         }
 
         .no-leads {
             text-align: center;
-            font-size: 20px;
+            font-size: 18px;
             color: #333;
             background: #fff3cd;
-            padding: 20px;
+            padding: 18px;
             border-radius: 12px;
+            margin-top: 8px;
         }
 
         @media screen and (max-width: 600px) {
-            .header-title {
-                font-size: 24px;
-            }
+            .header-title { font-size: 24px; }
             .btn-logout{
-                padding: 9px 14px;
-                font-size: 13px;
-                border-radius: 10px;
-            }
-            .lead-card {
-                font-size: 16px;
+                height: 44px;
+                padding: 0 12px;
+                font-size: 14px;
+                border-radius: 12px;
             }
         }
     </style>
