@@ -33,27 +33,55 @@ follow_up_flags = {}
 # =======================
 def _load_users():
     """
-    Lee los usuarios desde la variable de entorno PANEL_USERS_JSON.
-    Formato esperado (ejemplo):
-    {
-      "sundin":   { "password": "inhouston2025", "bots": ["*"] },
-      "abogado1": { "password": "ClaveSegura!",  "bots": ["Sara"] }
-    }
-    - bots=["*"] => Admin (acceso total)
-    - bots=["Sara","Camila"] => acceso solo a esos bots
+    Orden de lectura de credenciales (el primero que tenga datos válidos gana):
+    1) Tripletas USER_*/PASS_*/PANEL_* desde variables de entorno (Render).
+       - PANEL = "panel"            => admin ("*")
+       - PANEL = "panel-bot/<Bot>"  => acceso solo a ese bot
+    2) PANEL_USERS_JSON (si existe), mismo formato anterior de {"user": {"password": "...", "bots": [...]}}
+    3) Fallback admin por compatibilidad: sundin / inhouston2025 con acceso total.
     """
+    # 1) Buscar tripletas USER_*/PASS_*/PANEL_*
+    env_users = {}
+    for key, val in os.environ.items():
+        if not key.startswith("USER_"):
+            continue
+        alias = key[len("USER_"):]  # ejemplo: SUNDIN, ABOGADO, CAMILA
+        username = val.strip()
+        password = os.environ.get(f"PASS_{alias}", "").strip()
+        panel = os.environ.get(f"PANEL_{alias}", "").strip()
+
+        if not username or not password or not panel:
+            # Tripleta incompleta: la ignoramos
+            continue
+
+        # Traducimos PANEL_* a lista de bots
+        # panel  -> admin (*)
+        # panel-bot/<NombreBot> -> [NombreBot]
+        bots_list = []
+        if panel.lower() == "panel":
+            bots_list = ["*"]
+        elif panel.lower().startswith("panel-bot/"):
+            bot_name = panel.split("/", 1)[1].strip()
+            if bot_name:
+                bots_list = [bot_name]
+
+        if bots_list:
+            env_users[username] = {"password": password, "bots": bots_list}
+
+    if env_users:
+        return env_users
+
+    # 2) Soporte del JSON anterior (compatibilidad)
     default_users = {
-        "sundin": {"password": "inhouston2025", "bots": ["*"]}  # fallback para no romper tu flujo actual
+        "sundin": {"password": "inhouston2025", "bots": ["*"]}  # fallback para no romper el flujo actual
     }
     raw = os.getenv("PANEL_USERS_JSON")
     if not raw:
         return default_users
     try:
         data = json.loads(raw)
-        # Validación mínima
         if not isinstance(data, dict):
             return default_users
-        # Normalizar: asegurar que cada usuario tenga "password" y "bots"
         norm = {}
         for user, rec in data.items():
             pwd = rec.get("password") if isinstance(rec, dict) else None
