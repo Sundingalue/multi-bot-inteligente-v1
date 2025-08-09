@@ -1,105 +1,286 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Acceso - Panel de Leads | In Houston Texas</title>
+
+  <!-- ✅ Mobile-first: evita zoom inesperado y ajusta a pantalla completa -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+
   <style>
-    body {
+    :root{
+      --brand:#F7BD02;
+      --bg:#000;
+      --card:#fff;
+      --text:#000;
+      --muted:#888;
+      --radius:16px;
+      --focus: #2b90ff;
+    }
+
+    *{ box-sizing: border-box; }
+
+    html, body {
       margin: 0;
-      font-family: 'Segoe UI', sans-serif;
-      background-color: #000;
+      padding: 0;
+      height: 100%;
+      background: var(--bg);
       color: #fff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      /* ✅ Fuente ≥17px para que iOS no haga zoom al enfocar */
+      font-size: 17px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    .login-container {
-      height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      background: linear-gradient(135deg, #000000 0%, #F7BD02 100%);
+    .login-wrap {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(1200px 600px at 100% 0%, rgba(247,189,2,0.15), transparent 60%),
+        radial-gradient(1200px 600px at 0% 100%, rgba(247,189,2,0.12), transparent 60%),
+        linear-gradient(135deg, #000000 0%, #0a0a0a 100%);
+      padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
     }
 
-    .login-box {
-      background: #fff;
-      color: #000;
-      padding: 50px 40px;
-      border-radius: 16px;
+    .card {
       width: 100%;
-      max-width: 400px;
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+      max-width: 420px; /* ✅ Más ancho para móvil grande */
+      background: var(--card);
+      color: var(--text);
+      border-radius: var(--radius);
+      box-shadow: 0 18px 44px rgba(0,0,0,0.35);
+      padding: 28px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      justify-content: center;
+    }
+    .brand img {
+      width: 42px; height: 42px; border-radius: 12px; object-fit: cover;
+    }
+    .brand-name {
+      font-weight: 800;
+      letter-spacing: 0.2px;
+    }
+
+    h1 {
+      margin: 8px 0 18px 0;
+      font-size: 24px; /* ✅ Grande pero no exagerado */
+      text-align: center;
+      color: var(--brand);
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #333;
+      font-size: 15px;
+      margin-bottom: 18px;
+    }
+
+    .alert {
+      background: #ffe5e5;
+      color: #9b1c1c;
+      border: 1px solid #f6caca;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      margin-bottom: 14px;
       text-align: center;
     }
 
-    .login-box h1 {
-      color: #F7BD02;
-      margin-bottom: 35px;
-      font-size: 28px;
+    .form {
+      display: grid;
+      gap: 14px;
     }
 
-    .login-box input {
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    label {
+      font-size: 15px;
+      color: #222;
+      font-weight: 600;
+    }
+
+    input[type="text"],
+    input[type="password"] {
       width: 100%;
-      padding: 14px;
-      margin-bottom: 15px;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-      font-size: 16px;
-      background: #f9f9f9;
+      padding: 16px 14px;             /* ✅ Área táctil generosa */
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      background: #f7f7f7;
+      font-size: 18px;                 /* ✅ ≥18px: no hay zoom en iOS */
+      line-height: 1.15;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s, background .2s;
+    }
+    input::placeholder { color: #999; }
+    input:focus {
+      border-color: var(--focus);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(43,144,255,0.15);
     }
 
-    .remember-container {
+    .row {
       display: flex;
       align-items: center;
-      justify-content: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 2px;
+    }
+
+    .remember {
+      display: inline-flex;
+      align-items: center;
       gap: 10px;
-      font-size: 14px;
-      margin-bottom: 25px;
+      color: #333;
+      font-size: 15px;
+    }
+    .remember input[type="checkbox"]{
+      width: 20px; height: 20px;
+      accent-color: var(--brand);
     }
 
-    .remember-container input[type="checkbox"] {
-      width: 18px;
-      height: 18px;
+    .action {
+      margin-top: 8px;
     }
-
-    .login-box button {
-      background-color: #F7BD02;
-      color: #000;
-      border: none;
-      padding: 14px;
+    button[type="submit"] {
       width: 100%;
-      font-weight: bold;
-      font-size: 16px;
-      border-radius: 8px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--brand);
+      color: #000;
+      padding: 16px;                   /* ✅ Botón grande para dedo */
+      font-weight: 800;
+      font-size: 18px;
+      letter-spacing: .2px;
       cursor: pointer;
-      transition: background-color 0.3s ease;
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease;
+      box-shadow: 0 8px 22px rgba(247,189,2,0.35);
+      touch-action: manipulation;
     }
-
-    .login-box button:hover {
-      background-color: #000;
-      color: #F7BD02;
+    button[type="submit"]:active {
+      transform: translateY(1px);
+      box-shadow: 0 6px 16px rgba(247,189,2,0.35);
+    }
+    button[type="submit"]:hover {
+      background: #000;
+      color: var(--brand);
+      box-shadow: 0 10px 26px rgba(0,0,0,0.25);
     }
 
     .footer {
-      margin-top: 20px;
+      margin-top: 16px;
       font-size: 13px;
-      color: #888;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* ✅ Evita “saltos” al abrir teclado en móviles */
+    @media (max-width: 480px){
+      .card { padding: 24px; }
+      h1 { font-size: 22px; }
     }
   </style>
 </head>
 <body>
-  <div class="login-container">
-    <div class="login-box">
-      <h1>Acceso al Panel</h1>
-      <form method="POST" action="/panel">
-        <input type="text" name="usuario" placeholder="Usuario" required autocomplete="username">
-        <input type="password" name="clave" placeholder="Contraseña" required autocomplete="current-password">
-        <div class="remember-container">
-          <input type="checkbox" name="remember" id="remember">
-          <label for="remember">Recuérdame</label>
+  <div class="login-wrap">
+    <div class="card" role="dialog" aria-labelledby="title" aria-describedby="subtitle">
+      <div class="brand">
+        <!-- Si tienes un favicon/logo, colócalo en /static/logo_in.png -->
+        <img src="/static/logo_in.png" alt="Logo In Houston Texas" onerror="this.style.display='none'">
+        <div class="brand-name">IN HOUSTON TEXAS</div>
+      </div>
+
+      <h1 id="title">Acceso al Panel</h1>
+      <div id="subtitle" class="subtitle">Ingresa tu usuario y contraseña para continuar</div>
+
+      <!-- ✅ Mensaje de error si Flask envía error=True -->
+      {% if error %}
+        <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
+      {% endif %}
+
+      <form class="form" method="POST" action="/panel" autocomplete="on" novalidate>
+        <div class="field">
+          <label for="usuario">Usuario</label>
+          <input
+            id="usuario"
+            type="text"
+            name="usuario"
+            placeholder="Escribe tu usuario"
+            required
+            inputmode="text"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            autocomplete="username" />
         </div>
-        <button type="submit">Entrar</button>
+
+        <div class="field">
+          <label for="clave">Contraseña</label>
+          <input
+            id="clave"
+            type="password"
+            name="clave"
+            placeholder="Escribe tu contraseña"
+            required
+            autocomplete="current-password" />
+        </div>
+
+        <div class="row">
+          <label class="remember">
+            <input type="checkbox" name="remember" id="remember" />
+            Recuérdame
+          </label>
+
+          <!-- Opcional: mostrar/ocultar contraseña -->
+          <button type="button" id="togglePwd" aria-controls="clave" aria-label="Mostrar u ocultar contraseña" style="background:#efefef;padding:10px 12px;border-radius:10px;border:1px solid #ddd;font-weight:600;cursor:pointer;">
+            Ver
+          </button>
+        </div>
+
+        <div class="action">
+          <button type="submit" id="submitBtn">Entrar</button>
+        </div>
       </form>
+
       <div class="footer">In Houston Texas - Sistema de Leads © 2025</div>
     </div>
   </div>
+
+  <script>
+    // ✅ Evita doble envío accidental en móvil
+    (function(){
+      const form = document.querySelector('form');
+      const submit = document.getElementById('submitBtn');
+      form.addEventListener('submit', function(){
+        submit.disabled = true;
+        submit.textContent = 'Ingresando…';
+        setTimeout(()=>{ submit.disabled = false; submit.textContent = 'Entrar'; }, 6000);
+      });
+
+      // ✅ Mostrar/ocultar contraseña
+      const toggle = document.getElementById('togglePwd');
+      const pwd = document.getElementById('clave');
+      toggle.addEventListener('click', function(){
+        const visible = pwd.type === 'text';
+        pwd.type = visible ? 'password' : 'text';
+        toggle.textContent = visible ? 'Ver' : 'Ocultar';
+      });
+
+      // ✅ Foco directo al usuario al abrir
+      const user = document.getElementById('usuario');
+      if (user) setTimeout(()=>user.focus(), 200);
+    })();
+  </script>
 </body>
 </html>
