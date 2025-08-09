@@ -13,17 +13,75 @@
       color: #000;
     }
 
+    /* ===== Header ===== */
     .header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
       background-color: #000;
       color: #F7BD02;
-      padding: 20px;
-      text-align: center;
-      font-size: 28px;
-      font-weight: bold;
+      padding: 16px 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.35);
     }
 
+    .header-inner{
+      display: flex;
+      align-items: center;
+      justify-content: center; /* centramos el título visualmente */
+      position: relative;      /* para anclar el botón a la derecha sin mover el título */
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header-title{
+      font-size: 28px;
+      font-weight: bold;
+      text-align: center;
+      margin: 0;
+      line-height: 1;
+      letter-spacing: .3px;
+      text-transform: uppercase;
+    }
+
+    .logout-wrap{
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .btn-logout{
+      appearance: none;
+      border: 1px solid #F7BD02;
+      background: #FFFFFF;
+      color: #000;
+      font-weight: 700;
+      padding: 10px 16px;
+      border-radius: 12px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 6px 12px rgba(0,0,0,.20);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      -webkit-tap-highlight-color: transparent;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+    .btn-logout:active{
+      transform: translateY(1px);
+      box-shadow: 0 3px 8px rgba(0,0,0,.20);
+    }
+    .btn-logout:hover{
+      background: #F7BD02;
+      color: #000;
+    }
+
+    /* ===== Contenido ===== */
     .container {
       padding: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
     }
 
     .selector {
@@ -95,15 +153,17 @@
     }
 
     @media screen and (max-width: 600px) {
-      .header {
-        font-size: 24px;
-        padding: 16px;
+      .header-title {
+        font-size: 22px;
       }
-
+      .btn-logout{
+        padding: 9px 14px;
+        font-size: 13px;
+        border-radius: 10px;
+      }
       .selector select {
         font-size: 16px;
       }
-
       .lead-card {
         font-size: 16px;
       }
@@ -111,7 +171,18 @@
   </style>
 </head>
 <body>
-  <div class="header">Panel de Conversaciones</div>
+  <!-- Header con título centrado y botón de cerrar sesión a la derecha -->
+  <header class="header">
+    <div class="header-inner">
+      <h1 class="header-title">Panel de Conversaciones</h1>
+      <div class="logout-wrap">
+        <a class="btn-logout" href="{{ url_for('logout') }}" title="Cerrar sesión" aria-label="Cerrar sesión">
+          <!-- pequeño ícono usando unicode -->
+          ⎋ Cerrar sesión
+        </a>
+      </div>
+    </div>
+  </header>
 
   <div class="container">
     <div class="selector">
@@ -129,7 +200,7 @@
     {% if leads %}
       {% for clave, lead in leads.items() %}
         <div class="lead-card">
-          <!-- Aquí está el cambio. Se usa la nueva ruta 'chat_general' -->
+          <!-- Se usa la ruta 'chat_general' (ya existente) -->
           <a href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">{{ lead.numero }}</a>
           <div class="lead-info">📩 {{ lead.last_message }}</div>
           <div class="lead-info">📅 {{ lead.last_seen }}</div>
