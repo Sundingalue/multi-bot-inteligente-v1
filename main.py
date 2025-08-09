@@ -72,6 +72,10 @@ def permitir_iframe(response):
 
 @app.route("/panel-bot/<bot_nombre>")
 def panel_exclusivo_bot(bot_nombre):
+    # 🔒 Protección de sesión
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+
     if not os.path.exists("leads.json"):
         return "No hay leads disponibles", 404
 
@@ -183,6 +187,10 @@ def whatsapp_bot():
 # Esta ruta maneja el chat para el panel general y renderiza 'chat.html'
 @app.route("/conversacion_general/<bot>/<numero>")
 def chat_general(bot, numero):
+    # 🔒 Protección de sesión
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+
     clave = f"{bot}|{numero}"
     if not os.path.exists("leads.json"):
         return "No hay historial disponible", 404
@@ -197,6 +205,10 @@ def chat_general(bot, numero):
 # Esta ruta maneja el chat para los bots individuales y renderiza 'chat_bot.html'
 @app.route("/conversacion_bot/<bot>/<numero>")
 def chat_bot(bot, numero):
+    # 🔒 Protección de sesión
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+
     clave = f"{bot}|{numero}"
     if not os.path.exists("leads.json"):
         return "No hay historial disponible", 404
