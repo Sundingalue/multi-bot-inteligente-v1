@@ -3,3 +3,5 @@ twilio
 openai>=1.12.0
 python-dotenv
 gunicorn
+firebase-admin==6.5.0
+google-auth==2.31.0
