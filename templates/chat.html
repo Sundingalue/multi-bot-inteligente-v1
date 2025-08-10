@@ -156,22 +156,35 @@
       // ===== Estado =====
       let lastTs = 0;
       let bootstrap = true;        // Primer tick: solo sincroniza, no agrega (evita duplicados)
-      const NEAR_PX = 120;         // Umbral de "estoy abajo"
+      const NEAR_PX = 200;         // Umbral de "estoy abajo" más laxo
       let userNearBottom = true;
 
       // ===== Utilidades de scroll =====
       function atBottom(){
-        const distance = chatEl.scrollHeight - chatEl.clientHeight - chatEl.scrollTop;
+        const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
         return distance <= NEAR_PX;
       }
+
       function scrollToBottom(smooth=true){
-        chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+        // Usa el último nodo visible; más fiable en Safari/iOS
+        const last = stackEl.lastElementChild;
+        if (!last) return;
+        // Espera al próximo frame para que el DOM haya calculado alturas
+        requestAnimationFrame(() => {
+          try{
+            last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
+          }catch(_){
+            // Fallback clásico
+            chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+          }
+        });
       }
+
       // Seguimos la posición del usuario
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
-      // Al abrir, baja para ver lo último ya renderizado por Jinja
-      scrollToBottom(false);
-      userNearBottom = true;
+
+      // Al abrir, baja para ver lo último ya renderizado por Jinja (con pequeño delay para layout)
+      setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
       // ===== API base =====
       const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
@@ -184,7 +197,6 @@
         div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
-        if (userNearBottom) scrollToBottom(true);
       }
 
       // ===== Ciclo =====
@@ -207,9 +219,15 @@
 
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
+
+            // Render en batch
             for (const m of data.mensajes){
               appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
+
+            // Scroll una sola vez si el usuario estaba cerca del fondo
+            if (userNearBottom) scrollToBottom(true);
+
             // Actualizamos lastTs
             if (typeof data.last_ts === 'number' && data.last_ts > lastTs){
               lastTs = data.last_ts;
@@ -226,6 +244,11 @@
       // Primer fetch inmediato (bootstrap), luego cada 3s
       tick();
       setInterval(tick, 3000);
+
+      // BONUS: al volver a la pestaña, reintenta un scroll por si el navegador pausó los scrolls suaves
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
+      });
     })();
   </script>
 </body>
