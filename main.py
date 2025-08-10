@@ -474,6 +474,52 @@ def api_chat(bot, numero):
     return jsonify({"mensajes": nuevos, "last_ts": last_ts})
 
 # =======================
+#  🔺 NUEVO: Borrar conversación (Firebase + leads.json)
+# =======================
+@app.route("/api/delete_chat", methods=["POST"])
+def api_delete_chat():
+    # ✅ Autenticación
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+
+    data = request.get_json(silent=True) or {}
+    bot_nombre = (data.get("bot") or "").strip()
+    numero = (data.get("numero") or "").strip()
+
+    # Validación básica
+    if not bot_nombre or not numero:
+        return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
+
+    # Normalización/permiso
+    bot_normalizado = _normalize_bot_name(bot_nombre)
+    if not bot_normalizado:
+        return jsonify({"error": "Bot no encontrado"}), 404
+    if not _user_can_access_bot(bot_normalizado):
+        return jsonify({"error": "No autorizado"}), 403
+
+    # 1) Borra en Firebase
+    try:
+        ref = _lead_ref(bot_normalizado, numero)
+        ref.delete()
+    except Exception as e:
+        print(f"⚠️ No se pudo eliminar en Firebase: {e}")
+
+    # 2) Borra en espejo local leads.json (si existe)
+    try:
+        if os.path.exists("leads.json"):
+            with open("leads.json", "r") as f:
+                leads = json.load(f)
+            clave = f"{bot_normalizado}|{numero}"
+            if clave in leads:
+                del leads[clave]
+                with open("leads.json", "w") as f:
+                    json.dump(leads, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ No se pudo actualizar leads.json: {e}")
+
+    return jsonify({"ok": True})
+
+# =======================
 #  Login / Logout / Panel principal
 # =======================
 @app.route("/login", methods=["GET"])
