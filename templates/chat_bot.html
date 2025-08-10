@@ -157,73 +157,93 @@
   </div>
 
   <script>
-    // Autoscroll inicial
-    (function(){
-      const el = document.getElementById('chat');
-      if (el) setTimeout(()=>{ el.scrollTop = el.scrollHeight; }, 60);
-    })();
-
-    // ===== Polling cada ~3s para mensajes nuevos (igual al chat general) =====
+    // ===== Polling cada ~3s para mensajes nuevos (sin duplicados + autoscroll inteligente) =====
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
       if (!chatEl || !stackEl) return;
 
-      // Utilidad: "YYYY-MM-DD HH:MM:SS" -> epoch ms
+      // Utilidad (se mantiene por compatibilidad)
       const toEpochMs = (horaStr) => {
         if (!horaStr) return 0;
         const iso = horaStr.replace(' ', 'T');
         const d = new Date(iso);
         const t = d.getTime();
         return isNaN(t) ? 0 : t;
-        // Nota: el backend ya devuelve ts (ms). Esto es para inicializar desde el HTML.
       };
 
-      // last_ts inicial desde el último mensaje renderizado
-      let lastTs = 0;
-      const lastHoraAttr = chatEl.getAttribute('data-last-hora');
-      if (lastHoraAttr) lastTs = toEpochMs(lastHoraAttr);
+      // ===== Estado =====
+      let lastTs = 0;           // arrancamos en 0 y sincronizamos en bootstrap
+      let bootstrap = true;     // primer tick: solo sincroniza, no agrega (evita duplicados)
+      const NEAR_PX = 120;      // umbral para considerar "estoy abajo"
+      let userNearBottom = true;
 
-      // Construir URL de API
+      // ===== Autoscroll inteligente =====
+      function atBottom(){
+        const distance = chatEl.scrollHeight - chatEl.clientHeight - chatEl.scrollTop;
+        return distance <= NEAR_PX;
+      }
+      function scrollToBottom(smooth=true){
+        chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+      }
+      // Seguir posición del usuario
+      chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
+      // Al abrir, baja para mostrar lo último renderizado
+      scrollToBottom(false);
+      userNearBottom = true;
+
+      // ===== API =====
       const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
       const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
       const apiBase = `/api/chat/${bot}/${numero}`;
 
-      const appendMessage = (tipo, texto) => {
+      // ===== Render =====
+      function appendMessage(tipo, texto){
         const div = document.createElement('div');
         div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
-        // autoscroll
-        chatEl.scrollTop = chatEl.scrollHeight;
-      };
+        if (userNearBottom) scrollToBottom(true);
+      }
 
-      const tick = async () => {
-        try {
-          const url = `${apiBase}?since=${lastTs}`;
-          const res = await fetch(url, { credentials: 'same-origin' });
-          if (!res.ok) return; // 401/403/404: no romper UI
+      // ===== Ciclo =====
+      async function tick(){
+        try{
+          const res = await fetch(`${apiBase}?since=${lastTs}`, { credentials: 'same-origin' });
+          if(!res.ok) return;
           const data = await res.json();
-          if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0) {
-            // Ordenar por ts ascendente y renderizar
+
+          if (bootstrap){
+            // Solo sincroniza el puntero sin pintar (evita duplicados del historial renderizado por Jinja)
+            let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
+            if (Array.isArray(data.mensajes) && data.mensajes.length){
+              maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), maxTs);
+            }
+            if (maxTs > lastTs) lastTs = maxTs;
+            bootstrap = false;
+            return;
+          }
+
+          if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
-            for (const m of data.mensajes) {
+            for (const m of data.mensajes){
               appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
-            // Actualizar lastTs
-            if (typeof data.last_ts === 'number' && data.last_ts > (lastTs||0)) {
+            // Actualiza lastTs
+            if (typeof data.last_ts === 'number' && data.last_ts > lastTs){
               lastTs = data.last_ts;
             } else {
-              const maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), lastTs);
-              if (maxTs > lastTs) lastTs = maxTs;
+              const maxTs2 = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), lastTs);
+              if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        } catch (e) {
-          // Silencioso para no molestar al usuario
+        }catch(e){
+          // Silencioso: no romper UI
         }
-      };
+      }
 
-      // Intervalo: 3s
+      // Intervalo: primer tick inmediato (bootstrap), luego cada 3s
+      tick();
       setInterval(tick, 3000);
     })();
   </script>
