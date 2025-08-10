@@ -12,14 +12,25 @@ from io import StringIO
 from twilio.twiml.voice_response import VoiceResponse
 import requests
 
+# 🔹 Firebase
+import firebase_admin
+from firebase_admin import credentials, db
+
 # Cargar variables de entorno
 load_dotenv("/etc/secrets/.env")
 
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 app = Flask(__name__)
-# Sugerencia: Mover esta clave a una variable de entorno para mayor seguridad.
 app.secret_key = "supersecreto_sundin_panel_2025"
+
+# 🔹 Inicializar Firebase
+firebase_key_path = "/etc/secrets/firebase.json"
+if not firebase_admin._apps:
+    cred = credentials.Certificate(firebase_key_path)
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://inhouston-209c0-default-rtdb.firebaseio.com/'
+    })
 
 with open("bots_config.json", "r") as f:
     bots_config = json.load(f)
@@ -32,31 +43,16 @@ follow_up_flags = {}
 #  Gestión de usuarios
 # =======================
 def _load_users():
-    """
-    Orden de lectura de credenciales (el primero que tenga datos válidos gana):
-    1) Tripletas USER_*/PASS_*/PANEL_* desde variables de entorno (Render).
-       - PANEL = "panel"            => admin ("*")
-       - PANEL = "panel-bot/<Bot>"  => acceso solo a ese bot
-    2) PANEL_USERS_JSON (si existe), mismo formato anterior de {"user": {"password": "...", "bots": [...]}}
-    3) Fallback admin por compatibilidad: sundin / inhouston2025 con acceso total.
-    """
-    # 1) Buscar tripletas USER_*/PASS_*/PANEL_*
     env_users = {}
     for key, val in os.environ.items():
         if not key.startswith("USER_"):
             continue
-        alias = key[len("USER_"):]  # ejemplo: SUNDIN, ABOGADO, CAMILA
+        alias = key[len("USER_"):]
         username = val.strip()
         password = os.environ.get(f"PASS_{alias}", "").strip()
         panel = os.environ.get(f"PANEL_{alias}", "").strip()
-
         if not username or not password or not panel:
-            # Tripleta incompleta: la ignoramos
             continue
-
-        # Traducimos PANEL_* a lista de bots
-        # panel  -> admin (*)
-        # panel-bot/<NombreBot> -> [NombreBot]
         bots_list = []
         if panel.lower() == "panel":
             bots_list = ["*"]
@@ -64,16 +60,12 @@ def _load_users():
             bot_name = panel.split("/", 1)[1].strip()
             if bot_name:
                 bots_list = [bot_name]
-
         if bots_list:
             env_users[username] = {"password": password, "bots": bots_list}
-
     if env_users:
         return env_users
-
-    # 2) Soporte del JSON anterior (compatibilidad)
     default_users = {
-        "sundin": {"password": "inhouston2025", "bots": ["*"]}  # fallback para no romper el flujo actual
+        "sundin": {"password": "inhouston2025", "bots": ["*"]}
     }
     raw = os.getenv("PANEL_USERS_JSON")
     if not raw:
@@ -119,17 +111,12 @@ def _user_can_access_bot(bot_name):
     return bot_name in bots
 
 def _normalize_bot_name(name: str):
-    """Devuelve el nombre oficial del bot según bots_config (o None si no existe)."""
     for config in bots_config.values():
         if config["name"].lower() == name.lower():
             return config["name"]
     return None
 
 def _hora_to_epoch_ms(hora_str: str) -> int:
-    """
-    Convierte 'YYYY-MM-DD HH:MM:SS' a epoch (ms).
-    Si falla, devuelve 0 para no romper la lógica.
-    """
     try:
         dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
         return int(dt.timestamp() * 1000)
@@ -141,17 +128,15 @@ def _hora_to_epoch_ms(hora_str: str) -> int:
 # =======================
 def guardar_lead(bot_nombre, numero, mensaje):
     try:
+        # 🔹 Guardar en leads.json como antes
         archivo = "leads.json"
         if not os.path.exists(archivo):
             with open(archivo, "w") as f:
                 json.dump({}, f, indent=4)
-
         with open(archivo, "r") as f:
             leads = json.load(f)
-
         ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         clave = f"{bot_nombre}|{numero}"
-
         if clave not in leads:
             leads[clave] = {
                 "bot": bot_nombre,
@@ -169,9 +154,12 @@ def guardar_lead(bot_nombre, numero, mensaje):
             leads[clave]["last_message"] = mensaje
             leads[clave]["last_seen"] = ahora
             leads[clave]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
-
         with open(archivo, "w") as f:
             json.dump(leads, f, indent=4)
+
+        # 🔹 Guardar en Firebase Realtime Database
+        ref = db.reference(f"leads/{bot_nombre}/{numero}")
+        ref.set(leads[clave])
 
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
