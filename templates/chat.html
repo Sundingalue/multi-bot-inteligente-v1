@@ -153,17 +153,13 @@
       const stackEl = document.getElementById('stack');
       if (!chatEl || !stackEl) return;
 
-      // 🔑 Mantener la lógica existente (polling y render)
+      // ===== Estado =====
       let lastTs = 0;
-
-      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
-      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
-      const apiBase = `/api/chat/${bot}/${numero}`;
-
-      // ====== NUEVO: autoscroll inteligente (como WhatsApp) ======
-      const NEAR_PX = 120; // umbral para considerar que estás "abajo"
+      let bootstrap = true;        // Primer tick: solo sincroniza, no agrega (evita duplicados)
+      const NEAR_PX = 120;         // Umbral de "estoy abajo"
       let userNearBottom = true;
 
+      // ===== Utilidades de scroll =====
       function atBottom(){
         const distance = chatEl.scrollHeight - chatEl.clientHeight - chatEl.scrollTop;
         return distance <= NEAR_PX;
@@ -171,47 +167,63 @@
       function scrollToBottom(smooth=true){
         chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
       }
-      // trackear si el usuario se aleja del fondo
+      // Seguimos la posición del usuario
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
-      // al abrir, baja al final para mostrar lo último ya renderizado
+      // Al abrir, baja para ver lo último ya renderizado por Jinja
       scrollToBottom(false);
-      // ===========================================================
+      userNearBottom = true;
 
+      // ===== API base =====
+      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
+      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
+      const apiBase = `/api/chat/${bot}/${numero}`;
+
+      // ===== Render =====
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
         div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
-        // ====== CAMBIO: solo bajamos si el usuario está cerca del fondo ======
         if (userNearBottom) scrollToBottom(true);
       }
 
+      // ===== Ciclo =====
       async function tick(){
         try{
           const res = await fetch(`${apiBase}?since=${lastTs}`, { credentials: 'same-origin' });
           if(!res.ok) return;
           const data = await res.json();
 
-          if(data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
+          if (bootstrap){
+            // No agregamos historial ya renderizado → solo sincronizamos lastTs
+            let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
+            if (Array.isArray(data.mensajes) && data.mensajes.length){
+              maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), maxTs);
+            }
+            if (maxTs > lastTs) lastTs = maxTs;
+            bootstrap = false;
+            return;
+          }
+
+          if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
-            for(const m of data.mensajes){
+            for (const m of data.mensajes){
               appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
-            // Actualizamos lastTs con lo que reporte el backend
-            if(typeof data.last_ts === 'number' && data.last_ts > lastTs){
+            // Actualizamos lastTs
+            if (typeof data.last_ts === 'number' && data.last_ts > lastTs){
               lastTs = data.last_ts;
-            }else{
-              // Fallback: máximo ts recibido
-              const maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), lastTs);
-              if(maxTs > lastTs) lastTs = maxTs;
+            } else {
+              const maxTs2 = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), lastTs);
+              if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
         }catch(e){
-          // silencio, no interrumpir UI
+          // Silenciar errores de red
         }
       }
 
-      // Primer fetch inmediato para poblar, luego cada 3s
+      // Primer fetch inmediato (bootstrap), luego cada 3s
       tick();
       setInterval(tick, 3000);
     })();
