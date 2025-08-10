@@ -161,6 +161,23 @@
       margin-top: 8px;
     }
 
+    /* Botón borrar conversación */
+    .btn-delete{
+      margin-top: 10px;
+      font-size: 14px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1.5px solid #b00020;
+      background-color: #fff;
+      color: #b00020;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+    }
+    .btn-delete:hover{ background:#ffe8ec; }
+    .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
     /* En pantallas anchas, alineamos controles a los lados */
     @media (min-width: 720px){
       .controls{
@@ -194,7 +211,7 @@
 
     {% if leads %}
       {% for clave, lead in leads.items() %}
-        <div class="lead-card">
+        <div class="lead-card" data-key="{{ lead.bot }}|{{ lead.numero }}">
           <!-- Se mantiene la ruta a chat_general -->
           <a href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">{{ lead.numero }}</a>
           <div class="lead-info">📩 {{ lead.last_message }}</div>
@@ -207,6 +224,9 @@
               <option value="cerrado" {% if lead.status == 'cerrado' %}selected{% endif %}>Cerrado</option>
             </select>
           </div>
+
+          <!-- 🗑️ Botón Borrar conversación -->
+          <button class="btn-delete" onclick="borrarConversacion('{{ lead.bot }}','{{ lead.numero }}')">🗑️ Borrar conversación</button>
         </div>
       {% endfor %}
     {% else %}
@@ -234,6 +254,49 @@
       .then(r => r.json())
       .then(d => console.log("✅ Estado actualizado:", d))
       .catch(e => console.error("❌ Error actualizando estado:", e));
+    }
+
+    async function borrarConversacion(bot, numero){
+      const msg = `¿Seguro que quieres borrar TODO el chat de:\n\nBot: ${bot}\nNúmero: ${numero}\n\nEsta acción no se puede deshacer.`;
+      if(!confirm(msg)) return;
+
+      try{
+        const res = await fetch('/api/delete_chat', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ bot, numero })
+        });
+        if(!res.ok){
+          const t = await res.text();
+          alert('No se pudo borrar: ' + t);
+          return;
+        }
+        const out = await res.json();
+        if(out && out.ok){
+          // Quitar la card del DOM
+          const key = `${bot}|${numero}`;
+          const selector = `.lead-card[data-key="${CSS.escape(key)}"]`;
+          const card = document.querySelector(selector);
+          if(card){ card.remove(); }
+
+          // Si ya no hay cards, muestra el aviso "no-leads"
+          if(document.querySelectorAll('.lead-card').length === 0){
+            const cont = document.querySelector('.container');
+            const noLeads = document.createElement('div');
+            noLeads.className = 'no-leads';
+            const filtro = document.getElementById('bot')?.value || '';
+            noLeads.innerHTML = filtro
+              ? `No hay conversaciones para la compañía <strong>${filtro}</strong>.`
+              : 'No hay leads disponibles todavía.';
+            cont.appendChild(noLeads);
+          }
+        }else{
+          alert('No se pudo borrar (respuesta inesperada).');
+        }
+      }catch(e){
+        console.error(e);
+        alert('Error de red al borrar la conversación.');
+      }
     }
   </script>
 </body>
