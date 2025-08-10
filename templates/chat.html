@@ -153,20 +153,37 @@
       const stackEl = document.getElementById('stack');
       if (!chatEl || !stackEl) return;
 
-      // 🔑 FIX: iniciamos en 0 para traer historial completo en el primer fetch
+      // 🔑 Mantener la lógica existente (polling y render)
       let lastTs = 0;
 
       const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
       const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
       const apiBase = `/api/chat/${bot}/${numero}`;
 
+      // ====== NUEVO: autoscroll inteligente (como WhatsApp) ======
+      const NEAR_PX = 120; // umbral para considerar que estás "abajo"
+      let userNearBottom = true;
+
+      function atBottom(){
+        const distance = chatEl.scrollHeight - chatEl.clientHeight - chatEl.scrollTop;
+        return distance <= NEAR_PX;
+      }
+      function scrollToBottom(smooth=true){
+        chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+      }
+      // trackear si el usuario se aleja del fondo
+      chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
+      // al abrir, baja al final para mostrar lo último ya renderizado
+      scrollToBottom(false);
+      // ===========================================================
+
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
         div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
-        // autoscroll
-        chatEl.scrollTop = chatEl.scrollHeight;
+        // ====== CAMBIO: solo bajamos si el usuario está cerca del fondo ======
+        if (userNearBottom) scrollToBottom(true);
       }
 
       async function tick(){
