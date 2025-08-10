@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, session, redirect, url_for, send_file, jsonify, render_template
+from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -16,22 +16,31 @@ import requests
 import firebase_admin
 from firebase_admin import credentials, db
 
-# Cargar variables de entorno
+# =======================
+#  Cargar variables de entorno (Render -> Secret File)
+# =======================
 load_dotenv("/etc/secrets/.env")
 
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
 
-# 🔹 Inicializar Firebase
-firebase_key_path = "/etc/secrets/firebase.json"
+# =======================
+#  Inicializar Firebase
+# =======================
+firebase_key_path = "/etc/secrets/firebase.json"  # <- subiste este archivo en Render (Secret Files)
+firebase_db_url = os.getenv("FIREBASE_DB_URL", "https://inhouston-209c0-default-rtdb.firebaseio.com/")
+
 if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_key_path)
-    firebase_admin.initialize_app(cred, {
-        'databaseURL': 'https://inhouston-209c0-default-rtdb.firebaseio.com/'
-    })
+    firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
 
+# =======================
+#  Configuración de bots
+# =======================
 with open("bots_config.json", "r") as f:
     bots_config = json.load(f)
 
@@ -40,9 +49,35 @@ last_message_time = {}
 follow_up_flags = {}
 
 # =======================
-#  Gestión de usuarios
+#  Helpers generales
+# =======================
+def _hora_to_epoch_ms(hora_str: str) -> int:
+    """Convierte 'YYYY-MM-DD HH:MM:SS' a epoch ms (0 si falla)."""
+    try:
+        dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return 0
+
+def _normalize_bot_name(name: str):
+    """Devuelve el nombre oficial del bot según bots_config (o None si no existe)."""
+    for config in bots_config.values():
+        if config["name"].lower() == name.lower():
+            return config["name"]
+    return None
+
+# =======================
+#  Gestión de usuarios (login)
 # =======================
 def _load_users():
+    """
+    Orden de lectura de credenciales:
+    1) Tripletas USER_*/PASS_*/PANEL_* desde variables de entorno.
+       - PANEL = "panel"            => admin ("*")
+       - PANEL = "panel-bot/<Bot>"  => acceso solo a ese bot
+    2) PANEL_USERS_JSON (si existe)
+    3) Fallback admin: sundin / inhouston2025 con acceso total.
+    """
     env_users = {}
     for key, val in os.environ.items():
         if not key.startswith("USER_"):
@@ -53,20 +88,23 @@ def _load_users():
         panel = os.environ.get(f"PANEL_{alias}", "").strip()
         if not username or not password or not panel:
             continue
-        bots_list = []
+
         if panel.lower() == "panel":
             bots_list = ["*"]
         elif panel.lower().startswith("panel-bot/"):
             bot_name = panel.split("/", 1)[1].strip()
-            if bot_name:
-                bots_list = [bot_name]
+            bots_list = [bot_name] if bot_name else []
+        else:
+            bots_list = []
+
         if bots_list:
             env_users[username] = {"password": password, "bots": bots_list}
+
     if env_users:
         return env_users
-    default_users = {
-        "sundin": {"password": "inhouston2025", "bots": ["*"]}
-    }
+
+    # Compatibilidad JSON anterior
+    default_users = {"sundin": {"password": "inhouston2025", "bots": ["*"]}}
     raw = os.getenv("PANEL_USERS_JSON")
     if not raw:
         return default_users
@@ -110,32 +148,75 @@ def _user_can_access_bot(bot_name):
     bots = session.get("bots_permitidos", [])
     return bot_name in bots
 
-def _normalize_bot_name(name: str):
-    for config in bots_config.values():
-        if config["name"].lower() == name.lower():
-            return config["name"]
-    return None
+# =======================
+#  Firebase: helpers de leads
+# =======================
+def _lead_ref(bot_nombre, numero):
+    return db.reference(f"leads/{bot_nombre}/{numero}")
 
-def _hora_to_epoch_ms(hora_str: str) -> int:
-    try:
-        dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
-        return int(dt.timestamp() * 1000)
-    except Exception:
-        return 0
+def fb_get_lead(bot_nombre, numero):
+    ref = _lead_ref(bot_nombre, numero)
+    data = ref.get()
+    return data or {}
+
+def fb_append_historial(bot_nombre, numero, entrada):
+    """
+    Añade una entrada al historial y actualiza metadatos:
+    entrada = {"tipo":"user"|"bot", "texto":"...", "hora":"YYYY-MM-DD HH:MM:SS"}
+    """
+    ref = _lead_ref(bot_nombre, numero)
+    lead = ref.get() or {}
+    historial = lead.get("historial", [])
+
+    # Normalizamos si por alguna razón es dict (clave -> item)
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+
+    historial.append(entrada)
+
+    lead["historial"] = historial
+    lead["last_message"] = entrada.get("texto", "")
+    lead["last_seen"] = entrada.get("hora", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    lead["messages"] = int(lead.get("messages", 0)) + 1
+    ref.set(lead)
 
 # =======================
-#   Leads y WhatsApp
+#  Leads y WhatsApp
 # =======================
 def guardar_lead(bot_nombre, numero, mensaje):
+    """
+    Guarda el mensaje del usuario en Firebase (fuente de verdad) y, como espejo de compatibilidad, en leads.json
+    """
     try:
-        # 🔹 Guardar en leads.json como antes
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 1) Firebase
+        lead = fb_get_lead(bot_nombre, numero)
+        if not lead:
+            lead = {
+                "bot": bot_nombre,
+                "numero": numero,
+                "first_seen": ahora,
+                "last_message": mensaje,
+                "last_seen": ahora,
+                "messages": 0,
+                "status": "nuevo",
+                "notes": "",
+                "historial": []
+            }
+            _lead_ref(bot_nombre, numero).set(lead)
+
+        fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
+
+        # 2) Espejo local (opcional) para export/compatibilidad
         archivo = "leads.json"
         if not os.path.exists(archivo):
             with open(archivo, "w") as f:
                 json.dump({}, f, indent=4)
+
         with open(archivo, "r") as f:
             leads = json.load(f)
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         clave = f"{bot_nombre}|{numero}"
         if clave not in leads:
             leads[clave] = {
@@ -154,12 +235,9 @@ def guardar_lead(bot_nombre, numero, mensaje):
             leads[clave]["last_message"] = mensaje
             leads[clave]["last_seen"] = ahora
             leads[clave]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
+
         with open(archivo, "w") as f:
             json.dump(leads, f, indent=4)
-
-        # 🔹 Guardar en Firebase Realtime Database
-        ref = db.reference(f"leads/{bot_nombre}/{numero}")
-        ref.set(leads[clave])
 
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
@@ -169,30 +247,28 @@ def permitir_iframe(response):
     response.headers["X-Frame-Options"] = "ALLOWALL"
     return response
 
+# =======================
+#  Rutas UI: Paneles
+# =======================
 @app.route("/panel-bot/<bot_nombre>")
 def panel_exclusivo_bot(bot_nombre):
-    # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-    # 🔒 Permisos por bot
-    # Normalizar bot_nombre contra bots_config para chequear permisos por nombre oficial
+
     bot_normalizado = _normalize_bot_name(bot_nombre)
     if not bot_normalizado:
         return f"Bot '{bot_nombre}' no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
 
+    # Para el panel listamos usando el espejo local (simple y suficiente)
     if not os.path.exists("leads.json"):
-        return "No hay leads disponibles", 404
+        return render_template("panel_bot.html", leads={}, bot=bot_normalizado, nombre_comercial=bot_normalizado)
 
     with open("leads.json", "r") as f:
         leads = json.load(f)
 
-    leads_filtrados = {
-        clave: datos
-        for clave, datos in leads.items()
-        if datos.get("bot") == bot_normalizado
-    }
+    leads_filtrados = {clave: datos for clave, datos in leads.items() if datos.get("bot") == bot_normalizado}
 
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
@@ -200,15 +276,15 @@ def panel_exclusivo_bot(bot_nombre):
          if config["name"] == bot_normalizado),
         bot_normalizado
     )
-
-    # Importante: El enlace a la conversación ahora debe usar 'conversacion_bot'
-    # Esta plantilla debe contener un enlace a la ruta 'conversacion_bot'
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
 
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Bot inteligente activo en Render."
 
+# =======================
+#  Webhook WhatsApp
+# =======================
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
     VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_WHATSAPP")
@@ -265,13 +341,39 @@ def whatsapp_bot():
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
-        with open("leads.json", "r") as f:
-            leads = json.load(f)
-        clave = f"{bot['name']}|{sender_number}"
-        if clave in leads:
-            leads[clave]["historial"].append({"tipo": "bot", "texto": respuesta, "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        # 🔹 Guardar respuesta del bot también en Firebase y espejo local
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+
+            # espejo local
+            if os.path.exists("leads.json"):
+                with open("leads.json", "r") as f:
+                    leads = json.load(f)
+            else:
+                leads = {}
+            clave = f"{bot['name']}|{sender_number}"
+            if clave not in leads:
+                leads[clave] = {
+                    "bot": bot["name"],
+                    "numero": sender_number,
+                    "first_seen": ahora_bot,
+                    "last_message": respuesta,
+                    "last_seen": ahora_bot,
+                    "messages": 1,
+                    "status": "nuevo",
+                    "notes": "",
+                    "historial": [{"tipo": "bot", "texto": respuesta, "hora": ahora_bot}]
+                }
+            else:
+                leads[clave]["messages"] = int(leads[clave].get("messages", 0)) + 1
+                leads[clave]["last_message"] = respuesta
+                leads[clave]["last_seen"] = ahora_bot
+                leads[clave]["historial"].append({"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
             with open("leads.json", "w") as f:
                 json.dump(leads, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
 
     except Exception as e:
         print(f"❌ Error con GPT: {e}")
@@ -279,61 +381,50 @@ def whatsapp_bot():
 
     return str(response)
 
-# ----- Rutas de chat actualizadas -----
-# Esta ruta maneja el chat para el panel general y renderiza 'chat.html'
+# =======================
+#  Vistas de conversación (leen Firebase)
+# =======================
 @app.route("/conversacion_general/<bot>/<numero>")
 def chat_general(bot, numero):
-    # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-    # 🔒 Permisos por bot (el parámetro 'bot' debe estar permitido)
-    # Normalizamos para comparar contra bots_config (nombres oficiales)
+
     bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
 
-    clave = f"{bot_normalizado}|{numero}"
-    if not os.path.exists("leads.json"):
-        return "No hay historial disponible", 404
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-    historial = leads.get(clave, {}).get("historial", [])
-    mensajes = []
-    for registro in historial:
-        mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto",""), "hora": r.get("hora",""), "tipo": r.get("tipo","user")} for r in historial]
     return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
 
-# Esta ruta maneja el chat para los bots individuales y renderiza 'chat_bot.html'
 @app.route("/conversacion_bot/<bot>/<numero>")
 def chat_bot(bot, numero):
-    # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-    # 🔒 Permisos por bot
+
     bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
 
-    clave = f"{bot_normalizado}|{numero}"
-    if not os.path.exists("leads.json"):
-        return "No hay historial disponible", 404
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-    historial = leads.get(clave, {}).get("historial", [])
-    mensajes = []
-    for registro in historial:
-        mensajes.append({"texto": registro.get("texto", ""), "hora": registro.get("hora", ""), "tipo": registro.get("tipo", "user")})
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto",""), "hora": r.get("hora",""), "tipo": r.get("tipo","user")} for r in historial]
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
-# ----- Fin de las rutas de chat actualizadas -----
 
-# ✅ API de polling en tiempo (casi) real
+# =======================
+#  API de polling (ahora lee Firebase)
+# =======================
 @app.route("/api/chat/<bot>/<numero>", methods=["GET"])
 def api_chat(bot, numero):
-    # 🔒 Protección de sesión
     if not session.get("autenticado"):
         return jsonify({"error": "No autenticado"}), 401
 
@@ -343,21 +434,17 @@ def api_chat(bot, numero):
     if not _user_can_access_bot(bot_normalizado):
         return jsonify({"error": "No autorizado"}), 403
 
-    archivo = "leads.json"
-    if not os.path.exists(archivo):
-        return jsonify({"mensajes": [], "last_ts": 0})
-
     since_param = request.args.get("since", "").strip()
     try:
         since_ms = int(since_param) if since_param else 0
     except ValueError:
         since_ms = 0
 
-    clave = f"{bot_normalizado}|{numero}"
-    with open(archivo, "r") as f:
-        leads = json.load(f)
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
 
-    historial = leads.get(clave, {}).get("historial", [])
     nuevos = []
     last_ts = since_ms
     for reg in historial:
@@ -372,121 +459,112 @@ def api_chat(bot, numero):
         if ts > last_ts:
             last_ts = ts
 
-    # Si no hay since, devolvemos todo el historial
     if since_ms == 0 and not nuevos and historial:
         for reg in historial:
             ts = _hora_to_epoch_ms(reg.get("hora", ""))
             if ts > last_ts:
                 last_ts = ts
-        nuevos = [
-            {
-                "texto": reg.get("texto", ""),
-                "hora": reg.get("hora", ""),
-                "tipo": reg.get("tipo", "user"),
-                "ts": _hora_to_epoch_ms(reg.get("hora", ""))
-            }
-            for reg in historial
-        ]
+        nuevos = [{
+            "texto": reg.get("texto", ""),
+            "hora": reg.get("hora", ""),
+            "tipo": reg.get("tipo", "user"),
+            "ts": _hora_to_epoch_ms(reg.get("hora", ""))
+        } for reg in historial]
 
     return jsonify({"mensajes": nuevos, "last_ts": last_ts})
 
-# ✅ Rutas para que /login y /login.html funcionen y lleven al login del panel
+# =======================
+#  Login / Logout / Panel principal
+# =======================
 @app.route("/login", methods=["GET"])
 def login_redirect():
-    # Redirige a /panel, que ya muestra login.html si no hay sesión
     return redirect(url_for("panel"))
 
 @app.route("/login.html", methods=["GET"])
 def login_html_redirect():
-    # Mantiene tu URL pública y te lleva al mismo flujo de /panel
     return redirect(url_for("panel"))
 
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
-    # 1) Si no hay sesión, manejar login
     if not session.get("autenticado"):
         if request.method == "POST":
             usuario = request.form.get("usuario", "").strip()
             clave = request.form.get("clave", "").strip()
             auth = _auth_user(usuario, clave)
             if auth:
-                # Guardar sesión
                 session["autenticado"] = True
                 session["usuario"] = auth["username"]
                 session["bots_permitidos"] = auth["bots"]
-                # Redirección según rol
                 if "*" in auth["bots"]:
-                    return redirect(url_for("panel"))  # Admin → Panel general
-                # Cliente → primer bot permitido
+                    return redirect(url_for("panel"))
                 destino = _first_allowed_bot()
                 if destino:
                     return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
-                # Si por alguna razón no hay bot, igual al panel (no debería pasar)
                 return redirect(url_for("panel"))
-
-            # Falla de login
             return render_template("login.html", error=True)
-        # GET sin sesión → mostrar login
         return render_template("login.html")
 
-    # 2) Si hay sesión: si NO es admin, redirigir al panel exclusivo
     if not _is_admin():
         destino = _first_allowed_bot()
         if destino:
             return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
 
-    # 3) Admin: construir panel general como siempre
     leads_por_bot = {}
     bots_disponibles = {}
-
     leads = {}
     if os.path.exists("leads.json"):
         with open("leads.json", "r") as f:
             leads = json.load(f)
         for clave, data in leads.items():
-            bot = data.get("bot", "Desconocido")
-            if bot not in leads_por_bot:
-                leads_por_bot[bot] = {}
-            leads_por_bot[bot][clave] = data
+            bot_name = data.get("bot", "Desconocido")
+            if bot_name not in leads_por_bot:
+                leads_por_bot[bot_name] = {}
+            leads_por_bot[bot_name][clave] = data
 
             for config in bots_config.values():
-                if config["name"] == bot:
-                    bots_disponibles[bot] = config.get("business_name", bot)
+                if config["name"] == bot_name:
+                    bots_disponibles[bot_name] = config.get("business_name", bot_name)
                     break
 
     bot_seleccionado = request.args.get("bot")
-    # Para admin, se mantiene la lógica previa; si quisieras filtrar aquí, se puede más adelante
     leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
-
-    # Importante: El enlace a la conversación ahora debe usar 'conversacion_general'
-    # Esta plantilla debe contener un enlace a la ruta 'conversacion_general'
     return render_template("panel.html", leads=leads_filtrados, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
 
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("panel"))
 
+# =======================
+#  Guardar/Exportar/Instagram
+# =======================
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
     data = request.json
-    numero = data.get("numero")
+    numero_key = data.get("numero")  # viene como "<bot>|<numero>"
     estado = data.get("estado")
     nota = data.get("nota")
 
     with open("leads.json", "r") as f:
         leads = json.load(f)
 
-    if numero in leads:
-        leads[numero]["status"] = estado
-        leads[numero]["notes"] = nota
+    if numero_key in leads:
+        leads[numero_key]["status"] = estado
+        leads[numero_key]["notes"] = nota
+
+        # También reflejamos en Firebase
+        try:
+            bot_nombre = leads[numero_key]["bot"]
+            numero = leads[numero_key]["numero"]
+            ref = _lead_ref(bot_nombre, numero)
+            ref.update({"status": estado, "notes": nota})
+        except Exception as e:
+            print(f"⚠️ No se pudo actualizar en Firebase: {e}")
 
         with open("leads.json", "w") as f:
             json.dump(leads, f, indent=4)
 
     return jsonify({"mensaje": "Lead actualizado"})
-
-# 🔁 AHORA ACEPTA GET y POST PARA PODER USAR UN ENLACE SIMPLE
-@app.route("/logout", methods=["GET", "POST"])
-def logout():
-    session.clear()
-    return redirect(url_for("panel"))
 
 @app.route("/exportar")
 def exportar():
@@ -531,7 +609,7 @@ def verify_instagram():
 @app.route("/webhook_instagram", methods=["POST"])
 def recibir_instagram():
     data = request.json
-    print("\ud83d\udce5 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
+    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
     try:
         for entry in data.get("entry", []):
             for messaging_event in entry.get("messaging", []):
@@ -543,7 +621,7 @@ def recibir_instagram():
                     enviar_respuesta_instagram(sender_id)
         return "EVENT_RECEIVED", 200
     except Exception as e:
-        print(f"\u274c Error procesando mensaje de Instagram: {e}")
+        print(f"❌ Error procesando mensaje de Instagram: {e}")
         return "Error", 500
 
 def enviar_respuesta_instagram(psid):
@@ -555,13 +633,14 @@ def enviar_respuesta_instagram(psid):
     payload = {
         "messaging_type": "RESPONSE",
         "recipient": {"id": psid},
-        "message": {
-            "text": "\u00a1Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"
-        }
+        "message": {"text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"}
     }
     r = requests.post(url, headers=headers, json=payload)
-    print("\ud83d\udce4 Respuesta enviada a Instagram:", r.status_code, r.text)
+    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
 
+# =======================
+#  Follow-up y Twilio
+# =======================
 def follow_up_task(clave_sesion, bot_number):
     time.sleep(300)
     if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 300 and not follow_up_flags[clave_sesion]["5min"]:
@@ -580,6 +659,9 @@ def send_whatsapp_message(to_number, message, bot_number=None):
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
 
+# =======================
+#  Run
+# =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
