@@ -6,7 +6,7 @@ import os
 import json
 import time
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timedelta
 import csv
 from io import StringIO
 from twilio.twiml.voice_response import VoiceResponse
@@ -24,17 +24,13 @@ from firebase_admin import credentials, db
 load_dotenv("/etc/secrets/.env")
 load_dotenv()
 
-
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # 🔊 Config de voz
-#   - Proveedor: OpenAI TTS (natural, estilo ChatGPT)
-#   - Voz femenina por defecto: "verse" (puedes cambiar con env OPENAI_TTS_VOICE)
-#   - Español con acento EE.UU.: mandamos el texto en español pero con marcas de lugar en inglés
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "verse")  # femenino/neutral
-VOICE_LANG = os.getenv("VOICE_LANG", "es-US")  # usado por STT de Twilio (input="speech")
+OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "verse")
+VOICE_LANG = os.getenv("VOICE_LANG", "es-US")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
@@ -43,7 +39,7 @@ app.secret_key = "supersecreto_sundin_panel_2025"
 # =======================
 #  Inicializar Firebase
 # =======================
-firebase_key_path = "/etc/secrets/firebase.json"  # <- subiste este archivo en Render (Secret Files)
+firebase_key_path = "/etc/secrets/firebase.json"
 firebase_db_url = os.getenv("FIREBASE_DB_URL", "https://inhouston-209c0-default-rtdb.firebaseio.com/")
 
 if not firebase_admin._apps:
@@ -59,15 +55,12 @@ with open("bots_config.json", "r") as f:
 session_history = {}
 last_message_time = {}
 follow_up_flags = {}
-
-# ➕ Memoria simple para llamadas (por CallSid)
-voice_attempts = {}  # conteo de turnos sin entrada por llamada
+voice_attempts = {}
 
 # =======================
 #  Helpers generales
 # =======================
 def _hora_to_epoch_ms(hora_str: str) -> int:
-    """Convierte 'YYYY-MM-DD HH:MM:SS' a epoch ms (0 si falla)."""
     try:
         dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
         return int(dt.timestamp() * 1000)
@@ -75,17 +68,12 @@ def _hora_to_epoch_ms(hora_str: str) -> int:
         return 0
 
 def _normalize_bot_name(name: str):
-    """Devuelve el nombre oficial del bot según bots_config (o None si no existe)."""
     for config in bots_config.values():
         if config["name"].lower() == name.lower():
             return config["name"]
     return None
 
 def _find_bot_for_to_number(to_number_raw: str):
-    """
-    Dado el 'To' de Twilio (voz: '+1...'; WhatsApp: 'whatsapp:+1...'),
-    devuelve el dict de configuración del bot correspondiente.
-    """
     if not to_number_raw:
         return next(iter(bots_config.values())) if bots_config else None
 
@@ -104,14 +92,9 @@ def _find_bot_for_to_number(to_number_raw: str):
 
 def _voice_greeting(bot_cfg):
     negocio = bot_cfg.get("business_name", "nuestra empresa")
-    # Pedimos en español, pero dejamos nombres propios tal cual para mejor pronunciación de Houston, Texas
     return f"Gracias por llamar a {negocio} en Houston, Texas. ¿En qué puedo ayudarte?"
 
 def _build_messages_from_firebase(bot_cfg, numero_tel: str):
-    """
-    Construye el contexto para GPT usando el mismo prompt del bot
-    y el historial guardado en Firebase para ese número.
-    """
     messages = []
     system_prompt = bot_cfg.get("system_prompt", "").strip()
     if system_prompt:
@@ -138,15 +121,11 @@ def _tts_file_path(key: str) -> Path:
     return Path(f"/tmp/tts-{key}.mp3")
 
 def _make_tts_mp3(text: str) -> str:
-    """
-    Genera (o reutiliza) un MP3 con OpenAI TTS y devuelve la KEY.
-    """
     key = _tts_key_for_text(text)
     out_path = _tts_file_path(key)
     if out_path.exists():
         return key
     try:
-        # Streaming directo a archivo (más estable)
         with client.audio.speech.with_streaming_response.create(
             model=OPENAI_TTS_MODEL,
             voice=OPENAI_TTS_VOICE,
@@ -338,7 +317,6 @@ def guardar_lead(bot_nombre, numero, mensaje):
             _lead_ref(bot_nombre, numero).set(lead)
         fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
 
-        # espejo local opcional
         archivo = "leads.json"
         if not os.path.exists(archivo):
             with open(archivo, "w") as f:
@@ -394,7 +372,7 @@ def home():
     return "✅ Bot inteligente activo en Render."
 
 # =======================
-#  ✅ VOZ (Twilio Voice Webhook - IVR clásico, intacto)
+#  ✅ VOZ (Twilio Voice Webhook - IVR clásico)
 # =======================
 @app.route("/voice", methods=["GET", "POST"])
 def voice_incoming():
@@ -416,7 +394,7 @@ def voice_incoming():
               "Para ventas, marque uno. "
               "Para información de revista y distribución, marque dos. "
               "Para dejar un mensaje, quédese en la línea.",
-              voice="Polly.Lupe-Neural", language="es-US")  # voz femenina natural (fallback)
+              voice="Polly.Lupe-Neural", language="es-US")
     vr.say("No recibí una selección. Por favor, deje su mensaje después del tono. "
            "Presione numeral para finalizar.", voice="Polly.Lupe-Neural", language="es-US")
     vr.record(max_length=120, play_beep=True, finish_on_key="#")
@@ -443,7 +421,7 @@ def voice_menu():
     return Response(str(vr), mimetype="text/xml")
 
 # =======================
-#  🧠 VOZ IA (Twilio + GPT con el mismo prompt del bot) + OpenAI TTS (mujer, natural)
+#  🧠 VOZ IA (Twilio + GPT) + OpenAI TTS
 # =======================
 @app.route("/voice/ai", methods=["GET", "POST"])
 def voice_ai():
@@ -469,10 +447,9 @@ def voice_ai():
 
     vr = VoiceResponse()
 
-    # 1) No hay voz todavía: saludo con TTS OpenAI y escuchamos
     if not speech:
         voice_attempts[call_sid] += 1
-        greeting = _voice_greeting(bot_cfg)  # “Gracias por llamar a ... en Houston, Texas…”
+        greeting = _voice_greeting(bot_cfg)
         audio_url = _tts_url_for_text(greeting)
         with vr.gather(
             input="speech",
@@ -498,7 +475,6 @@ def voice_ai():
             vr.hangup()
         return Response(str(vr), mimetype="text/xml")
 
-    # 2) Tenemos transcripción del usuario -> GPT -> TTS -> loop
     print(f"👤 STT: {speech}")
     try:
         if not fb_get_lead(bot_name, lead_num):
@@ -517,14 +493,12 @@ def voice_ai():
 
         fb_append_historial(bot_name, lead_num, {"tipo": "bot", "texto": respuesta, "hora": ahora})
 
-        # Responder con audio natural (OpenAI TTS)
         url_resp = _tts_url_for_text(respuesta)
         if url_resp:
             vr.play(url_resp)
         else:
             vr.say(respuesta, voice="Polly.Lupe-Neural", language="es-US")
 
-        # Re-preguntar (loop) con TTS
         follow = "¿Te ayudo con algo más?"
         url_follow = _tts_url_for_text(follow)
         with vr.gather(
@@ -969,6 +943,136 @@ def send_whatsapp_message(to_number, message, bot_number=None):
     from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
+
+# ======================================================
+#   Google OAuth + Calendar + Sheets (NUEVO)
+# ======================================================
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/spreadsheets"
+]
+GOOGLE_CLIENT_FILE = os.getenv("GOOGLE_CLIENT_FILE", "credentials/google_oauth_client.json")
+GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID", "")
+
+def _oauth_store(creds_dict, owner_key="global"):
+    try:
+        session["google_creds"] = creds_dict
+    except Exception:
+        pass
+    try:
+        ref = db.reference(f"oauth_tokens/{owner_key}")
+        ref.set(creds_dict)
+    except Exception as e:
+        print(f"⚠️ No pude guardar tokens en Firebase: {e}")
+
+def _oauth_load(owner_key="global"):
+    try:
+        if "google_creds" in session:
+            return session["google_creds"]
+    except Exception:
+        pass
+    try:
+        ref = db.reference(f"oauth_tokens/{owner_key}")
+        data = ref.get()
+        return data or None
+    except Exception as e:
+        print(f"⚠️ No pude leer tokens en Firebase: {e}")
+        return None
+
+def _get_creds(owner_key="global"):
+    data = _oauth_load(owner_key)
+    if not data:
+        return None
+    creds = Credentials.from_authorized_user_info(data, GOOGLE_SCOPES)
+    return creds
+
+@app.route("/google/auth")
+def google_auth_start():
+    owner = request.args.get("owner", "global")
+    session["oauth_owner"] = owner
+    redirect_uri = url_for("google_oauth_callback", _external=True)
+    flow = Flow.from_client_secrets_file(
+        GOOGLE_CLIENT_FILE,
+        scopes=GOOGLE_SCOPES,
+        redirect_uri=redirect_uri
+    )
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent"
+    )
+    session["oauth_state"] = state
+    return redirect(auth_url)
+
+@app.route("/oauth2callback")
+def google_oauth_callback():
+    state = session.get("oauth_state")
+    owner = session.get("oauth_owner", "global")
+    redirect_uri = url_for("google_oauth_callback", _external=True)
+    flow = Flow.from_client_secrets_file(
+        GOOGLE_CLIENT_FILE,
+        scopes=GOOGLE_SCOPES,
+        redirect_uri=redirect_uri
+    )
+    flow.fetch_token(authorization_response=request.url)
+    creds = flow.credentials
+    creds_dict = {
+        "token": creds.token,
+        "refresh_token": getattr(creds, "refresh_token", None),
+        "token_uri": creds.token_uri,
+        "client_id": creds.client_id,
+        "client_secret": creds.client_secret,
+        "scopes": creds.scopes,
+    }
+    _oauth_store(creds_dict, owner_key=owner)
+    return "✅ Permisos concedidos. Ya puedes usar Calendar y Sheets."
+
+@app.route("/gcal/test")
+def gcal_test():
+    owner = request.args.get("owner", "global")
+    creds = _get_creds(owner)
+    if not creds:
+        return redirect(url_for("google_auth_start", owner=owner))
+
+    service = build("calendar", "v3", credentials=creds)
+    start = (datetime.now() + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    end   = start.replace(hour=10, minute=30)
+    event = {
+        "summary": "Cita de prueba (IN-Houston CRM)",
+        "description": "Evento de verificación",
+        "start": {"dateTime": start.isoformat(), "timeZone": "America/Chicago"},
+        "end":   {"dateTime": end.isoformat(),   "timeZone": "America/Chicago"},
+    }
+    created = service.events().insert(calendarId="primary", body=event).execute()
+    return f"✅ Evento creado: {created.get('htmlLink')}"
+
+@app.route("/gsheets/test")
+def gsheets_test():
+    owner = request.args.get("owner", "global")
+    if not GOOGLE_SHEETS_ID:
+        return "Configura GOOGLE_SHEETS_ID en variables de entorno.", 400
+
+    creds = _get_creds(owner)
+    if not creds:
+        return redirect(url_for("google_auth_start", owner=owner))
+
+    sheets = build("sheets", "v4", credentials=creds)
+    valores = [[
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Prueba", "Contacto Demo", owner
+    ]]
+    body = {"values": valores}
+    sheets.spreadsheets().values().append(
+        spreadsheetId=GOOGLE_SHEETS_ID,
+        range="Hoja1!A:D",
+        valueInputOption="USER_ENTERED",
+        body=body
+    ).execute()
+    return "✅ Fila agregada a Google Sheets."
 
 # =======================
 #  Run
