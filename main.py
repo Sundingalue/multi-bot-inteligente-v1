@@ -178,7 +178,55 @@ def fb_append_historial(bot_nombre, numero, entrada):
     lead["last_message"] = entrada.get("texto", "")
     lead["last_seen"] = entrada.get("hora", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     lead["messages"] = int(lead.get("messages", 0)) + 1
+    # asegurar campos base
+    lead.setdefault("bot", bot_nombre)
+    lead.setdefault("numero", numero)
+    lead.setdefault("status", "nuevo")
+    lead.setdefault("notes", "")
     ref.set(lead)
+
+def fb_list_leads_all():
+    """Devuelve un dict { 'Bot|whatsapp:+1...' : {...datos...} } leyendo TODO desde Firebase."""
+    root = db.reference("leads").get() or {}
+    leads = {}
+    if not isinstance(root, dict):
+        return leads
+    for bot_nombre, numeros in root.items():
+        if not isinstance(numeros, dict):
+            continue
+        for numero, data in numeros.items():
+            clave = f"{bot_nombre}|{numero}"
+            leads[clave] = {
+                "bot": bot_nombre,
+                "numero": numero,
+                "first_seen": data.get("first_seen", ""),
+                "last_message": data.get("last_message", ""),
+                "last_seen": data.get("last_seen", ""),
+                "messages": int(data.get("messages", 0)),
+                "status": data.get("status", "nuevo"),
+                "notes": data.get("notes", "")
+            }
+    return leads
+
+def fb_list_leads_by_bot(bot_nombre):
+    """Devuelve un dict solo de un bot: { 'Bot|numero': {...} }"""
+    numeros = db.reference(f"leads/{bot_nombre}").get() or {}
+    leads = {}
+    if not isinstance(numeros, dict):
+        return leads
+    for numero, data in numeros.items():
+        clave = f"{bot_nombre}|{numero}"
+        leads[clave] = {
+            "bot": bot_nombre,
+            "numero": numero,
+            "first_seen": data.get("first_seen", ""),
+            "last_message": data.get("last_message", ""),
+            "last_seen": data.get("last_seen", ""),
+            "messages": int(data.get("messages", 0)),
+            "status": data.get("status", "nuevo"),
+            "notes": data.get("notes", "")
+        }
+    return leads
 
 # =======================
 #  Leads y WhatsApp
@@ -261,14 +309,8 @@ def panel_exclusivo_bot(bot_nombre):
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
 
-    # Para el panel listamos usando el espejo local (simple y suficiente)
-    if not os.path.exists("leads.json"):
-        return render_template("panel_bot.html", leads={}, bot=bot_normalizado, nombre_comercial=bot_normalizado)
-
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
-
-    leads_filtrados = {clave: datos for clave, datos in leads.items() if datos.get("bot") == bot_normalizado}
+    # ✅ Ahora lee directamente de Firebase (persistente)
+    leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
 
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
@@ -530,7 +572,7 @@ def api_chat(bot, numero):
     return jsonify({"mensajes": nuevos, "last_ts": last_ts})
 
 # =======================
-#  🔺 NUEVO: Borrar conversación (Firebase + leads.json)
+#  🔺 Borrar conversación (Firebase + leads.json)
 # =======================
 @app.route("/api/delete_chat", methods=["POST"])
 def api_delete_chat():
@@ -611,25 +653,22 @@ def panel():
         if destino:
             return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
 
-    leads_por_bot = {}
+    # ✅ Panel ahora carga desde Firebase
+    leads_todos = fb_list_leads_all()
+
+    # Bots disponibles (nombre comercial) para el selector
     bots_disponibles = {}
-    leads = {}
-    if os.path.exists("leads.json"):
-        with open("leads.json", "r") as f:
-            leads = json.load(f)
-        for clave, data in leads.items():
-            bot_name = data.get("bot", "Desconocido")
-            if bot_name not in leads_por_bot:
-                leads_por_bot[bot_name] = {}
-            leads_por_bot[bot_name][clave] = data
+    for cfg in bots_config.values():
+        bots_disponibles[cfg["name"]] = cfg.get("business_name", cfg["name"])
 
-            for config in bots_config.values():
-                if config["name"] == bot_name:
-                    bots_disponibles[bot_name] = config.get("business_name", bot_name)
-                    break
-
+    # Filtro por bot si viene ?bot=Nombre
     bot_seleccionado = request.args.get("bot")
-    leads_filtrados = leads_por_bot.get(bot_seleccionado, {}) if bot_seleccionado else leads
+    if bot_seleccionado:
+        bot_norm = _normalize_bot_name(bot_seleccionado) or bot_seleccionado
+        leads_filtrados = {k: v for k, v in leads_todos.items() if v.get("bot") == bot_norm}
+    else:
+        leads_filtrados = leads_todos
+
     return render_template("panel.html", leads=leads_filtrados, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
 
 @app.route("/logout", methods=["GET", "POST"])
@@ -642,29 +681,60 @@ def logout():
 # =======================
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
-    data = request.json
-    numero_key = data.get("numero")  # viene como "<bot>|<numero>"
-    estado = data.get("estado")
-    nota = data.get("nota")
+    """
+    Actualiza estado/nota del lead.
+    - Recibe numero_key como "<Bot>|<Numero>"
+    - Actualiza Firebase primero y luego el espejo local si existe.
+    """
+    data = request.json or {}
+    numero_key = (data.get("numero") or "").strip()  # viene como "<bot>|<numero>"
+    estado = (data.get("estado") or "").strip()
+    nota = (data.get("nota") or "").strip()
 
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
+    if "|" not in numero_key:
+        return jsonify({"error": "Parámetro 'numero' inválido"}), 400
 
-    if numero_key in leads:
-        leads[numero_key]["status"] = estado
-        leads[numero_key]["notes"] = nota
+    bot_nombre, numero = numero_key.split("|", 1)
+    bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
 
-        # También reflejamos en Firebase
-        try:
-            bot_nombre = leads[numero_key]["bot"]
-            numero = leads[numero_key]["numero"]
-            ref = _lead_ref(bot_nombre, numero)
-            ref.update({"status": estado, "notes": nota})
-        except Exception as e:
-            print(f"⚠️ No se pudo actualizar en Firebase: {e}")
+    # ✅ Actualizar en Firebase (fuente de verdad)
+    try:
+        ref = _lead_ref(bot_normalizado, numero)
+        current = ref.get() or {}
+        current["status"] = estado or current.get("status", "nuevo")
+        current["notes"] = nota if nota != "" else current.get("notes", "")
+        # asegurar campos mínimos
+        current.setdefault("bot", bot_normalizado)
+        current.setdefault("numero", numero)
+        ref.set(current)
+    except Exception as e:
+        print(f"⚠️ No se pudo actualizar en Firebase: {e}")
 
-        with open("leads.json", "w") as f:
-            json.dump(leads, f, indent=4)
+    # 🔁 Espejo local si existe
+    try:
+        if os.path.exists("leads.json"):
+            with open("leads.json", "r") as f:
+                leads = json.load(f)
+            if numero_key in leads:
+                leads[numero_key]["status"] = estado or leads[numero_key].get("status", "nuevo")
+                if nota != "":
+                    leads[numero_key]["notes"] = nota
+            else:
+                # crear si no existe en espejo
+                leads[numero_key] = {
+                    "bot": bot_normalizado,
+                    "numero": numero,
+                    "first_seen": current.get("first_seen", ""),
+                    "last_message": current.get("last_message", ""),
+                    "last_seen": current.get("last_seen", ""),
+                    "messages": int(current.get("messages", 0)),
+                    "status": estado or current.get("status", "nuevo"),
+                    "notes": nota or current.get("notes", "")
+                }
+            with open("leads.json", "w") as f:
+                json.dump(leads, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ No se pudo actualizar leads.json: {e}")
 
     return jsonify({"mensaje": "Lead actualizado"})
 
@@ -673,16 +743,13 @@ def exportar():
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
 
-    if not os.path.exists("leads.json"):
-        return "No hay leads disponibles"
-
-    with open("leads.json", "r") as f:
-        leads = json.load(f)
+    # ✅ Exporta desde Firebase
+    leads = fb_list_leads_all()
 
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(["Bot", "Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
-    for clave, datos in leads.items():
+    for _, datos in leads.items():
         writer.writerow([
             datos.get("bot", ""),
             datos.get("numero", ""),
