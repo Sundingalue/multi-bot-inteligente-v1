@@ -7,131 +7,237 @@
   <meta name="theme-color" content="#F7BD02" />
   <style>
     :root{
-      --brand:#F7BD02;   /* Amarillo IN */
-      --ink:#000000;     /* Negro */
-      --paper:#FFFFFF;   /* Blanco */
-      --radius:15px;
-      --shadow-strong: 0 20px 40px rgba(0,0,0,.35);
-      --shadow-soft:   0 12px 24px rgba(0,0,0,.20);
-      --shadow-chip:   0 14px 26px rgba(0,0,0,.30);
-      --shadow-light:  0 6px 12px rgba(255,255,255,.25) inset;
+      --brand:#F7BD02;        /* Amarillo IN */
+      --brand-2:#E3AE00;      /* Amarillo más oscuro */
+      --ink:#0B0B0B;          /* Negro profundo */
+      --paper:#FFFFFF;        /* Blanco */
+      --radius:16px;
+      --radius-lg:22px;
+      --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
+      --shadow-md: 0 16px 28px rgba(0,0,0,.22);
+      --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
+      --line: rgba(255,255,255,.14);
     }
 
     *{ box-sizing:border-box; }
     html,body{
       margin:0; padding:0; height:100%;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      background: var(--brand);
       color: var(--ink);
+      background: #0e0e0e;
     }
 
-    /* Fondo con degradados como el mockup aprobado */
+    /* ===== LAYERS ===== */
     .app{
-      min-height:100vh; display:flex; flex-direction:column;
-      background:
-        radial-gradient(900px 600px at 18% 26%, rgba(0,0,0,.22), transparent 58%),
-        radial-gradient(900px 600px at 84% 76%, rgba(0,0,0,.22), transparent 58%),
-        linear-gradient(180deg, #F7BD02 0%, #D6A000 100%);
+      min-height:100vh;
+      display:flex;
+      flex-direction:column;
+      position: relative;
+      isolation: isolate; /* stacking context */
     }
 
-    /* Barra negra superior */
+    /* Capa 1: Fondo FIJO con textura */
+    .app::before{
+      content:"";
+      position: fixed; /* no se mueve */
+      inset: 0;
+      z-index: -3;
+      pointer-events:none;
+      background:
+        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(circle at 25% 25%, rgba(255,255,255,.06) 1px, transparent 1.5px) 0 0/22px 22px,
+        radial-gradient(circle at 75% 75%, rgba(0,0,0,.12) 1px, transparent 1.5px) 0 0/22px 22px,
+        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px),
+        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
+      background-size: cover, cover, 22px 22px, 22px 22px, 20px 20px, cover;
+      background-position: center top, center top, center, center, center, center top;
+      background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
+    }
+
+    /* Capa 2: Marco “card” con borde suave y sombra */
+    .app::after{
+      content:"";
+      position: fixed;
+      inset: clamp(8px, 2vw, 16px);
+      border-radius: var(--radius-lg);
+      z-index: -2;
+      pointer-events:none;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
+        linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
+      border: 1px solid transparent;
+      box-shadow: var(--shadow-xl);
+    }
+
+    /* Capa 3: Cintas diagonales de marca */
+    .brand-ribbon{
+      position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    }
+    .brand-ribbon::before,
+    .brand-ribbon::after{
+      content:"";
+      position: absolute; left: -10%; right: -10%; height: 10px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25));
+      opacity:.65;
+    }
+    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
+    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
+
+    /* ===== TOP BAR ===== */
     .topbar{
-      position:sticky; top:0; z-index:50;
-      background: var(--ink);
+      position:sticky; top:0; z-index:5;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        rgba(10,10,10,.82);
+      backdrop-filter: blur(6px);
       color:#fff;
-      margin-top: 0px;
       padding: calc(env(safe-area-inset-top) + 12px) 16px 14px;
       text-align:center;
-      font-weight: 900;
-      letter-spacing:.3px;
-      font-size: 26px;
-      text-transform: uppercase;
-      box-shadow: 0 2px 10px rgba(0,0,0,.35);
+      font-weight: 900; letter-spacing:.35px; font-size: 26px; text-transform: uppercase;
+      border-bottom: 1px solid rgba(255,255,255,.18);
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* Fila de acciones: Volver + chip del bot */
+    /* ===== ACTIONS ===== */
     .actions{
-      position:sticky; 
-      top: calc(env(safe-area-inset-top) + 65px); 
-      z-index:40;
+      position:sticky;
+      top: calc(env(safe-area-inset-top) + 65px);
+      z-index:4;
       display:flex; align-items:center; justify-content:space-between; gap:15px;
-      padding: 0px 18px 10px;
-      background: transparent;
-      border-bottom: 1px solid rgba(0,0,0,.28);
+      padding: 10px 18px 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
+      border-bottom: 1px solid rgba(255,255,255,.16);
+      backdrop-filter: blur(4px);
     }
 
-    /* Botón VOLVER: blanco con borde fino y esquinas 15px */
     .btn-back{
       display:inline-flex; align-items:center; gap:12px;
-      background: var(--paper);
+      background:
+        linear-gradient(180deg, #fff, #f1f1f1) padding-box,
+        linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      border: 1.5px solid var(--ink);
-      padding: 16px 22px;
-      border-radius: var(--radius);
+      padding: 14px 20px;
+      border-radius: 14px;
+      border: 1px solid transparent;
       font-weight: 900;
       text-decoration:none;
-      box-shadow: var(--shadow-soft), var(--shadow-light);
-      transition: transform .06s ease, box-shadow .2s ease;
-      -webkit-tap-highlight-color: transparent;
+      box-shadow: var(--shadow-sm);
+      transition: transform .06s ease, box-shadow .2s ease, filter .2s ease;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
 
-    /* Chip del bot: negro con texto amarillo */
     .chip-bot{
       display:flex; align-items:center; justify-content:center;
       flex:1;
-      background: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        #0e0e0e;
       color: var(--brand);
-      border: 1.5px solid var(--ink);
-      padding: 16px 22px;
-      border-radius: var(--radius);
+      padding: 14px 20px;
+      border-radius: 14px;
       font-weight: 900;
       text-transform: uppercase;
-      box-shadow: var(--shadow-chip);
+      box-shadow: var(--shadow-sm);
       min-width: 42%;
+      border: 1px solid rgba(255,255,255,.14);
+      text-shadow: 0 2px 0 rgba(0,0,0,.35);
     }
 
-    /* Área de chat con burbujas grandes */
+    /* ===== CHAT (único contenedor con scroll) ===== */
     .chat{
-      flex:1; overflow-y:auto;
-      padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px);
+      flex:1 1 auto;
+      position: relative;
+      z-index: 1;
+      overflow-y: auto;                 /* SOLO aquí hay scroll */
+      -webkit-overflow-scrolling: touch;/* iOS smooth */
+      padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
     }
-    .stack{ display:flex; flex-direction:column; gap:28px; }
 
+    /* Decor dentro del área de chat: grid sutil */
+    .chat::before{
+      content:"";
+      position:absolute; inset:0;
+      z-index:0; pointer-events:none;
+      background:
+        linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
+        linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
+      mix-blend-mode: overlay;
+      opacity:.55;
+    }
+
+    .stack{
+      position: relative; z-index:1;
+      display:flex; flex-direction:column; gap:24px;
+      padding: 6px;
+    }
+
+    /* ===== BUBBLES ===== */
     .bubble{
-      max-width: 90%;
-      padding: 22px 24px;
-      border-radius: var(--radius);
-      font-size: 17px;
-      line-height: 1.5;
-      box-shadow: var(--shadow-strong);
+      max-width: 92%;
+      padding: 18px 20px;
+      border-radius: 18px;
+      font-size: 16.5px;
+      line-height: 1.55;
+      box-shadow: var(--shadow-md);
+      position: relative;
+      border: 1px solid rgba(0,0,0,.08);
+    }
+    .bubble::before{
+      content:"";
+      position:absolute; left: 22px; top: -8px;
+      width: 46px; height: 12px; border-radius: 8px;
+      background: linear-gradient(180deg, rgba(0,0,0,.09), rgba(255,255,255,.18));
+      border: 1px solid rgba(0,0,0,.08);
+      filter: blur(.2px);
+    }
+    .bubble::after{
+      content:"";
+      position:absolute; inset:0;
+      border-radius: 18px;
+      pointer-events:none;
+      background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
+      mix-blend-mode: screen;
     }
 
-    /* Bot: burbuja negra (izquierda) */
     .bot{
       align-self: flex-start;
-      background: var(--ink);
-      color: var(--paper);
+      color: #fefefe;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)),
+        #111315;
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow:
+        0 0 0 1px rgba(247,189,2,.28) inset,
+        var(--shadow-md);
     }
 
-    /* Usuario: burbuja blanca (derecha) */
     .user{
       align-self: flex-end;
-      background: var(--paper);
-      color: var(--ink);
+      background:
+        linear-gradient(180deg, #fff, #f7f7f7);
+      color: #151515;
+      border: 1px solid rgba(0,0,0,.08);
+      box-shadow:
+        0 1px 0 rgba(255,255,255,.8) inset,
+        var(--shadow-md);
     }
 
     @media (max-width:480px){
-      .topbar{ font-size:24px; }
-      .btn-back, .chip-bot{ padding: 14px 18px; }
-      .bubble{ font-size:16px; padding:20px 22px; }
+      .topbar{ font-size:22px; }
+      .btn-back, .chip-bot{ padding: 12px 16px; }
+      .bubble{ font-size:15.5px; padding:16px 18px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
+    <!-- Cintas sutiles de marca -->
+    <div class="brand-ribbon" aria-hidden="true"></div>
+
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
     <div class="actions">
@@ -141,7 +247,7 @@
       <div class="chip-bot">{{ bot or 'SARA' }}</div>
     </div>
 
-    <!-- data-* para JS: bot, numero y la última hora visible -->
+    <!-- ÚNICO contenedor que hace scroll -->
     <main id="chat" class="chat"
           data-bot="{{ bot }}"
           data-numero="{{ numero }}"
@@ -157,19 +263,17 @@
   </div>
 
   <script>
-    // ===== Polling cada ~3s para mensajes nuevos (sin duplicados + autoscroll inteligente) =====
+    // Polling cada 3s con autoscroll inteligente
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
       if (!chatEl || !stackEl) return;
 
-      // ===== Estado =====
-      let lastTs = 0;           // arrancamos en 0 y sincronizamos en bootstrap
-      let bootstrap = true;     // primer tick: solo sincroniza, no agrega (evita duplicados)
-      const NEAR_PX = 200;      // umbral para considerar "estoy abajo" más laxo
+      let lastTs = 0;
+      let bootstrap = true;
+      const NEAR_PX = 200;
       let userNearBottom = true;
 
-      // ===== Autoscroll inteligente =====
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
         return distance <= NEAR_PX;
@@ -187,18 +291,13 @@
         });
       }
 
-      // Seguir posición del usuario
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
-
-      // Al abrir, baja para mostrar lo último renderizado (pequeño delay para layout)
       setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
-      // ===== API =====
       const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
       const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
       const apiBase = `/api/chat/${bot}/${numero}`;
 
-      // ===== Render =====
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
         div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
@@ -206,7 +305,6 @@
         stackEl.appendChild(div);
       }
 
-      // ===== Ciclo =====
       async function tick(){
         try{
           const res = await fetch(`${apiBase}?since=${lastTs}`, { credentials: 'same-origin' });
@@ -214,7 +312,6 @@
           const data = await res.json();
 
           if (bootstrap){
-            // Solo sincroniza el puntero sin pintar (evita duplicados del historial renderizado por Jinja)
             let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
             if (Array.isArray(data.mensajes) && data.mensajes.length){
               maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), maxTs);
@@ -226,16 +323,11 @@
 
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
-
-            // Render en batch
             for (const m of data.mensajes){
               appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
-
-            // Scroll una sola vez si estabas cerca del fondo
             if (userNearBottom) scrollToBottom(true);
 
-            // Actualiza lastTs
             if (typeof data.last_ts === 'number' && data.last_ts > lastTs){
               lastTs = data.last_ts;
             } else {
@@ -243,16 +335,12 @@
               if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        }catch(e){
-          // Silencioso: no romper UI
-        }
+        }catch(e){ /* silencio */ }
       }
 
-      // Intervalo: primer tick inmediato (bootstrap), luego cada 3s
       tick();
       setInterval(tick, 3000);
 
-      // BONUS: al volver a la pestaña, reintenta un scroll por si el navegador pausó los scrolls suaves
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
       });
