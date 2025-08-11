@@ -24,6 +24,10 @@ load_dotenv("/etc/secrets/.env")
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
+# 🔊 Config de voz (puedes cambiar por env si quieres)
+VOICE_TTS_VOICE = os.getenv("VOICE_TTS_VOICE", "alice")
+VOICE_LANG = os.getenv("VOICE_LANG", "es-MX")  # es-MX o es-US
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
@@ -48,6 +52,9 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
+# ➕ Memoria simple para llamadas (por CallSid)
+voice_attempts = {}  # conteo de turnos sin entrada por llamada
+
 # =======================
 #  Helpers generales
 # =======================
@@ -65,6 +72,66 @@ def _normalize_bot_name(name: str):
         if config["name"].lower() == name.lower():
             return config["name"]
     return None
+
+def _find_bot_for_to_number(to_number_raw: str):
+    """
+    Dado el 'To' de Twilio (voz: '+1...'; WhatsApp: 'whatsapp:+1...'),
+    devuelve el dict de configuración del bot correspondiente.
+    Soporta ambos formatos para que funcione hoy y en el futuro.
+    """
+    if not to_number_raw:
+        # fallback: primer bot disponible
+        return next(iter(bots_config.values())) if bots_config else None
+
+    to_num = to_number_raw.strip()
+    # Coincidencia exacta
+    if to_num in bots_config:
+        return bots_config[to_num]
+
+    # Si viene como '+1...', probamos con 'whatsapp:+1...'
+    if to_num.startswith("+"):
+        candidate = f"whatsapp:{to_num}"
+        if candidate in bots_config:
+            return bots_config[candidate]
+
+    # Si viene como 'whatsapp:+1...', probamos sin el prefijo
+    if to_num.startswith("whatsapp:+"):
+        candidate = to_num.replace("whatsapp:", "")
+        if candidate in bots_config:
+            return bots_config[candidate]
+
+    # Último recurso: primer bot
+    return next(iter(bots_config.values())) if bots_config else None
+
+def _voice_greeting(bot_cfg):
+    nombre = bot_cfg.get("name", "Asistente")
+    negocio = bot_cfg.get("business_name", "nuestra empresa")
+    # Saludo neutro (no revela identidad hasta que el cliente hable, alineado con tu estilo)
+    return f"Gracias por llamar a {negocio}. Dime, ¿en qué puedo ayudarte?"
+
+def _build_messages_from_firebase(bot_cfg, numero_tel: str):
+    """
+    Construye el contexto para GPT usando el mismo prompt del bot
+    y el historial guardado en Firebase para ese número.
+    """
+    messages = []
+    system_prompt = bot_cfg.get("system_prompt", "").strip()
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    data = fb_get_lead(bot_cfg["name"], numero_tel)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+
+    # Tomamos hasta las últimas ~16 entradas para mantener la conversación fresca
+    for reg in historial[-16:]:
+        texto = reg.get("texto", "")
+        tipo = reg.get("tipo", "user")
+        role = "assistant" if tipo == "bot" else "user"
+        if texto:
+            messages.append({"role": role, "content": texto})
+    return messages
 
 # =======================
 #  Gestión de usuarios (login)
@@ -325,15 +392,15 @@ def home():
     return "✅ Bot inteligente activo en Render."
 
 # =======================
-#  ✅ VOZ (Twilio Voice Webhook)
+#  ✅ VOZ (Twilio Voice Webhook - IVR clásico, intacto)
 # =======================
 @app.route("/voice", methods=["GET", "POST"])
 def voice_incoming():
-    """Webhook de voz para Twilio. Devuelve TwiML válido y evita el 404/Busy."""
+    """Webhook de voz para Twilio. Devuelve TwiML válido (IVR clásico)."""
     try:
         from_num = request.values.get("From", "")
         to_num = request.values.get("To", "")
-        print(f"📞 Llamada entrante -> From={from_num} To={to_num} @ {datetime.now()}")
+        print(f"📞 Llamada entrante (IVR clásico) -> From={from_num} To={to_num} @ {datetime.now()}")
     except Exception as e:
         print(f"⚠️ Error leyendo parámetros de voz: {e}")
 
@@ -350,10 +417,10 @@ def voice_incoming():
               "Para ventas, marque uno. "
               "Para información de revista y distribución, marque dos. "
               "Para dejar un mensaje, quédese en la línea.",
-              voice="alice", language="es-MX")
+              voice=VOICE_TTS_VOICE, language=VOICE_LANG)
 
     vr.say("No recibí una selección. Por favor, deje su mensaje después del tono. "
-           "Presione numeral para finalizar.", voice="alice", language="es-MX")
+           "Presione numeral para finalizar.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
     vr.record(max_length=120, play_beep=True, finish_on_key="#")
     vr.hangup()
     return Response(str(vr), mimetype="text/xml")
@@ -367,18 +434,122 @@ def voice_menu():
     if digit == "1":
         vr.say("Gracias. Te comunicamos con ventas. En este momento todos nuestros asesores "
                "están ocupados. Deja tu mensaje y te regresamos la llamada.",
-               voice="alice", language="es-MX")
+               voice=VOICE_TTS_VOICE, language=VOICE_LANG)
         vr.record(max_length=120, play_beep=True, finish_on_key="#")
         vr.hangup()
     elif digit == "2":
         vr.say("Información de revista y distribución. Visita nuestra página o deja tu mensaje ahora.",
-               voice="alice", language="es-MX")
+               voice=VOICE_TTS_VOICE, language=VOICE_LANG)
         vr.record(max_length=120, play_beep=True, finish_on_key="#")
         vr.hangup()
     else:
         vr.redirect("/voice")
 
     return Response(str(vr), mimetype="text/xml")
+
+# =======================
+#  🧠 VOZ IA (Twilio + GPT con el mismo prompt del bot)
+# =======================
+@app.route("/voice/ai", methods=["GET", "POST"])
+def voice_ai():
+    """
+    Conversación por voz con IA:
+    - Reconoce voz (es-MX/es-US)
+    - Usa el system_prompt del bot (según To)
+    - Guarda historial en Firebase (mismo lead, numero = 'tel:+1786...')
+    """
+    call_sid = request.values.get("CallSid", "")
+    from_num = request.values.get("From", "")
+    to_num = request.values.get("To", "")
+    speech = (request.values.get("SpeechResult", "") or "").strip()
+
+    bot_cfg = _find_bot_for_to_number(to_num)
+    if not bot_cfg:
+        # Si no hay configuración, caemos al IVR de cortesía
+        vr = VoiceResponse()
+        vr.say("Lo siento, el sistema no está disponible en este momento.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        vr.hangup()
+        return Response(str(vr), mimetype="text/xml")
+
+    bot_name = bot_cfg["name"]
+    lead_num = f"tel:{from_num}"
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print(f"🎙️ VOICE-AI -> CallSid={call_sid} From={from_num} To={to_num} Bot={bot_name}")
+    if call_sid not in voice_attempts:
+        voice_attempts[call_sid] = 0
+
+    vr = VoiceResponse()
+
+    # Si no hay SpeechResult: saludar y pedir que hable
+    if not speech:
+        voice_attempts[call_sid] += 1
+        greeting = _voice_greeting(bot_cfg)
+        with vr.gather(
+            input="speech",
+            language=VOICE_LANG,
+            action="/voice/ai",
+            method="POST",
+            speech_timeout="auto",
+            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, revista In Houston Texas"
+        ) as g:
+            g.say(greeting, voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+
+        # Si ya intentamos 2 veces sin habla, pasamos a buzón
+        if voice_attempts[call_sid] >= 2:
+            vr.say("No recibí audio. Por favor, deja tu mensaje después del tono. "
+                   "Presiona numeral para finalizar.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+            vr.record(max_length=120, play_beep=True, finish_on_key="#")
+            vr.hangup()
+        return Response(str(vr), mimetype="text/xml")
+
+    # Tenemos transcripción de voz del usuario
+    print(f"👤 STT: {speech}")
+    try:
+        # Crear/actualizar lead con el mensaje del usuario
+        if not fb_get_lead(bot_name, lead_num):
+            guardar_lead(bot_name, lead_num, speech)
+        else:
+            fb_append_historial(bot_name, lead_num, {"tipo": "user", "texto": speech, "hora": ahora})
+
+        # Construir contexto con historial + prompt del bot
+        messages = _build_messages_from_firebase(bot_cfg, lead_num)
+        # Asegurar que el último mensaje del usuario (speech) esté en el contexto
+        messages.append({"role": "user", "content": speech})
+
+        # Llamada a GPT
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages
+        )
+        respuesta = completion.choices[0].message.content.strip()
+
+        # Guardar respuesta del bot en Firebase
+        fb_append_historial(bot_name, lead_num, {"tipo": "bot", "texto": respuesta, "hora": ahora})
+
+        print(f"🤖 TTS: {respuesta}")
+
+        # Responder y volver a escuchar (loop)
+        vr.say(respuesta, voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        with vr.gather(
+            input="speech",
+            language=VOICE_LANG,
+            action="/voice/ai",
+            method="POST",
+            speech_timeout="auto",
+            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, revista In Houston Texas"
+        ) as g:
+            g.say("¿Te ayudo con algo más?", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        return Response(str(vr), mimetype="text/xml")
+
+    except Exception as e:
+        print(f"❌ Error en VOICE-AI: {e}")
+        # Fallback a buzón si falla la IA
+        vr.say("Tuve un inconveniente procesando tu solicitud. "
+               "Por favor deja tu mensaje después del tono.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        vr.record(max_length=120, play_beep=True, finish_on_key="#")
+        vr.hangup()
+        return Response(str(vr), mimetype="text/xml")
 
 # =======================
 #  Webhook WhatsApp
