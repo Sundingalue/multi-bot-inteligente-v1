@@ -18,12 +18,8 @@
     }
 
     *{ box-sizing:border-box; }
-    
-    /* CAMBIOS AQUÍ: Para que el fondo sea estático y solo el contenido se mueva */
-    html, body {
-      margin: 0; padding: 0;
-      height: 100%;
-      overflow: hidden; /* Evita el scroll global de la página */
+    html,body{
+      margin:0; padding:0; height:100%;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
       background: var(--brand);
@@ -31,11 +27,9 @@
     }
 
     .app{
-      min-height: 100vh;
-      height: 100%; /* Asegura que el contenedor de la app ocupe toda la altura */
-      display: flex;
-      flex-direction: column;
-      overflow-y: auto; /* Permite el scroll solo dentro del contenedor de la app */
+      min-height:100vh;
+      display:flex;
+      flex-direction:column;
     }
 
     .app::before{
@@ -52,7 +46,6 @@
       background-size: cover;
       background-position: center top;
       background-repeat: no-repeat;
-      background-attachment: fixed; /* Esto hace que el fondo no se mueva al hacer scroll */
     }
 
     .topbar{
@@ -104,8 +97,7 @@
     }
 
     .chat{
-      flex:1; 
-      /* EL SCROLL DEL CHAT AHORA ES MANEJADO POR .app */
+      flex:1; overflow-y:auto;
       padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px);
       position: relative;
       background: transparent;
@@ -122,7 +114,7 @@
       box-shadow: var(--shadow-strong);
     }
 
-    /* ESTILOS PARA EFECTO SATINADO (sin cambios) */
+    /* NUEVOS ESTILOS PARA EFECTO SATINADO */
     .bot{
       align-self: flex-start;
       background: linear-gradient(145deg, #1f1f1f, #000000);
