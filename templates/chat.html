@@ -120,6 +120,31 @@
       .btn-back, .chip-bot{ padding: 14px 18px; }
       .bubble{ font-size:16px; padding:20px 22px; }
     }
+
+    /* =========================
+       AGREGADO: Fondo de chat
+       (no se eliminó ni cambió nada existente)
+       ========================= */
+    .chat{
+      position: relative;
+      background-image: url('{{ url_for('static', filename='img/fondo_chat_in_houston.jpg') }}');
+      background-size: cover;           /* ocupa toda el área del chat */
+      background-position: center top;  /* centrado arriba, estilo wallpaper */
+      background-repeat: no-repeat;
+      background-attachment: fixed;     /* sensación WhatsApp */
+    }
+    .chat::before{
+      /* velo suave para legibilidad de burbujas */
+      content:"";
+      position:absolute; inset:0;
+      pointer-events:none;
+      background:
+        radial-gradient(1000px 700px at 20% 15%, rgba(0,0,0,.22), transparent 60%),
+        radial-gradient(1000px 700px at 80% 85%, rgba(0,0,0,.22), transparent 60%),
+        rgba(0,0,0,.08);
+      z-index:0;
+    }
+    .stack{ position: relative; z-index:1; } /* asegura contenido sobre el velo */
   </style>
 </head>
 <body>
@@ -166,24 +191,19 @@
       }
 
       function scrollToBottom(smooth=true){
-        // Usa el último nodo visible; más fiable en Safari/iOS
         const last = stackEl.lastElementChild;
         if (!last) return;
-        // Espera al próximo frame para que el DOM haya calculado alturas
         requestAnimationFrame(() => {
           try{
             last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
           }catch(_){
-            // Fallback clásico
             chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
           }
         });
       }
 
-      // Seguimos la posición del usuario
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
 
-      // Al abrir, baja para ver lo último ya renderizado por Jinja (con pequeño delay para layout)
       setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
       // ===== API base =====
@@ -207,7 +227,6 @@
           const data = await res.json();
 
           if (bootstrap){
-            // No agregamos historial ya renderizado → solo sincronizamos lastTs
             let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
             if (Array.isArray(data.mensajes) && data.mensajes.length){
               maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), maxTs);
@@ -219,16 +238,10 @@
 
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
-
-            // Render en batch
             for (const m of data.mensajes){
               appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
-
-            // Scroll una sola vez si el usuario estaba cerca del fondo
             if (userNearBottom) scrollToBottom(true);
-
-            // Actualizamos lastTs
             if (typeof data.last_ts === 'number' && data.last_ts > lastTs){
               lastTs = data.last_ts;
             } else {
@@ -237,15 +250,13 @@
             }
           }
         }catch(e){
-          // Silenciar errores de red
+          /* silencio */
         }
       }
 
-      // Primer fetch inmediato (bootstrap), luego cada 3s
       tick();
       setInterval(tick, 3000);
 
-      // BONUS: al volver a la pestaña, reintenta un scroll por si el navegador pausó los scrolls suaves
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
       });
