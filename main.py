@@ -1,4 +1,4 @@
-from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template
+from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -283,6 +283,62 @@ def home():
     return "✅ Bot inteligente activo en Render."
 
 # =======================
+#  ✅ VOZ (Twilio Voice Webhook)
+# =======================
+@app.route("/voice", methods=["GET", "POST"])
+def voice_incoming():
+    """Webhook de voz para Twilio. Devuelve TwiML válido y evita el 404/Busy."""
+    try:
+        from_num = request.values.get("From", "")
+        to_num = request.values.get("To", "")
+        print(f"📞 Llamada entrante -> From={from_num} To={to_num} @ {datetime.now()}")
+    except Exception as e:
+        print(f"⚠️ Error leyendo parámetros de voz: {e}")
+
+    vr = VoiceResponse()
+
+    # Menú simple: recopilamos 1 dígito. Si no responde, grabamos mensaje.
+    with vr.gather(
+        num_digits=1,
+        action="/voice/menu",
+        method="POST",
+        timeout=6
+    ) as g:
+        g.say("Gracias por llamar a In Houston Texas. "
+              "Para ventas, marque uno. "
+              "Para información de revista y distribución, marque dos. "
+              "Para dejar un mensaje, quédese en la línea.",
+              voice="alice", language="es-MX")
+
+    vr.say("No recibí una selección. Por favor, deje su mensaje después del tono. "
+           "Presione numeral para finalizar.", voice="alice", language="es-MX")
+    vr.record(max_length=120, play_beep=True, finish_on_key="#")
+    vr.hangup()
+    return Response(str(vr), mimetype="text/xml")
+
+@app.route("/voice/menu", methods=["POST"])
+def voice_menu():
+    """Procesa la selección del menú DTMF."""
+    digit = request.values.get("Digits", "")
+    vr = VoiceResponse()
+
+    if digit == "1":
+        vr.say("Gracias. Te comunicamos con ventas. En este momento todos nuestros asesores "
+               "están ocupados. Deja tu mensaje y te regresamos la llamada.",
+               voice="alice", language="es-MX")
+        vr.record(max_length=120, play_beep=True, finish_on_key="#")
+        vr.hangup()
+    elif digit == "2":
+        vr.say("Información de revista y distribución. Visita nuestra página o deja tu mensaje ahora.",
+               voice="alice", language="es-MX")
+        vr.record(max_length=120, play_beep=True, finish_on_key="#")
+        vr.hangup()
+    else:
+        vr.redirect("/voice")
+
+    return Response(str(vr), mimetype="text/xml")
+
+# =======================
 #  Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
@@ -487,7 +543,7 @@ def api_delete_chat():
     numero = (data.get("numero") or "").strip()
 
     # Validación básica
-    if not bot_nombre or not numero:
+    if not bot_nombre o not numero:
         return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
 
     # Normalización/permiso
