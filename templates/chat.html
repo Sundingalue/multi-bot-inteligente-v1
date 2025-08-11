@@ -22,37 +22,43 @@
       margin:0; padding:0; height:100%;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      background: var(--brand);
       color: var(--ink);
+      background: var(--brand);
+      overflow: hidden; /* ⚑ el scroll lo hace SOLO .chat */
     }
 
-    /* Fondo fijo */
+    /* ===== Contenedor app (sin fondo; el fondo va en ::before fijo) ===== */
     .app{
       min-height:100vh;
       display:flex;
       flex-direction:column;
-      background-image: url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
-      background-size: cover;
-      background-position: center top;
-      background-repeat: no-repeat;
-      background-attachment: fixed; /* estático */
+      position: relative;
+      z-index: 0;
     }
 
-    /* Efecto overlay para legibilidad */
+    /* ===== Fondo FIJO a la ventana (no se mueve) ===== */
     .app::before{
       content: "";
-      position: fixed;
+      position: fixed;     /* clave para que NO haga scroll */
       inset: 0;
       z-index: 0;
       pointer-events: none;
       background:
         radial-gradient(900px 600px at 18% 26%, rgba(0,0,0,.22), transparent 58%),
         radial-gradient(900px 600px at 84% 76%, rgba(0,0,0,.22), transparent 58%),
-        rgba(0,0,0,.06);
+        rgba(0,0,0,.06),
+        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
+      background-size: cover;
+      background-position: center top;
+      background-repeat: no-repeat;
     }
 
+    /* Elevar el contenido sobre el fondo fijo */
+    .topbar, .actions, .chat{ position: relative; z-index: 1; }
+
+    /* Barra negra superior */
     .topbar{
-      position:sticky; top:0; z-index:50;
+      position:sticky; top:0;
       background: var(--ink);
       color:#fff;
       padding: calc(env(safe-area-inset-top) + 12px) 16px 14px;
@@ -67,8 +73,7 @@
 
     .actions{
       position:sticky; 
-      top: calc(env(safe-area-inset-top) + 65px); 
-      z-index:40;
+      top: calc(env(safe-area-inset-top) + 65px);
       display:flex; align-items:center; justify-content:space-between; gap:15px;
       padding: 0px 18px 10px;
       background: transparent;
@@ -84,8 +89,6 @@
       font-weight: 900;
       text-decoration:none;
       box-shadow: var(--shadow-soft), var(--shadow-light);
-      position: relative;
-      z-index: 1;
     }
 
     .chip-bot{
@@ -99,19 +102,18 @@
       text-transform: uppercase;
       box-shadow: var(--shadow-chip);
       min-width: 42%;
-      position: relative;
-      z-index: 1;
     }
 
+    /* ===== Chat: ÚNICO contenedor con scroll ===== */
     .chat{
-      flex:1; overflow-y:auto;
+      flex:1;
+      overflow-y: auto;                 /* solo aquí hay scroll */
+      -webkit-overflow-scrolling: touch;/* suaviza en iOS */
       padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px);
-      background: transparent;
-      position: relative;
-      z-index: 1;
+      background: transparent;          /* sin fondo aquí */
     }
 
-    .stack{ display:flex; flex-direction:column; gap:28px; position: relative; z-index: 1; }
+    .stack{ display:flex; flex-direction:column; gap:28px; }
 
     .bubble{
       max-width: 90%;
@@ -145,9 +147,7 @@
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
     <div class="actions">
-      <a class="btn-back" href="{{ url_for('panel') }}">
-        ⟵ VOLVER
-      </a>
+      <a class="btn-back" href="{{ url_for('panel') }}">⟵ VOLVER</a>
       <div class="chip-bot">{{ bot or 'SARA' }}</div>
     </div>
 
