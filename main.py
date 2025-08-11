@@ -22,6 +22,8 @@ from firebase_admin import credentials, db
 #  Cargar variables de entorno (Render -> Secret File)
 # =======================
 load_dotenv("/etc/secrets/.env")
+load_dotenv()
+
 
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
