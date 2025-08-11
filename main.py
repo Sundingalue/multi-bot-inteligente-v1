@@ -11,6 +11,8 @@ import csv
 from io import StringIO
 from twilio.twiml.voice_response import VoiceResponse
 import requests
+from hashlib import md5
+from pathlib import Path
 
 # 🔹 Firebase
 import firebase_admin
@@ -24,9 +26,13 @@ load_dotenv("/etc/secrets/.env")
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# 🔊 Config de voz (puedes cambiar por env si quieres)
-VOICE_TTS_VOICE = os.getenv("VOICE_TTS_VOICE", "alice")
-VOICE_LANG = os.getenv("VOICE_LANG", "es-MX")  # es-MX o es-US
+# 🔊 Config de voz
+#   - Proveedor: OpenAI TTS (natural, estilo ChatGPT)
+#   - Voz femenina por defecto: "verse" (puedes cambiar con env OPENAI_TTS_VOICE)
+#   - Español con acento EE.UU.: mandamos el texto en español pero con marcas de lugar en inglés
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "verse")  # femenino/neutral
+VOICE_LANG = os.getenv("VOICE_LANG", "es-US")  # usado por STT de Twilio (input="speech")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
@@ -77,37 +83,27 @@ def _find_bot_for_to_number(to_number_raw: str):
     """
     Dado el 'To' de Twilio (voz: '+1...'; WhatsApp: 'whatsapp:+1...'),
     devuelve el dict de configuración del bot correspondiente.
-    Soporta ambos formatos para que funcione hoy y en el futuro.
     """
     if not to_number_raw:
-        # fallback: primer bot disponible
         return next(iter(bots_config.values())) if bots_config else None
 
     to_num = to_number_raw.strip()
-    # Coincidencia exacta
     if to_num in bots_config:
         return bots_config[to_num]
-
-    # Si viene como '+1...', probamos con 'whatsapp:+1...'
     if to_num.startswith("+"):
         candidate = f"whatsapp:{to_num}"
         if candidate in bots_config:
             return bots_config[candidate]
-
-    # Si viene como 'whatsapp:+1...', probamos sin el prefijo
     if to_num.startswith("whatsapp:+"):
         candidate = to_num.replace("whatsapp:", "")
         if candidate in bots_config:
             return bots_config[candidate]
-
-    # Último recurso: primer bot
     return next(iter(bots_config.values())) if bots_config else None
 
 def _voice_greeting(bot_cfg):
-    nombre = bot_cfg.get("name", "Asistente")
     negocio = bot_cfg.get("business_name", "nuestra empresa")
-    # Saludo neutro (no revela identidad hasta que el cliente hable, alineado con tu estilo)
-    return f"Gracias por llamar a {negocio}. Dime, ¿en qué puedo ayudarte?"
+    # Pedimos en español, pero dejamos nombres propios tal cual para mejor pronunciación de Houston, Texas
+    return f"Gracias por llamar a {negocio} en Houston, Texas. ¿En qué puedo ayudarte?"
 
 def _build_messages_from_firebase(bot_cfg, numero_tel: str):
     """
@@ -124,7 +120,6 @@ def _build_messages_from_firebase(bot_cfg, numero_tel: str):
     if isinstance(historial, dict):
         historial = [historial[k] for k in sorted(historial.keys())]
 
-    # Tomamos hasta las últimas ~16 entradas para mantener la conversación fresca
     for reg in historial[-16:]:
         texto = reg.get("texto", "")
         tipo = reg.get("tipo", "user")
@@ -133,18 +128,54 @@ def _build_messages_from_firebase(bot_cfg, numero_tel: str):
             messages.append({"role": role, "content": texto})
     return messages
 
+# ========= OpenAI TTS (crear y servir MP3) =========
+def _tts_key_for_text(text: str) -> str:
+    return md5(text.encode("utf-8")).hexdigest()[:24]
+
+def _tts_file_path(key: str) -> Path:
+    return Path(f"/tmp/tts-{key}.mp3")
+
+def _make_tts_mp3(text: str) -> str:
+    """
+    Genera (o reutiliza) un MP3 con OpenAI TTS y devuelve la KEY.
+    """
+    key = _tts_key_for_text(text)
+    out_path = _tts_file_path(key)
+    if out_path.exists():
+        return key
+    try:
+        # Streaming directo a archivo (más estable)
+        with client.audio.speech.with_streaming_response.create(
+            model=OPENAI_TTS_MODEL,
+            voice=OPENAI_TTS_VOICE,
+            input=text,
+            format="mp3"
+        ) as resp:
+            resp.stream_to_file(str(out_path))
+        return key
+    except Exception as e:
+        print(f"❌ Error generando TTS OpenAI: {e}")
+        return ""
+
+def _tts_url_for_text(text: str) -> str:
+    key = _make_tts_mp3(text)
+    if not key:
+        return ""
+    base = request.url_root.rstrip("/")
+    return f"{base}/tts?key={key}"
+
+@app.route("/tts", methods=["GET"])
+def serve_tts():
+    key = (request.args.get("key") or "").strip()
+    path = _tts_file_path(key)
+    if not key or not path.exists():
+        return "Not Found", 404
+    return send_file(str(path), mimetype="audio/mpeg")
+
 # =======================
 #  Gestión de usuarios (login)
 # =======================
 def _load_users():
-    """
-    Orden de lectura de credenciales:
-    1) Tripletas USER_*/PASS_*/PANEL_* desde variables de entorno.
-       - PANEL = "panel"            => admin ("*")
-       - PANEL = "panel-bot/<Bot>"  => acceso solo a ese bot
-    2) PANEL_USERS_JSON (si existe)
-    3) Fallback admin: sundin / inhouston2025 con acceso total.
-    """
     env_users = {}
     for key, val in os.environ.items():
         if not key.startswith("USER_"):
@@ -170,7 +201,6 @@ def _load_users():
     if env_users:
         return env_users
 
-    # Compatibilidad JSON anterior
     default_users = {"sundin": {"password": "inhouston2025", "bots": ["*"]}}
     raw = os.getenv("PANEL_USERS_JSON")
     if not raw:
@@ -227,25 +257,16 @@ def fb_get_lead(bot_nombre, numero):
     return data or {}
 
 def fb_append_historial(bot_nombre, numero, entrada):
-    """
-    Añade una entrada al historial y actualiza metadatos:
-    entrada = {"tipo":"user"|"bot", "texto":"...", "hora":"YYYY-MM-DD HH:MM:SS"}
-    """
     ref = _lead_ref(bot_nombre, numero)
     lead = ref.get() or {}
     historial = lead.get("historial", [])
-
-    # Normalizamos si por alguna razón es dict (clave -> item)
     if isinstance(historial, dict):
         historial = [historial[k] for k in sorted(historial.keys())]
-
     historial.append(entrada)
-
     lead["historial"] = historial
     lead["last_message"] = entrada.get("texto", "")
     lead["last_seen"] = entrada.get("hora", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     lead["messages"] = int(lead.get("messages", 0)) + 1
-    # asegurar campos base
     lead.setdefault("bot", bot_nombre)
     lead.setdefault("numero", numero)
     lead.setdefault("status", "nuevo")
@@ -253,7 +274,6 @@ def fb_append_historial(bot_nombre, numero, entrada):
     ref.set(lead)
 
 def fb_list_leads_all():
-    """Devuelve un dict { 'Bot|whatsapp:+1...' : {...datos...} } leyendo TODO desde Firebase."""
     root = db.reference("leads").get() or {}
     leads = {}
     if not isinstance(root, dict):
@@ -276,7 +296,6 @@ def fb_list_leads_all():
     return leads
 
 def fb_list_leads_by_bot(bot_nombre):
-    """Devuelve un dict solo de un bot: { 'Bot|numero': {...} }"""
     numeros = db.reference(f"leads/{bot_nombre}").get() or {}
     leads = {}
     if not isinstance(numeros, dict):
@@ -299,13 +318,8 @@ def fb_list_leads_by_bot(bot_nombre):
 #  Leads y WhatsApp
 # =======================
 def guardar_lead(bot_nombre, numero, mensaje):
-    """
-    Guarda el mensaje del usuario en Firebase (fuente de verdad) y, como espejo de compatibilidad, en leads.json
-    """
     try:
         ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # 1) Firebase
         lead = fb_get_lead(bot_nombre, numero)
         if not lead:
             lead = {
@@ -320,29 +334,21 @@ def guardar_lead(bot_nombre, numero, mensaje):
                 "historial": []
             }
             _lead_ref(bot_nombre, numero).set(lead)
-
         fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
 
-        # 2) Espejo local (opcional) para export/compatibilidad
+        # espejo local opcional
         archivo = "leads.json"
         if not os.path.exists(archivo):
             with open(archivo, "w") as f:
                 json.dump({}, f, indent=4)
-
         with open(archivo, "r") as f:
             leads = json.load(f)
-
         clave = f"{bot_nombre}|{numero}"
         if clave not in leads:
             leads[clave] = {
-                "bot": bot_nombre,
-                "numero": numero,
-                "first_seen": ahora,
-                "last_message": mensaje,
-                "last_seen": ahora,
-                "messages": 1,
-                "status": "nuevo",
-                "notes": "",
+                "bot": bot_nombre, "numero": numero,
+                "first_seen": ahora, "last_message": mensaje, "last_seen": ahora,
+                "messages": 1, "status": "nuevo", "notes": "",
                 "historial": [{"tipo": "user", "texto": mensaje, "hora": ahora}]
             }
         else:
@@ -350,10 +356,8 @@ def guardar_lead(bot_nombre, numero, mensaje):
             leads[clave]["last_message"] = mensaje
             leads[clave]["last_seen"] = ahora
             leads[clave]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
-
         with open(archivo, "w") as f:
             json.dump(leads, f, indent=4)
-
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
 
@@ -369,16 +373,12 @@ def permitir_iframe(response):
 def panel_exclusivo_bot(bot_nombre):
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-
     bot_normalizado = _normalize_bot_name(bot_nombre)
     if not bot_normalizado:
         return f"Bot '{bot_nombre}' no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
-
-    # ✅ Ahora lee directamente de Firebase (persistente)
     leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
-
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
          for config in bots_config.values()
@@ -396,7 +396,6 @@ def home():
 # =======================
 @app.route("/voice", methods=["GET", "POST"])
 def voice_incoming():
-    """Webhook de voz para Twilio. Devuelve TwiML válido (IVR clásico)."""
     try:
         from_num = request.values.get("From", "")
         to_num = request.values.get("To", "")
@@ -405,8 +404,6 @@ def voice_incoming():
         print(f"⚠️ Error leyendo parámetros de voz: {e}")
 
     vr = VoiceResponse()
-
-    # Menú simple: recopilamos 1 dígito. Si no responde, grabamos mensaje.
     with vr.gather(
         num_digits=1,
         action="/voice/menu",
@@ -417,47 +414,37 @@ def voice_incoming():
               "Para ventas, marque uno. "
               "Para información de revista y distribución, marque dos. "
               "Para dejar un mensaje, quédese en la línea.",
-              voice=VOICE_TTS_VOICE, language=VOICE_LANG)
-
+              voice="Polly.Lupe-Neural", language="es-US")  # voz femenina natural (fallback)
     vr.say("No recibí una selección. Por favor, deje su mensaje después del tono. "
-           "Presione numeral para finalizar.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+           "Presione numeral para finalizar.", voice="Polly.Lupe-Neural", language="es-US")
     vr.record(max_length=120, play_beep=True, finish_on_key="#")
     vr.hangup()
     return Response(str(vr), mimetype="text/xml")
 
 @app.route("/voice/menu", methods=["POST"])
 def voice_menu():
-    """Procesa la selección del menú DTMF."""
     digit = request.values.get("Digits", "")
     vr = VoiceResponse()
-
     if digit == "1":
         vr.say("Gracias. Te comunicamos con ventas. En este momento todos nuestros asesores "
                "están ocupados. Deja tu mensaje y te regresamos la llamada.",
-               voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+               voice="Polly.Lupe-Neural", language="es-US")
         vr.record(max_length=120, play_beep=True, finish_on_key="#")
         vr.hangup()
     elif digit == "2":
         vr.say("Información de revista y distribución. Visita nuestra página o deja tu mensaje ahora.",
-               voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+               voice="Polly.Lupe-Neural", language="es-US")
         vr.record(max_length=120, play_beep=True, finish_on_key="#")
         vr.hangup()
     else:
         vr.redirect("/voice")
-
     return Response(str(vr), mimetype="text/xml")
 
 # =======================
-#  🧠 VOZ IA (Twilio + GPT con el mismo prompt del bot)
+#  🧠 VOZ IA (Twilio + GPT con el mismo prompt del bot) + OpenAI TTS (mujer, natural)
 # =======================
 @app.route("/voice/ai", methods=["GET", "POST"])
 def voice_ai():
-    """
-    Conversación por voz con IA:
-    - Reconoce voz (es-MX/es-US)
-    - Usa el system_prompt del bot (según To)
-    - Guarda historial en Firebase (mismo lead, numero = 'tel:+1786...')
-    """
     call_sid = request.values.get("CallSid", "")
     from_num = request.values.get("From", "")
     to_num = request.values.get("To", "")
@@ -465,9 +452,8 @@ def voice_ai():
 
     bot_cfg = _find_bot_for_to_number(to_num)
     if not bot_cfg:
-        # Si no hay configuración, caemos al IVR de cortesía
         vr = VoiceResponse()
-        vr.say("Lo siento, el sistema no está disponible en este momento.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        vr.say("Lo siento, el sistema no está disponible en este momento.", voice="Polly.Lupe-Neural", language="es-US")
         vr.hangup()
         return Response(str(vr), mimetype="text/xml")
 
@@ -481,72 +467,87 @@ def voice_ai():
 
     vr = VoiceResponse()
 
-    # Si no hay SpeechResult: saludar y pedir que hable
+    # 1) No hay voz todavía: saludo con TTS OpenAI y escuchamos
     if not speech:
         voice_attempts[call_sid] += 1
-        greeting = _voice_greeting(bot_cfg)
+        greeting = _voice_greeting(bot_cfg)  # “Gracias por llamar a ... en Houston, Texas…”
+        audio_url = _tts_url_for_text(greeting)
         with vr.gather(
             input="speech",
             language=VOICE_LANG,
             action="/voice/ai",
             method="POST",
             speech_timeout="auto",
-            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, revista In Houston Texas"
+            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, Texas, In Houston Texas"
         ) as g:
-            g.say(greeting, voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+            if audio_url:
+                g.play(audio_url)
+            else:
+                g.say(greeting, voice="Polly.Lupe-Neural", language="es-US")
 
-        # Si ya intentamos 2 veces sin habla, pasamos a buzón
         if voice_attempts[call_sid] >= 2:
-            vr.say("No recibí audio. Por favor, deja tu mensaje después del tono. "
-                   "Presiona numeral para finalizar.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+            msg = "No recibí audio. Por favor, deja tu mensaje después del tono. Presiona numeral para finalizar."
+            url = _tts_url_for_text(msg)
+            if url:
+                vr.play(url)
+            else:
+                vr.say(msg, voice="Polly.Lupe-Neural", language="es-US")
             vr.record(max_length=120, play_beep=True, finish_on_key="#")
             vr.hangup()
         return Response(str(vr), mimetype="text/xml")
 
-    # Tenemos transcripción de voz del usuario
+    # 2) Tenemos transcripción del usuario -> GPT -> TTS -> loop
     print(f"👤 STT: {speech}")
     try:
-        # Crear/actualizar lead con el mensaje del usuario
         if not fb_get_lead(bot_name, lead_num):
             guardar_lead(bot_name, lead_num, speech)
         else:
             fb_append_historial(bot_name, lead_num, {"tipo": "user", "texto": speech, "hora": ahora})
 
-        # Construir contexto con historial + prompt del bot
         messages = _build_messages_from_firebase(bot_cfg, lead_num)
-        # Asegurar que el último mensaje del usuario (speech) esté en el contexto
         messages.append({"role": "user", "content": speech})
 
-        # Llamada a GPT
         completion = client.chat.completions.create(
             model="gpt-4o",
             messages=messages
         )
         respuesta = completion.choices[0].message.content.strip()
 
-        # Guardar respuesta del bot en Firebase
         fb_append_historial(bot_name, lead_num, {"tipo": "bot", "texto": respuesta, "hora": ahora})
 
-        print(f"🤖 TTS: {respuesta}")
+        # Responder con audio natural (OpenAI TTS)
+        url_resp = _tts_url_for_text(respuesta)
+        if url_resp:
+            vr.play(url_resp)
+        else:
+            vr.say(respuesta, voice="Polly.Lupe-Neural", language="es-US")
 
-        # Responder y volver a escuchar (loop)
-        vr.say(respuesta, voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        # Re-preguntar (loop) con TTS
+        follow = "¿Te ayudo con algo más?"
+        url_follow = _tts_url_for_text(follow)
         with vr.gather(
             input="speech",
             language=VOICE_LANG,
             action="/voice/ai",
             method="POST",
             speech_timeout="auto",
-            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, revista In Houston Texas"
+            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, Texas, In Houston Texas"
         ) as g:
-            g.say("¿Te ayudo con algo más?", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+            if url_follow:
+                g.play(url_follow)
+            else:
+                g.say(follow, voice="Polly.Lupe-Neural", language="es-US")
+
         return Response(str(vr), mimetype="text/xml")
 
     except Exception as e:
         print(f"❌ Error en VOICE-AI: {e}")
-        # Fallback a buzón si falla la IA
-        vr.say("Tuve un inconveniente procesando tu solicitud. "
-               "Por favor deja tu mensaje después del tono.", voice=VOICE_TTS_VOICE, language=VOICE_LANG)
+        msg = "Tuve un inconveniente procesando tu solicitud. Por favor deja tu mensaje después del tono."
+        url_err = _tts_url_for_text(msg)
+        if url_err:
+            vr.play(url_err)
+        else:
+            vr.say(msg, voice="Polly.Lupe-Neural", language="es-US")
         vr.record(max_length=120, play_beep=True, finish_on_key="#")
         vr.hangup()
         return Response(str(vr), mimetype="text/xml")
@@ -610,12 +611,9 @@ def whatsapp_bot():
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
-        # 🔹 Guardar respuesta del bot también en Firebase y espejo local
         try:
             ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
-
-            # espejo local
             if os.path.exists("leads.json"):
                 with open("leads.json", "r") as f:
                     leads = json.load(f)
@@ -657,13 +655,11 @@ def whatsapp_bot():
 def chat_general(bot, numero):
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-
     bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
-
     data = fb_get_lead(bot_normalizado, numero)
     historial = data.get("historial", [])
     if isinstance(historial, dict):
@@ -675,13 +671,11 @@ def chat_general(bot, numero):
 def chat_bot(bot, numero):
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-
     bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
-
     data = fb_get_lead(bot_normalizado, numero)
     historial = data.get("historial", [])
     if isinstance(historial, dict):
@@ -696,7 +690,6 @@ def chat_bot(bot, numero):
 def api_chat(bot, numero):
     if not session.get("autenticado"):
         return jsonify({"error": "No autenticado"}), 401
-
     bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return jsonify({"error": "Bot no encontrado"}), 404
@@ -747,33 +740,26 @@ def api_chat(bot, numero):
 # =======================
 @app.route("/api/delete_chat", methods=["POST"])
 def api_delete_chat():
-    # ✅ Autenticación
     if not session.get("autenticado"):
         return jsonify({"error": "No autenticado"}), 401
-
     data = request.get_json(silent=True) or {}
     bot_nombre = (data.get("bot") or "").strip()
     numero = (data.get("numero") or "").strip()
-
-    # Validación básica
     if not bot_nombre or not numero:
         return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
 
-    # Normalización/permiso
     bot_normalizado = _normalize_bot_name(bot_nombre)
     if not bot_normalizado:
         return jsonify({"error": "Bot no encontrado"}), 404
     if not _user_can_access_bot(bot_normalizado):
         return jsonify({"error": "No autorizado"}), 403
 
-    # 1) Borra en Firebase
     try:
         ref = _lead_ref(bot_normalizado, numero)
         ref.delete()
     except Exception as e:
         print(f"⚠️ No se pudo eliminar en Firebase: {e}")
 
-    # 2) Borra en espejo local leads.json (si existe)
     try:
         if os.path.exists("leads.json"):
             with open("leads.json", "r") as f:
@@ -824,15 +810,11 @@ def panel():
         if destino:
             return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
 
-    # ✅ Panel ahora carga desde Firebase
     leads_todos = fb_list_leads_all()
-
-    # Bots disponibles (nombre comercial) para el selector
     bots_disponibles = {}
     for cfg in bots_config.values():
         bots_disponibles[cfg["name"]] = cfg.get("business_name", cfg["name"])
 
-    # Filtro por bot si viene ?bot=Nombre
     bot_seleccionado = request.args.get("bot")
     if bot_seleccionado:
         bot_norm = _normalize_bot_name(bot_seleccionado) or bot_seleccionado
@@ -852,13 +834,8 @@ def logout():
 # =======================
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
-    """
-    Actualiza estado/nota del lead.
-    - Recibe numero_key como "<Bot>|<Numero>"
-    - Actualiza Firebase primero y luego el espejo local si existe.
-    """
     data = request.json or {}
-    numero_key = (data.get("numero") or "").strip()  # viene como "<bot>|<numero>"
+    numero_key = (data.get("numero") or "").strip()
     estado = (data.get("estado") or "").strip()
     nota = (data.get("nota") or "").strip()
 
@@ -868,20 +845,17 @@ def guardar_edicion():
     bot_nombre, numero = numero_key.split("|", 1)
     bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
 
-    # ✅ Actualizar en Firebase (fuente de verdad)
     try:
         ref = _lead_ref(bot_normalizado, numero)
         current = ref.get() or {}
         current["status"] = estado or current.get("status", "nuevo")
         current["notes"] = nota if nota != "" else current.get("notes", "")
-        # asegurar campos mínimos
         current.setdefault("bot", bot_normalizado)
         current.setdefault("numero", numero)
         ref.set(current)
     except Exception as e:
         print(f"⚠️ No se pudo actualizar en Firebase: {e}")
 
-    # 🔁 Espejo local si existe
     try:
         if os.path.exists("leads.json"):
             with open("leads.json", "r") as f:
@@ -891,7 +865,6 @@ def guardar_edicion():
                 if nota != "":
                     leads[numero_key]["notes"] = nota
             else:
-                # crear si no existe en espejo
                 leads[numero_key] = {
                     "bot": bot_normalizado,
                     "numero": numero,
@@ -913,10 +886,7 @@ def guardar_edicion():
 def exportar():
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
-
-    # ✅ Exporta desde Firebase
     leads = fb_list_leads_all()
-
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(["Bot", "Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
@@ -931,7 +901,6 @@ def exportar():
             datos.get("status", ""),
             datos.get("notes", "")
         ])
-
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
