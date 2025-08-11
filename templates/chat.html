@@ -26,26 +26,29 @@
       color: var(--ink);
     }
 
+    /* Fondo fijo */
     .app{
       min-height:100vh;
       display:flex;
       flex-direction:column;
+      background-image: url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
+      background-size: cover;
+      background-position: center top;
+      background-repeat: no-repeat;
+      background-attachment: fixed; /* estático */
     }
 
+    /* Efecto overlay para legibilidad */
     .app::before{
       content: "";
       position: fixed;
       inset: 0;
-      pointer-events: none;
       z-index: 0;
+      pointer-events: none;
       background:
         radial-gradient(900px 600px at 18% 26%, rgba(0,0,0,.22), transparent 58%),
         radial-gradient(900px 600px at 84% 76%, rgba(0,0,0,.22), transparent 58%),
-        rgba(0,0,0,.06),
-        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
-      background-size: cover;
-      background-position: center top;
-      background-repeat: no-repeat;
+        rgba(0,0,0,.06);
     }
 
     .topbar{
@@ -81,6 +84,8 @@
       font-weight: 900;
       text-decoration:none;
       box-shadow: var(--shadow-soft), var(--shadow-light);
+      position: relative;
+      z-index: 1;
     }
 
     .chip-bot{
@@ -94,13 +99,16 @@
       text-transform: uppercase;
       box-shadow: var(--shadow-chip);
       min-width: 42%;
+      position: relative;
+      z-index: 1;
     }
 
     .chat{
       flex:1; overflow-y:auto;
       padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px);
-      position: relative;
       background: transparent;
+      position: relative;
+      z-index: 1;
     }
 
     .stack{ display:flex; flex-direction:column; gap:28px; position: relative; z-index: 1; }
