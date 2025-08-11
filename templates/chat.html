@@ -7,147 +7,278 @@
   <meta name="theme-color" content="#F7BD02" />
   <style>
     :root{
-      --brand:#F7BD02;
-      --ink:#000000;
-      --paper:#FFFFFF;
-      --radius:15px;
-      --shadow-strong: 0 20px 40px rgba(0,0,0,.35);
-      --shadow-soft: 0 12px 24px rgba(0,0,0,.20);
-      --shadow-chip: 0 14px 26px rgba(0,0,0,.30);
-      --shadow-light: 0 6px 12px rgba(255,255,255,.25) inset;
+      --brand:#F7BD02;        /* Amarillo IN */
+      --brand-2:#E3AE00;      /* Amarillo más oscuro */
+      --ink:#0B0B0B;          /* Negro profundo */
+      --paper:#FFFFFF;        /* Blanco */
+      --muted:#F6F6F6;        /* Gris claro */
+      --muted-2:#EDEDED;      /* Gris medio */
+      --radius:16px;
+      --radius-lg:22px;
+      --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
+      --shadow-md: 0 16px 28px rgba(0,0,0,.22);
+      --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
+      --line: rgba(255,255,255,.14);
+      --line-dark: rgba(0,0,0,.16);
     }
 
     *{ box-sizing:border-box; }
     html,body{
       margin:0; padding:0; height:100%;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      background: var(--brand);
       color: var(--ink);
+      background: #0e0e0e;
     }
 
+    /* ====== LAYERS: Fondo fijo con textura, marco, cintas de marca ====== */
     .app{
       min-height:100vh;
       display:flex;
       flex-direction:column;
+      position: relative;
+      isolation: isolate; /* crea nuevo stacking context para capas */
     }
 
+    /* Capa 1: imagen de fondo + textura + viñetas (FIJA) */
     .app::before{
-      content: "";
+      content:"";
+      position: fixed; /* clave: no se mueve con el scroll */
+      inset: 0;
+      z-index: -3;
+      pointer-events:none;
+      background:
+        /* Vignette suave para legibilidad en bordes */
+        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
+        /* Dots micro sutiles */
+        radial-gradient(circle at 25% 25%, rgba(255,255,255,.06) 1px, transparent 1.5px) 0 0/22px 22px,
+        radial-gradient(circle at 75% 75%, rgba(0,0,0,.12) 1px, transparent 1.5px) 0 0/22px 22px,
+        /* Líneas diagonales finas */
+        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px),
+        /* Imagen de fondo */
+        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
+      background-size: cover, cover, 22px 22px, 22px 22px, 20px 20px, cover;
+      background-position: center top, center top, center, center, center, center top;
+      background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
+      filter: saturate(1) contrast(1);
+    }
+
+    /* Capa 2: marco/“card” sobre el fondo, con sombra y borde brillante */
+    .app::after{
+      content:"";
+      position: fixed;
+      inset: clamp(8px, 2vw, 16px);
+      border-radius: var(--radius-lg);
+      z-index: -2;
+      pointer-events:none;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
+        linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
+      border: 1px solid transparent;
+      box-shadow: var(--shadow-xl);
+    }
+
+    /* Capa 3: cintas diagonales de marca muy sutiles */
+    .brand-ribbon{
       position: fixed;
       inset: 0;
+      z-index: -1;
       pointer-events: none;
-      z-index: 0;
-      background:
-        radial-gradient(900px 600px at 18% 26%, rgba(0,0,0,.22), transparent 58%),
-        radial-gradient(900px 600px at 84% 76%, rgba(0,0,0,.22), transparent 58%),
-        rgba(0,0,0,.06),
-        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
-      background-size: cover;
-      background-position: center top;
-      background-repeat: no-repeat;
     }
+    .brand-ribbon::before,
+    .brand-ribbon::after{
+      content:"";
+      position: absolute;
+      left: -10%;
+      right: -10%;
+      height: 10px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25));
+      opacity:.65;
+    }
+    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
+    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
+    /* ====== TOP BAR ====== */
     .topbar{
-      position:sticky; top:0; z-index:50;
-      background: var(--ink);
+      position:sticky; top:0; z-index:5;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        rgba(10,10,10,.82);
+      backdrop-filter: blur(6px);
       color:#fff;
       padding: calc(env(safe-area-inset-top) + 12px) 16px 14px;
       text-align:center;
       font-weight: 900;
-      letter-spacing:.3px;
+      letter-spacing:.35px;
       font-size: 26px;
       text-transform: uppercase;
-      box-shadow: 0 2px 10px rgba(0,0,0,.35);
+      border-bottom: 1px solid rgba(255,255,255,.18);
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
+    /* ====== ACTIONS ====== */
     .actions{
       position:sticky; 
-      top: calc(env(safe-area-inset-top) + 65px); 
-      z-index:40;
+      top: calc(env(safe-area-inset-top) + 65px);
+      z-index:4;
       display:flex; align-items:center; justify-content:space-between; gap:15px;
-      padding: 0px 18px 10px;
-      background: transparent;
-      border-bottom: 1px solid rgba(0,0,0,.28);
+      padding: 10px 18px 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
+      border-bottom: 1px solid rgba(255,255,255,.16);
+      backdrop-filter: blur(4px);
     }
 
     .btn-back{
       display:inline-flex; align-items:center; gap:12px;
-      background: var(--paper);
+      background:
+        linear-gradient(180deg, #fff, #f1f1f1) padding-box,
+        linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      padding: 16px 22px;
-      border-radius: var(--radius);
+      padding: 14px 20px;
+      border-radius: 14px;
+      border: 1px solid transparent;
       font-weight: 900;
       text-decoration:none;
-      box-shadow: var(--shadow-soft), var(--shadow-light);
+      box-shadow: var(--shadow-sm);
+      transition: transform .06s ease, box-shadow .2s ease, filter .2s ease;
     }
+    .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
 
     .chip-bot{
       display:flex; align-items:center; justify-content:center;
       flex:1;
-      background: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        #0e0e0e;
       color: var(--brand);
-      padding: 16px 22px;
-      border-radius: var(--radius);
+      padding: 14px 20px;
+      border-radius: 14px;
       font-weight: 900;
       text-transform: uppercase;
-      box-shadow: var(--shadow-chip);
+      box-shadow: var(--shadow-sm);
       min-width: 42%;
+      border: 1px solid rgba(255,255,255,.14);
+      text-shadow: 0 2px 0 rgba(0,0,0,.35);
     }
 
+    /* ====== CHAT SCROLLER (único que se mueve) ====== */
     .chat{
-      flex:1; overflow-y:auto;
-      padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px);
+      flex:1 1 auto;
       position: relative;
-      background: transparent;
+      z-index: 1;
+      overflow-y: auto;                 /* SOLO aquí hay scroll */
+      -webkit-overflow-scrolling: touch;/* iOS smooth */
+      padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
     }
 
-    .stack{ display:flex; flex-direction:column; gap:28px; position: relative; z-index: 1; }
+    /* Decor: reglas sutiles y grid dentro del área de chat (parallax leve) */
+    .chat::before{
+      content:"";
+      position:absolute; inset:0;
+      z-index:0; pointer-events:none;
+      background:
+        /* líneas horizontales sutiles */
+        linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
+        /* líneas verticales sutiles */
+        linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
+      mix-blend-mode: overlay;
+      opacity:.55;
+    }
 
+    .stack{
+      position: relative; z-index:1;
+      display:flex; flex-direction:column; gap:24px;
+      padding: 6px;
+    }
+
+    /* ====== BUBBLES con detalles: bordes, brillo, sombras, top tab ====== */
     .bubble{
-      max-width: 90%;
-      padding: 22px 24px;
-      border-radius: var(--radius);
-      font-size: 17px;
-      line-height: 1.5;
-      box-shadow: var(--shadow-strong);
+      max-width: 92%;
+      padding: 18px 20px;
+      border-radius: 18px;
+      font-size: 16.5px;
+      line-height: 1.55;
+      box-shadow: var(--shadow-md);
+      position: relative;
+      border: 1px solid rgba(0,0,0,.08);
     }
 
-    /* NUEVOS ESTILOS PARA EFECTO SATINADO */
+    /* Pequeña “pestaña” superior como tarjeta */
+    .bubble::before{
+      content:"";
+      position:absolute; left: 22px; top: -8px;
+      width: 46px; height: 12px; border-radius: 8px;
+      background: linear-gradient(180deg, rgba(0,0,0,.09), rgba(255,255,255,.18));
+      border: 1px solid rgba(0,0,0,.08);
+      filter: blur(.2px);
+    }
+
+    /* Brillo lateral sutil */
+    .bubble::after{
+      content:"";
+      position:absolute; inset:0;
+      border-radius: 18px;
+      pointer-events:none;
+      background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
+      mix-blend-mode: screen;
+    }
+
+    /* Bot (oscura con borde ámbar) */
     .bot{
       align-self: flex-start;
-      background: linear-gradient(145deg, #1f1f1f, #000000);
-      color: var(--paper);
-      box-shadow: 0 10px 20px rgba(0,0,0,.45),
-                  0 0 15px rgba(255,255,255,.2) inset;
+      color: #fefefe;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)),
+        #111315;
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow:
+        0 0 0 1px rgba(247,189,2,.28) inset,
+        var(--shadow-md);
     }
+
+    /* User (clara con borde y sombra interior) */
     .user{
       align-self: flex-end;
-      background: linear-gradient(145deg, #f0f0f0, #ffffff);
-      color: var(--ink);
-      box-shadow: 0 10px 20px rgba(0,0,0,.2),
-                  0 0 15px rgba(255,255,255,.6) inset;
+      background:
+        linear-gradient(180deg, #fff, #f7f7f7);
+      color: #151515;
+      border: 1px solid rgba(0,0,0,.08);
+      box-shadow:
+        0 1px 0 rgba(255,255,255,.8) inset,
+        var(--shadow-md);
+    }
+
+    /* Conectores decorativos tipo timeline (opcional, aporta detalle) */
+    .stack > .bot + .bot::before,
+    .stack > .user + .user::before{
+      width: 72px;
+      background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(0,0,0,.12));
+      opacity:.9;
     }
 
     @media (max-width:480px){
-      .topbar{ font-size:24px; }
-      .btn-back, .chip-bot{ padding: 14px 18px; }
-      .bubble{ font-size:16px; padding:20px 22px; }
+      .topbar{ font-size:22px; }
+      .btn-back, .chip-bot{ padding: 12px 16px; }
+      .bubble{ font-size:15.5px; padding:16px 18px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
+    <!-- Cintas de marca sutiles -->
+    <div class="brand-ribbon" aria-hidden="true"></div>
+
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
     <div class="actions">
-      <a class="btn-back" href="{{ url_for('panel') }}">
-        ⟵ VOLVER
-      </a>
+      <a class="btn-back" href="{{ url_for('panel') }}">⟵ VOLVER</a>
       <div class="chip-bot">{{ bot or 'SARA' }}</div>
     </div>
 
+    <!-- ÚNICO contenedor que hace scroll -->
     <main id="chat" class="chat" data-bot="{{ bot }}" data-numero="{{ numero }}">
       <div class="stack" id="stack">
         {% for msg in mensajes %}
@@ -224,6 +355,7 @@
               appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
             if (userNearBottom) scrollToBottom(true);
+
             if (typeof data.last_ts === 'number' && data.last_ts > lastTs){
               lastTs = data.last_ts;
             } else {
@@ -231,7 +363,7 @@
               if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        }catch(e){}
+        }catch(e){ /* silencio */ }
       }
 
       tick();
