@@ -543,7 +543,7 @@ def api_delete_chat():
     numero = (data.get("numero") or "").strip()
 
     # Validación básica
-    if not bot_nombre o not numero:
+    if not bot_nombre or not numero:
         return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
 
     # Normalización/permiso
