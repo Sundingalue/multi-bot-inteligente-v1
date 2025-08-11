@@ -114,25 +114,20 @@
       box-shadow: var(--shadow-strong);
     }
 
+    /* NUEVOS ESTILOS PARA EFECTO SATINADO */
     .bot{
       align-self: flex-start;
-      background: var(--ink);
+      background: linear-gradient(145deg, #1f1f1f, #000000);
       color: var(--paper);
-      /* NUEVO: ESTILO PARA LA TEXTURA */
-      background-image: url('https://www.transparenttextures.com/patterns/black-linen.png');
-      background-size: cover;
-      background-position: center;
-      background-blend-mode: overlay;
+      box-shadow: 0 10px 20px rgba(0,0,0,.45),
+                  0 0 15px rgba(255,255,255,.2) inset;
     }
     .user{
       align-self: flex-end;
-      background: var(--paper);
+      background: linear-gradient(145deg, #f0f0f0, #ffffff);
       color: var(--ink);
-      /* NUEVO: ESTILO PARA LA TEXTURA */
-      background-image: url('https://www.transparenttextures.com/patterns/black-linen.png');
-      background-size: cover;
-      background-position: center;
-      background-blend-mode: overlay;
+      box-shadow: 0 10px 20px rgba(0,0,0,.2),
+                  0 0 15px rgba(255,255,255,.6) inset;
     }
 
     @media (max-width:480px){
