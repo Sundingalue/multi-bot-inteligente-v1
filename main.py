@@ -1193,24 +1193,27 @@ def gsheets_test():
 # ======================================================
 #   💳 Facturación por consumo (Stripe)
 # ======================================================
-def _find_or_create_customer(email: str, name: str = None):
+def _find_or_create_customer(email: str = None, name: str = None, customer_id: str = None):
     """
-    Busca un Customer por email. Si no existe, lo crea.
-    Requiere STRIPE_API_KEY configurada.
+    - Si llega customer_id, lo usamos directo.
+    - Si no, buscamos/creamos por email.
     """
     if not STRIPE_API_KEY:
         raise RuntimeError("Falta STRIPE_API_KEY en variables de entorno.")
 
-    if not email:
-        raise ValueError("El parámetro 'email' es obligatorio para facturar.")
+    if customer_id:
+        return stripe.Customer.retrieve(customer_id)
 
-    # Intento 1: usar búsqueda nativa (si está disponible en la cuenta)
+    if not email:
+        raise ValueError("Debes enviar 'email' o 'customer_id'.")
+
+    # Intento 1: búsqueda nativa (si tu cuenta lo permite)
     try:
         res = stripe.Customer.search(query=f"email:'{email}'", limit=1)
         if res and getattr(res, "data", None):
             return res.data[0]
     except Exception:
-        # Fallback: listar algunos clientes y comparar email
+        # Fallback: listar y comparar email
         try:
             lst = stripe.Customer.list(limit=50)
             for c in lst.data:
@@ -1223,33 +1226,49 @@ def _find_or_create_customer(email: str, name: str = None):
     created = stripe.Customer.create(email=email, name=name or "")
     return created
 
+def _auth_or_test(req) -> bool:
+    """
+    Devuelve True si:
+      - hay sesión de admin (session['autenticado']), o
+      - llega X-Admin-Token con el BILLING_TEST_TOKEN de tu .env
+    """
+    if session.get("autenticado"):
+        return True
+    test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
+    header = (req.headers.get("X-Admin-Token") or "").strip()
+    return bool(test_token and header and header == test_token)
+
 @app.route("/billing/ping", methods=["GET"])
 def billing_ping():
-    return jsonify({"ok": True, "stripe_key_loaded": bool(STRIPE_API_KEY)})
+    """
+    Salud de facturación: útil para probar despliegue/Stripe.
+    No requiere auth; solo informa estado.
+    """
+    return jsonify({
+        "ok": True,
+        "stripe_key_loaded": bool(STRIPE_API_KEY),
+        "public_key_loaded": bool(STRIPE_PUBLIC_KEY),
+    }), 200
 
 @app.route("/billing/charge", methods=["POST"])
 def billing_charge():
     """
     Crea una factura y cobra automáticamente usando la tarjeta guardada del cliente.
-    Body JSON esperado:
+    Input (JSON):
     {
       "email": "cliente@ejemplo.com",   // obligatorio si no envías customer_id
-      "name": "Nombre del Cliente",     // opcional, ayuda al crear
+      "name": "Nombre del Cliente",     // opcional
       "customer_id": "cus_...",         // opcional; si lo envías, se usa directo
-      "amount": 12.34,                  // obligatorio (USD por defecto)
+      "amount": 12.34,                  // obligatorio (> 0)
       "currency": "usd",                // opcional
-      "description": "Consumo Twilio+GPT julio 2025"  // opcional
+      "description": "Consumo Twilio+GPT ..." // opcional
     }
-    Requiere sesión iniciada en el panel,
-    o bien el header X-Admin-Token con BILLING_TEST_TOKEN para pruebas con curl.
+    Autorización:
+      - Sesión iniciada, o
+      - Header: X-Admin-Token: <BILLING_TEST_TOKEN>
     """
-
-    # --- bypass temporal para pruebas con curl ---
-    test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
-    if not (test_token and request.headers.get("X-Admin-Token") == test_token):
-        if not session.get("autenticado"):
-            return jsonify({"error": "No autenticado"}), 401
-    # --- fin bypass ---
+    if not _auth_or_test(request):
+        return jsonify({"error": "No autenticado"}), 401
 
     if not STRIPE_API_KEY:
         return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
@@ -1273,10 +1292,7 @@ def billing_charge():
 
     try:
         # Resolver cliente
-        if customer_id:
-            customer = stripe.Customer.retrieve(customer_id)
-        else:
-            customer = _find_or_create_customer(email=email, name=name)
+        customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
 
         # Crear item de la factura
         stripe.InvoiceItem.create(
@@ -1286,7 +1302,7 @@ def billing_charge():
             description=description
         )
 
-        # Crear factura y cobrar automáticamente
+        # Crear factura para cobrar automáticamente
         invoice = stripe.Invoice.create(
             customer=customer.id,
             collection_method="charge_automatically",
@@ -1303,13 +1319,20 @@ def billing_charge():
             "invoice_id": paid.id,
             "status": paid.status,
             "hosted_invoice_url": paid.hosted_invoice_url
-        })
+        }), 200
+
+    except stripe.error.CardError as e:
+        # Tarjeta fue rechazada (solo en modo real con método de pago real)
+        return jsonify({"error": e.user_message or "Tarjeta rechazada"}), 402
     except stripe.error.StripeError as e:
-        print(f"❌ StripeError: {getattr(e, 'user_message', None) or str(e)}")
-        return jsonify({"error": getattr(e, "user_message", None) or str(e)}), 400
+        # Otros errores de Stripe
+        msg = e.user_message or str(e)
+        print(f"❌ StripeError: {msg}")
+        return jsonify({"error": msg}), 400
     except Exception as e:
         print(f"❌ Error facturación: {e}")
         return jsonify({"error": "No se pudo crear/cobrar la factura"}), 500
+
 
 # =======================
 #  Run
