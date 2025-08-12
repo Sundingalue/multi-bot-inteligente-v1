@@ -273,9 +273,23 @@
 
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
+    {# ==== LABEL DE COMPAÑÍA CON FALLBACKS SEGUROS ==== #}
+    {% set company_label = 'In Houston Texas' %}
+    {% if bot_data is defined and bot_data %}
+      {% if bot_data.business_name is defined and bot_data.business_name %}
+        {% set company_label = bot_data.business_name %}
+      {% elif bot_data.get is defined and bot_data.get('business_name') %}
+        {% set company_label = bot_data.get('business_name') %}
+      {% endif %}
+    {% elif company_name is defined and company_name %}
+      {% set company_label = company_name %}
+    {% elif bot is defined and bot %}
+      {% set company_label = bot %}
+    {% endif %}
+
     <div class="actions">
       <a class="btn-back" href="{{ url_for('panel') }}">⟵ VOLVER</a>
-      <div class="chip-bot">{{ bot_data.business_name or 'In Houston Texas' }}</div>
+      <div class="chip-bot">{{ company_label }}</div>
     </div>
 
     <!-- ÚNICO contenedor que hace scroll -->
