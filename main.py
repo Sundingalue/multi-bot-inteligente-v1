@@ -305,14 +305,14 @@ def fb_list_leads_by_bot(bot_nombre):
     for numero, data in numeros.items():
         clave = f"{bot_nombre}|{numero}"
         leads[clave] = {
-            "bot": bot_nombre,
-            "numero": numero,
-            "first_seen": data.get("first_seen", ""),
-            "last_message": data.get("last_message", ""),
-            "last_seen": data.get("last_seen", ""),
-            "messages": int(data.get("messages", 0)),
-            "status": data.get("status", "nuevo"),
-            "notes": data.get("notes", "")
+                "bot": bot_nombre,
+                "numero": numero,
+                "first_seen": data.get("first_seen", ""),
+                "last_message": data.get("last_message", ""),
+                "last_seen": data.get("last_seen", ""),
+                "messages": int(data.get("messages", 0)),
+                "status": data.get("status", "nuevo"),
+                "notes": data.get("notes", "")
         }
     return leads
 
@@ -598,7 +598,6 @@ def whatsapp_bot():
                 "¡Perfecto! Aquí puedes **agendar tu cita** directamente en mi Google Calendar:\n"
                 f"{CALENDAR_URL}\n\n"
                 "Elige el día y la hora que te convengan; recibirás confirmación automática. "
-            
             )
         else:
             texto_agenda = (
@@ -1224,6 +1223,10 @@ def _find_or_create_customer(email: str, name: str = None):
     created = stripe.Customer.create(email=email, name=name or "")
     return created
 
+@app.route("/billing/ping", methods=["GET"])
+def billing_ping():
+    return jsonify({"ok": True, "stripe_key_loaded": bool(STRIPE_API_KEY)})
+
 @app.route("/billing/charge", methods=["POST"])
 def billing_charge():
     """
@@ -1237,15 +1240,16 @@ def billing_charge():
       "currency": "usd",                // opcional
       "description": "Consumo Twilio+GPT julio 2025"  // opcional
     }
-    Requiere sesión iniciada en el panel (mismo control que tus otras rutas admin).
+    Requiere sesión iniciada en el panel,
+    o bien el header X-Admin-Token con BILLING_TEST_TOKEN para pruebas con curl.
     """
-    # --- bypass temporal para pruebas con curl ---
-test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
-if not (test_token and request.headers.get("X-Admin-Token") == test_token):
-    if not session.get("autenticado"):
-        return jsonify({"error": "No autenticado"}), 401
-# --- fin bypass ---
 
+    # --- bypass temporal para pruebas con curl ---
+    test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
+    if not (test_token and request.headers.get("X-Admin-Token") == test_token):
+        if not session.get("autenticado"):
+            return jsonify({"error": "No autenticado"}), 401
+    # --- fin bypass ---
 
     if not STRIPE_API_KEY:
         return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
@@ -1301,8 +1305,8 @@ if not (test_token and request.headers.get("X-Admin-Token") == test_token):
             "hosted_invoice_url": paid.hosted_invoice_url
         })
     except stripe.error.StripeError as e:
-        print(f"❌ StripeError: {e.user_message or str(e)}")
-        return jsonify({"error": e.user_message or str(e)}), 400
+        print(f"❌ StripeError: {getattr(e, 'user_message', None) or str(e)}")
+        return jsonify({"error": getattr(e, "user_message", None) or str(e)}), 400
     except Exception as e:
         print(f"❌ Error facturación: {e}")
         return jsonify({"error": "No se pudo crear/cobrar la factura"}), 500
