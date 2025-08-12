@@ -580,7 +580,7 @@ def whatsapp_bot():
                 "¡Perfecto! Aquí puedes **agendar tu cita** directamente en mi Google Calendar:\n"
                 f"{CALENDAR_URL}\n\n"
                 "Elige el día y la hora que te convengan; recibirás confirmación automática. "
-                "Si prefieres, dime tu disponibilidad y la programo por ti. 😊"
+            
             )
         else:
             texto_agenda = (
