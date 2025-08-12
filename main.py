@@ -18,6 +18,9 @@ from pathlib import Path
 import firebase_admin
 from firebase_admin import credentials, db
 
+# 🔹 Stripe (facturación)
+import stripe
+
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
 # =======================
@@ -26,6 +29,12 @@ load_dotenv()
 
 INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+# 🔑 Stripe keys
+STRIPE_API_KEY = os.getenv("STRIPE_API_KEY", "").strip()
+STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY", "").strip()
+if STRIPE_API_KEY:
+    stripe.api_key = STRIPE_API_KEY
 
 # 🔊 Config de voz
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
@@ -1181,6 +1190,117 @@ def gsheets_test():
         body=body
     ).execute()
     return "✅ Fila agregada a Google Sheets."
+
+# ======================================================
+#   💳 Facturación por consumo (Stripe)
+# ======================================================
+def _find_or_create_customer(email: str, name: str = None):
+    """
+    Busca un Customer por email. Si no existe, lo crea.
+    Requiere STRIPE_API_KEY configurada.
+    """
+    if not STRIPE_API_KEY:
+        raise RuntimeError("Falta STRIPE_API_KEY en variables de entorno.")
+
+    if not email:
+        raise ValueError("El parámetro 'email' es obligatorio para facturar.")
+
+    # Intento 1: usar búsqueda nativa (si está disponible en la cuenta)
+    try:
+        res = stripe.Customer.search(query=f"email:'{email}'", limit=1)
+        if res and getattr(res, "data", None):
+            return res.data[0]
+    except Exception:
+        # Fallback: listar algunos clientes y comparar email
+        try:
+            lst = stripe.Customer.list(limit=50)
+            for c in lst.data:
+                if (getattr(c, "email", "") or "").lower() == email.lower():
+                    return c
+        except Exception:
+            pass
+
+    # Crear si no existe
+    created = stripe.Customer.create(email=email, name=name or "")
+    return created
+
+@app.route("/billing/charge", methods=["POST"])
+def billing_charge():
+    """
+    Crea una factura y cobra automáticamente usando la tarjeta guardada del cliente.
+    Body JSON esperado:
+    {
+      "email": "cliente@ejemplo.com",   // obligatorio si no envías customer_id
+      "name": "Nombre del Cliente",     // opcional, ayuda al crear
+      "customer_id": "cus_...",         // opcional; si lo envías, se usa directo
+      "amount": 12.34,                  // obligatorio (USD por defecto)
+      "currency": "usd",                // opcional
+      "description": "Consumo Twilio+GPT julio 2025"  // opcional
+    }
+    Requiere sesión iniciada en el panel (mismo control que tus otras rutas admin).
+    """
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+
+    if not STRIPE_API_KEY:
+        return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
+
+    data = request.get_json(silent=True) or {}
+    currency = (data.get("currency") or "usd").lower()
+    description = data.get("description") or "Consumo mensual (Twilio + GPT)"
+    customer_id = (data.get("customer_id") or "").strip()
+    email = (data.get("email") or "").strip()
+    name = (data.get("name") or "").strip()
+
+    # Validar monto
+    try:
+        amount_float = float(data.get("amount"))
+        if amount_float <= 0:
+            raise ValueError()
+    except Exception:
+        return jsonify({"error": "Parámetro 'amount' inválido. Debe ser > 0."}), 400
+
+    amount_cents = int(round(amount_float * 100))
+
+    try:
+        # Resolver cliente
+        if customer_id:
+            customer = stripe.Customer.retrieve(customer_id)
+        else:
+            customer = _find_or_create_customer(email=email, name=name)
+
+        # Crear item de la factura
+        stripe.InvoiceItem.create(
+            customer=customer.id,
+            amount=amount_cents,
+            currency=currency,
+            description=description
+        )
+
+        # Crear factura y cobrar automáticamente
+        invoice = stripe.Invoice.create(
+            customer=customer.id,
+            collection_method="charge_automatically",
+            auto_advance=True
+        )
+
+        # Finalizar y cobrar
+        invoice = stripe.Invoice.finalize_invoice(invoice.id)
+        paid = stripe.Invoice.pay(invoice.id)
+
+        return jsonify({
+            "ok": True,
+            "customer_id": customer.id,
+            "invoice_id": paid.id,
+            "status": paid.status,
+            "hosted_invoice_url": paid.hosted_invoice_url
+        })
+    except stripe.error.StripeError as e:
+        print(f"❌ StripeError: {e.user_message or str(e)}")
+        return jsonify({"error": e.user_message or str(e)}), 400
+    except Exception as e:
+        print(f"❌ Error facturación: {e}")
+        return jsonify({"error": "No se pudo crear/cobrar la factura"}), 500
 
 # =======================
 #  Run
