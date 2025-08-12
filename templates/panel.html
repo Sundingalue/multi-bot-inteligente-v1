@@ -122,22 +122,34 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
 
-    .lead-card a {
+    .lead-link {
       color: var(--brand);
       font-weight: bold;
       text-decoration: none;
       font-size: 19px;
       word-break: break-all;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
     }
+    .lead-link:hover { text-decoration: underline; }
 
-    .lead-card a:hover {
-      text-decoration: underline;
+    /* Botón alias (editar nombre) */
+    .btn-alias{
+      border:none;
+      background:#2a2a2a;
+      color:#ffd54f;
+      font-weight:800;
+      padding: 4px 8px;
+      border-radius: 8px;
+      cursor:pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease;
     }
+    .btn-alias:hover{ background:#343434; }
+    .btn-alias:active{ transform: translateY(1px); box-shadow: 0 3px 8px rgba(0,0,0,.28); }
 
-    .lead-info {
-      margin-top: 10px;
-      font-size: 15px;
-    }
+    .lead-info { margin-top: 10px; font-size: 15px; }
 
     .lead-select {
       margin-top: 10px;
@@ -180,9 +192,7 @@
 
     /* En pantallas anchas, alineamos controles a los lados */
     @media (min-width: 720px){
-      .controls{
-        justify-content: space-between; /* selector a la izquierda, logout a la derecha */
-      }
+      .controls{ justify-content: space-between; }
     }
   </style>
 </head>
@@ -212,8 +222,12 @@
     {% if leads %}
       {% for clave, lead in leads.items() %}
         <div class="lead-card" data-key="{{ lead.bot }}|{{ lead.numero }}">
-          <!-- Se mantiene la ruta a chat_general -->
-          <a href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">{{ lead.numero }}</a>
+          <!-- Link al chat + alias editable -->
+          <a class="lead-link" href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">
+            <span class="lead-name" id="name-{{ loop.index0 }}">{{ lead.notes or lead.numero }}</span>
+          </a>
+          <button class="btn-alias" onclick="editarAlias('{{ lead.bot }}','{{ lead.numero }}','name-{{ loop.index0 }}','{{ (lead.notes or lead.numero)|e }}')" title="Editar nombre visible">✎</button>
+
           <div class="lead-info">📩 {{ lead.last_message }}</div>
           <div class="lead-info">📅 {{ lead.last_seen }}</div>
           <div class="lead-info">
@@ -225,7 +239,6 @@
             </select>
           </div>
 
-          <!-- 🗑️ Botón Borrar conversación -->
           <button class="btn-delete" onclick="borrarConversacion('{{ lead.bot }}','{{ lead.numero }}')">🗑️ Borrar conversación</button>
         </div>
       {% endfor %}
@@ -273,13 +286,11 @@
         }
         const out = await res.json();
         if(out && out.ok){
-          // Quitar la card del DOM
           const key = `${bot}|${numero}`;
           const selector = `.lead-card[data-key="${CSS.escape(key)}"]`;
           const card = document.querySelector(selector);
           if(card){ card.remove(); }
 
-          // Si ya no hay cards, muestra el aviso "no-leads"
           if(document.querySelectorAll('.lead-card').length === 0){
             const cont = document.querySelector('.container');
             const noLeads = document.createElement('div');
@@ -296,6 +307,35 @@
       }catch(e){
         console.error(e);
         alert('Error de red al borrar la conversación.');
+      }
+    }
+
+    // 🔹 Editar alias (nombre visible) y guardarlo en "notes"
+    async function editarAlias(bot, numero, spanId, valorActual){
+      const el = document.getElementById(spanId);
+      if(!el) return;
+      const nombre = prompt("Escribe el nombre que quieres mostrar en el panel:", valorActual || el.textContent.trim());
+      if (nombre === null) return; // cancelado
+
+      try{
+        const res = await fetch('/guardar-lead', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            numero: `${bot}|${numero}`,
+            estado: "",          // no cambiamos estado
+            nota: nombre.trim()  // guardamos alias en notes
+          })
+        });
+        const out = await res.json();
+        if(out && !out.error){
+          el.textContent = nombre.trim() || numero; // si vacío, vuelve a número
+        }else{
+          alert("No se pudo guardar el nombre.");
+        }
+      }catch(e){
+        console.error(e);
+        alert("Error de red guardando el nombre.");
       }
     }
   </script>
