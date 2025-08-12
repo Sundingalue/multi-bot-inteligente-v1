@@ -32,6 +32,9 @@ OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "verse")
 VOICE_LANG = os.getenv("VOICE_LANG", "es-US")
 
+# 🔗 Agenda (Google Calendar - enlace público)
+CALENDAR_URL = os.getenv("GOOGLE_CALENDAR_BOOKING_URL") or os.getenv("CALENDAR_URL", "").strip()
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
@@ -542,6 +545,13 @@ def verify_whatsapp():
     else:
         return "Token inválido", 403
 
+def _is_agenda(texto: str) -> bool:
+    if not texto:
+        return False
+    t = texto.strip().lower()
+    keywords = {"agenda", "agendar", "cita", "agendar cita", "agendar reunión", "agendar reunion"}
+    return any(k in t for k in keywords)
+
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
@@ -555,14 +565,76 @@ def whatsapp_bot():
         response.message("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
+    # Guarda el mensaje del usuario
     guardar_lead(bot["name"], sender_number, incoming_msg)
 
+    # Respuesta Twilio
+    response = MessagingResponse()
+    msg = response.message()
+
+    # ====== FLUJO AGENDA (Google Calendar) ======
+    if _is_agenda(incoming_msg):
+        print("FLOW:AGENDA", {"to": bot_number, "from": sender_number, "has_url": bool(CALENDAR_URL)})
+        if CALENDAR_URL:
+            texto_agenda = (
+                "¡Perfecto! Aquí puedes **agendar tu cita** directamente en mi Google Calendar:\n"
+                f"{CALENDAR_URL}\n\n"
+                "Elige el día y la hora que te convengan; recibirás confirmación automática. "
+                "Si prefieres, dime tu disponibilidad y la programo por ti. 😊"
+            )
+        else:
+            texto_agenda = (
+                "Puedo agendarte en Google Calendar. Por favor dime **dos opciones de día y hora** "
+                "y te envío la confirmación enseguida. (Tip: también puedes configurar la variable "
+                "`GOOGLE_CALENDAR_BOOKING_URL` en Render para compartir el enlace de agenda)."
+            )
+
+        msg.body(texto_agenda)
+
+        # Guardar respuesta del bot en Firebase + leads.json
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
+            if os.path.exists("leads.json"):
+                with open("leads.json", "r") as f:
+                    leads = json.load(f)
+            else:
+                leads = {}
+            clave = f"{bot['name']}|{sender_number}"
+            if clave not in leads:
+                leads[clave] = {
+                    "bot": bot["name"],
+                    "numero": sender_number,
+                    "first_seen": ahora_bot,
+                    "last_message": texto_agenda,
+                    "last_seen": ahora_bot,
+                    "messages": 1,
+                    "status": "nuevo",
+                    "notes": "",
+                    "historial": [{"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot}]
+                }
+            else:
+                leads[clave]["messages"] = int(leads[clave].get("messages", 0)) + 1
+                leads[clave]["last_message"] = texto_agenda
+                leads[clave]["last_seen"] = ahora_bot
+                leads[clave]["historial"].append({"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
+            with open("leads.json", "w") as f:
+                json.dump(leads, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
+
+        # Marcar actividad y follow-up
+        last_message_time[clave_sesion] = time.time()
+        if clave_sesion not in follow_up_flags:
+            follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+        return str(response)
+    # ====== FIN FLUJO AGENDA ======
+
+    # Sesión / saludo
     if clave_sesion not in session_history:
         session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
-
-    response = MessagingResponse()
-    msg = response.message()
 
     if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
         if bot["name"] == "Camila":
@@ -574,6 +646,7 @@ def whatsapp_bot():
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
         return str(response)
 
+    # Continuación normal (GPT)
     session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
     last_message_time[clave_sesion] = time.time()
     Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
