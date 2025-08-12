@@ -36,6 +36,11 @@ STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY", "").strip()
 if STRIPE_API_KEY:
     stripe.api_key = STRIPE_API_KEY
 
+# 💵 Precios configurables (por millón de tokens)
+OPENAI_PRICE_IN_PER_M = float(os.getenv("OPENAI_PRICE_IN_PER_M", "5"))     # USD / 1M input tokens
+OPENAI_PRICE_OUT_PER_M = float(os.getenv("OPENAI_PRICE_OUT_PER_M", "15"))  # USD / 1M output tokens
+BOT_MAINTENANCE_USD = float(os.getenv("BOT_MAINTENANCE_USD", "200"))
+
 # 🔊 Config de voz
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "verse")
@@ -444,6 +449,69 @@ def voice_menu():
 # =======================
 #  🧠 VOZ IA (Twilio + GPT) + OpenAI TTS
 # =======================
+def _log_gpt_usage(bot_name: str, who: str, model: str, usage_obj: dict, store_file: str = "billing_usage.json"):
+    """
+    Guarda acumulados por fecha (YYYY-MM), bot y contacto.
+    usage_obj esperado: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
+    """
+    try:
+        today = datetime.now()
+        period = today.strftime("%Y-%m")
+        record = {
+            "ts": today.strftime("%Y-%m-%d %H:%M:%S"),
+            "bot": bot_name,
+            "who": who,
+            "model": model,
+            "prompt_tokens": int(usage_obj.get("prompt_tokens", 0)),
+            "completion_tokens": int(usage_obj.get("completion_tokens", 0)),
+            "total_tokens": int(usage_obj.get("total_tokens", 0)),
+        }
+        data = {}
+        if os.path.exists(store_file):
+            with open(store_file, "r") as f:
+                data = json.load(f)
+        data.setdefault(period, [])
+        data[period].append(record)
+        with open(store_file, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ No pude registrar uso GPT: {e}")
+
+def _sum_gpt_cost(bot_name: str, date_from: datetime, date_to: datetime, store_file: str = "billing_usage.json"):
+    """
+    Lee billing_usage.json y suma tokens/costo para el bot y rango dado.
+    Retorna (prompt_tokens, completion_tokens, total_tokens, cost_usd)
+    """
+    prompt = completion = total = 0
+    if not os.path.exists(store_file):
+        return (0, 0, 0, 0.0)
+    try:
+        with open(store_file, "r") as f:
+            data = json.load(f)
+        # Recorremos todos los periodos por simplicidad
+        for period, rows in data.items():
+            for r in rows:
+                if r.get("bot") != bot_name:
+                    continue
+                ts_str = r.get("ts")
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    continue
+                if not (date_from <= ts <= date_to):
+                    continue
+                prompt += int(r.get("prompt_tokens", 0))
+                completion += int(r.get("completion_tokens", 0))
+                total += int(r.get("total_tokens", 0))
+        # Costos (por millón de tokens)
+        cost_in = (prompt / 1_000_000.0) * OPENAI_PRICE_IN_PER_M
+        cost_out = (completion / 1_000_000.0) * OPENAI_PRICE_OUT_PER_M
+        cost = round(cost_in + cost_out, 4)
+        return (prompt, completion, total, cost)
+    except Exception as e:
+        print(f"⚠️ Error sumando GPT: {e}")
+        return (prompt, completion, total, 0.0)
+
 @app.route("/voice/ai", methods=["GET", "POST"])
 def voice_ai():
     call_sid = request.values.get("CallSid", "")
@@ -511,6 +579,15 @@ def voice_ai():
             messages=messages
         )
         respuesta = completion.choices[0].message.content.strip()
+
+        # 🔢 Log de tokens/costo GPT (voz)
+        usage = getattr(completion, "usage", None)
+        if usage:
+            _log_gpt_usage(bot_name, lead_num, "gpt-4o", {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens
+            })
 
         fb_append_historial(bot_name, lead_num, {"tipo": "bot", "texto": respuesta, "hora": ahora})
 
@@ -674,6 +751,16 @@ def whatsapp_bot():
             messages=session_history[clave_sesion]
         )
         respuesta = completion.choices[0].message.content.strip()
+
+        # 🔢 Log de tokens/costo GPT (WhatsApp)
+        usage = getattr(completion, "usage", None)
+        if usage:
+            _log_gpt_usage(bot["name"], sender_number, "gpt-4o", {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens
+            })
+
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
@@ -1191,7 +1278,7 @@ def gsheets_test():
     return "✅ Fila agregada a Google Sheets."
 
 # ======================================================
-#   💳 Facturación por consumo (Stripe)
+#   💳 Facturación por consumo (Stripe) + Estimación
 # ======================================================
 def _find_or_create_customer(email: str = None, name: str = None, customer_id: str = None):
     """
@@ -1207,13 +1294,13 @@ def _find_or_create_customer(email: str = None, name: str = None, customer_id: s
     if not email:
         raise ValueError("Debes enviar 'email' o 'customer_id'.")
 
-    # Intento 1: búsqueda nativa (si tu cuenta lo permite)
+    # Intento 1: búsqueda nativa
     try:
         res = stripe.Customer.search(query=f"email:'{email}'", limit=1)
         if res and getattr(res, "data", None):
             return res.data[0]
     except Exception:
-        # Fallback: listar y comparar email
+        # Fallback: listar
         try:
             lst = stripe.Customer.list(limit=50)
             for c in lst.data:
@@ -1238,6 +1325,84 @@ def _auth_or_test(req) -> bool:
     header = (req.headers.get("X-Admin-Token") or "").strip()
     return bool(test_token and header and header == test_token)
 
+# ---------- Twilio usage helpers ----------
+def _twilio_client():
+    from twilio.rest import Client as TwilioClient
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    if not account_sid or not auth_token:
+        raise RuntimeError("Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN")
+    return TwilioClient(account_sid, auth_token)
+
+def _parse_date(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%d")
+
+def _sum_twilio_cost(bot_number: str, date_from: datetime, date_to: datetime):
+    """
+    Suma precios de mensajes y llamadas (from o to = bot_number) en el rango [date_from, date_to].
+    Retorna dict con desglose y total.
+    Nota: depende del campo price que expone Twilio (puede ser negativo en cargos).
+    """
+    try:
+        client_twilio = _twilio_client()
+    except Exception as e:
+        print(f"⚠️ No se pudo crear cliente Twilio: {e}")
+        return {
+            "messages": {"count": 0, "unit": "USD", "total": 0.0, "observacion": "Sin credenciales o sin acceso"},
+            "calls": {"count": 0, "unit": "USD", "total": 0.0, "observacion": "Sin credenciales o sin acceso"},
+            "total_usd": 0.0
+        }
+
+    # Ajuste de rangos (Twilio usa UTC en filtros)
+    start = date_from
+    end = date_to + timedelta(days=1)  # inclusivo hasta final del día
+
+    # Mensajes
+    msg_total = 0.0
+    msg_count = 0
+    try:
+        messages = client_twilio.messages.list(
+            date_sent_after=start,
+            date_sent_before=end
+        )
+        for m in messages:
+            if getattr(m, "from_", "") == bot_number or getattr(m, "to", "") == bot_number:
+                msg_count += 1
+                price = m.price  # puede ser string como "-0.00750"
+                if price is not None:
+                    try:
+                        msg_total += abs(float(price))
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"⚠️ Error listando mensajes Twilio: {e}")
+
+    # Llamadas
+    call_total = 0.0
+    call_count = 0
+    try:
+        calls = client_twilio.calls.list(
+            start_time_after=start,
+            start_time_before=end
+        )
+        for c in calls:
+            if getattr(c, "from_", "") == bot_number or getattr(c, "to", "") == bot_number:
+                call_count += 1
+                price = getattr(c, "price", None)
+                if price is not None:
+                    try:
+                        call_total += abs(float(price))
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"⚠️ Error listando llamadas Twilio: {e}")
+
+    return {
+        "messages": {"count": msg_count, "unit": "USD", "total": round(msg_total, 4)},
+        "calls": {"count": call_count, "unit": "USD", "total": round(call_total, 4)},
+        "total_usd": round(msg_total + call_total, 4)
+    }
+
 @app.route("/billing/ping", methods=["GET"])
 def billing_ping():
     """
@@ -1250,104 +1415,263 @@ def billing_ping():
         "public_key_loaded": bool(STRIPE_PUBLIC_KEY),
     }), 200
 
-@app.route("/billing/charge", methods=["POST"])
-def billing_charge():
+# ---------- NUEVO: Estimar consumo y devolver tabla ----------
+@app.route("/billing/estimate", methods=["POST"])
+def billing_estimate():
     """
-    Crea una factura y cobra automáticamente usando la tarjeta guardada del cliente.
-    Body JSON esperado:
+    Body JSON:
     {
-      "email": "cliente@ejemplo.com",   // obligatorio si no envías customer_id
-      "name": "Nombre del Cliente",     // opcional, ayuda al crear
-      "customer_id": "cus_...",         // opcional; si lo envías, se usa directo
-      "amount": 12.34,                  // obligatorio (USD por defecto)
-      "currency": "usd",                // opcional
-      "description": "Consumo Twilio+GPT julio 2025"  // opcional
+      "bot": "Sara",                       // obligatorio (nombre del bot en bots_config)
+      "from": "2025-08-01",                // obligatorio (YYYY-MM-DD)
+      "to": "2025-08-31",                  // obligatorio
+      "bot_number": "whatsapp:+13469882323", // opcional; si se omite se busca por nombre
+      "include_maint": true                // opcional, default true (200 USD)
     }
-    Requiere sesión iniciada en el panel, o el header X-Admin-Token para pruebas.
+    Respuesta: {"ok": true, "table": [...], "total_usd": X.YZ, "period": {"from": "...", "to": "..."}}
     """
-
-    # --- bypass opcional para pruebas con curl ---
-    test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
-    has_bypass = bool(test_token) and (request.headers.get("X-Admin-Token") == test_token)
-    if not has_bypass and not session.get("autenticado"):
+    if not _auth_or_test(request):
         return jsonify({"error": "No autenticado"}), 401
-    # --- fin bypass ---
+
+    data = request.get_json(silent=True) or {}
+    bot_name = (data.get("bot") or "").strip()
+    date_from_s = (data.get("from") or "").strip()
+    date_to_s = (data.get("to") or "").strip()
+    include_maint = bool(data.get("include_maint", True))
+
+    if not bot_name or not date_from_s or not date_to_s:
+        return jsonify({"error": "Parámetros requeridos: bot, from, to"}), 400
+
+    bot_cfg = _get_bot_cfg_by_name(bot_name)
+    if not bot_cfg:
+        return jsonify({"error": f"Bot '{bot_name}' no encontrado"}), 404
+
+    # Número Twilio del bot
+    bot_number = (data.get("bot_number") or "").strip()
+    if not bot_number:
+        # Buscar key en bots_config que tenga name == bot_name
+        for k, v in bots_config.items():
+            if v.get("name") == bot_name:
+                bot_number = k
+                break
+
+    try:
+        date_from = _parse_date(date_from_s)
+        date_to = _parse_date(date_to_s)
+    except Exception:
+        return jsonify({"error": "Formato de fechas inválido (use YYYY-MM-DD)"}), 400
+
+    # 1) Twilio: mensajes+llamadas
+    twilio = _sum_twilio_cost(bot_number, date_from, date_to)
+
+    # 2) GPT: tokens + costo
+    prompt, completion, total_tokens, gpt_cost = _sum_gpt_cost(bot_name, date_from, date_to)
+
+    # 3) Tabla formateada
+    table = [
+        {
+            "Concepto": "Consumo Twilio",
+            "Detalle": f"Msgs: {twilio['messages']['count']}, Calls: {twilio['calls']['count']} "
+                       f"(precio total: ${twilio['total_usd']})",
+            "Fuente": "API de Twilio"
+        },
+        {
+            "Concepto": "Consumo GPT",
+            "Detalle": f"Tokens (in/out/total): {prompt}/{completion}/{total_tokens}. "
+                       f"Precio total: ${gpt_cost} (in {OPENAI_PRICE_IN_PER_M}/M, out {OPENAI_PRICE_OUT_PER_M}/M)",
+            "Fuente": "Logs del bot (billing_usage.json)"
+        }
+    ]
+
+    total_usd = twilio["total_usd"] + gpt_cost
+
+    if include_maint:
+        table.append({
+            "Concepto": "Entrenamiento y mantenimiento del bot",
+            "Detalle": f"${BOT_MAINTENANCE_USD} USD fijos (mensual)",
+            "Fuente": "Sistema (opcional, se puede excluir)"
+        })
+        total_usd += BOT_MAINTENANCE_USD
+
+    return jsonify({
+        "ok": True,
+        "table": table,
+        "total_usd": round(total_usd, 2),
+        "period": {"from": date_from_s, "to": date_to_s},
+        "bot": bot_name,
+        "bot_number": bot_number
+    }), 200
+
+# ---------- NUEVO: Crear factura Stripe con partidas ----------
+@app.route("/billing/invoice", methods=["POST"])
+def billing_invoice():
+    """
+    Crea una factura en Stripe con los importes estimados.
+    Body JSON:
+    {
+      "email": "cliente@ejemplo.com",   // o "customer_id": "cus_..."
+      "name": "Nombre Cliente",         // opcional
+      "bot": "Sara",
+      "from": "2025-08-01",
+      "to": "2025-08-31",
+      "bot_number": "whatsapp:+13469882323", // opcional
+      "include_maint": true,            // default true
+      "currency": "usd"                 // default usd
+    }
+    Respuesta: { ok, customer_id, invoice_id, status, hosted_invoice_url, table, total_usd }
+    """
+    if not _auth_or_test(request):
+        return jsonify({"error": "No autenticado"}), 401
 
     if not STRIPE_API_KEY:
         return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
 
     data = request.get_json(silent=True) or {}
+    bot_name = (data.get("bot") or "").strip()
+    date_from_s = (data.get("from") or "").strip()
+    date_to_s = (data.get("to") or "").strip()
+    include_maint = bool(data.get("include_maint", True))
     currency = (data.get("currency") or "usd").lower()
-    description = data.get("description") or "Consumo mensual (Twilio + GPT)"
-    customer_id = (data.get("customer_id") or "").strip()
     email = (data.get("email") or "").strip()
     name = (data.get("name") or "").strip()
+    customer_id = (data.get("customer_id") or "").strip()
 
-    # Validar monto
+    if not bot_name or not date_from_s or not date_to_s:
+        return jsonify({"error": "Parámetros requeridos: bot, from, to"}), 400
+
+    bot_cfg = _get_bot_cfg_by_name(bot_name)
+    if not bot_cfg:
+        return jsonify({"error": f"Bot '{bot_name}' no encontrado"}), 404
+
+    # Número Twilio del bot
+    bot_number = (data.get("bot_number") or "").strip()
+    if not bot_number:
+        for k, v in bots_config.items():
+            if v.get("name") == bot_name:
+                bot_number = k
+                break
+
     try:
-        amount_float = float(data.get("amount"))
-        if amount_float <= 0:
-            raise ValueError()
+        date_from = _parse_date(date_from_s)
+        date_to = _parse_date(date_to_s)
     except Exception:
-        return jsonify({"error": "Parámetro 'amount' inválido. Debe ser > 0."}), 400
+        return jsonify({"error": "Formato de fechas inválido (use YYYY-MM-DD)"}), 400
 
-    amount_cents = int(round(amount_float * 100))
+    # 1) Estimaciones
+    twilio = _sum_twilio_cost(bot_number, date_from, date_to)
+    prompt, completion, total_tokens, gpt_cost = _sum_gpt_cost(bot_name, date_from, date_to)
+
+    # 2) Resolver cliente
+    try:
+        customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
+    except Exception as e:
+        return jsonify({"error": f"No se pudo resolver el cliente: {e}"}), 400
+
+        items = []
+    # Item Twilio
+    twilio_amount = round(twilio["total_usd"], 2)
+    items.append({
+        "description": f"Consumo Twilio ({date_from_s} a {date_to_s}) - msgs {twilio['messages']['count']}, calls {twilio['calls']['count']}",
+        "amount_usd": twilio_amount
+    })
+
+    # Item GPT
+    gpt_amount = round(gpt_cost, 2)
+    items.append({
+        "description": (f"Consumo GPT ({date_from_s} a {date_to_s}) - "
+                        f"tokens in/out/total: {prompt}/{completion}/{total_tokens}. "
+                        f"Tarifas: in ${OPENAI_PRICE_IN_PER_M}/M, out ${OPENAI_PRICE_OUT_PER_M}/M"),
+        "amount_usd": gpt_amount
+    })
+
+    # Item Mantenimiento (opcional)
+    if include_maint:
+        items.append({
+            "description": "Entrenamiento, codificación y mantenimiento del bot (mensual)",
+            "amount_usd": float(BOT_MAINTENANCE_USD)
+        })
+
+    # Tabla solicitada (para tu panel / UI)
+    table = [
+        {
+            "Concepto": "Consumo Twilio",
+            "Detalle": f"Mensajes: {twilio['messages']['count']}, Llamadas: {twilio['calls']['count']}. Precio total: ${twilio_amount}",
+            "Fuente": "API de Twilio"
+        },
+        {
+            "Concepto": "Consumo GPT",
+            "Detalle": (f"Tokens (in/out/total): {prompt}/{completion}/{total_tokens}. "
+                        f"Precio total: ${gpt_amount} (in ${OPENAI_PRICE_IN_PER_M}/M, out ${OPENAI_PRICE_OUT_PER_M}/M)"),
+            "Fuente": "Logs del bot (billing_usage.json)"
+        }
+    ]
+    total_usd = twilio_amount + gpt_amount
+
+    if include_maint:
+        table.append({
+            "Concepto": "Entrenamiento y mantenimiento del bot",
+            "Detalle": f"${BOT_MAINTENANCE_USD} USD fijos (mensual)",
+            "Fuente": "Sistema (opcional, se puede excluir)"
+        })
+        total_usd += float(BOT_MAINTENANCE_USD)
 
     try:
-        # Resolver cliente
-        if customer_id:
-            customer = stripe.Customer.retrieve(customer_id)
-        else:
-            customer = _find_or_create_customer(email=email, name=name)
+        # Crear/obtener cliente en Stripe
+        customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
 
-        # Crear item de la factura
-        stripe.InvoiceItem.create(
-            customer=customer.id,
-            amount=amount_cents,
-            currency=currency,
-            description=description
-        )
+        # Crear InvoiceItems (Stripe no acepta montos 0)
+        created_any = False
+        for it in items:
+            amount_cents = int(round(float(it["amount_usd"]) * 100))
+            if amount_cents <= 0:
+                continue
+            stripe.InvoiceItem.create(
+                customer=customer.id,
+                amount=amount_cents,
+                currency=currency,
+                description=it["description"]
+            )
+            created_any = True
 
-        # Crear factura (con cobro automático)
+        # Crear factura
         invoice = stripe.Invoice.create(
             customer=customer.id,
             collection_method="charge_automatically",
             auto_advance=True
         )
 
-        # Finalizar
+        # Finalizar y (si hace falta) cobrar
         invoice = stripe.Invoice.finalize_invoice(invoice.id)
-
-        # Refrescar estado (Stripe puede cobrar automáticamente al finalizar)
         invoice = stripe.Invoice.retrieve(invoice.id)
 
-        # Si ya está pagada, no intentes pagar otra vez
-        if invoice.status == "paid":
-            result = invoice
-        else:
-            # Si quedó 'open', intentamos pagar manualmente una sola vez
-            if invoice.status == "open":
-                result = stripe.Invoice.pay(invoice.id)
-            else:
-                # Cualquier otro estado lo devolvemos tal cual
-                result = invoice
+        if invoice.status == "open":
+            try:
+                invoice = stripe.Invoice.pay(invoice.id)
+            except Exception:
+                # Si no se pudo pagar (p.ej. no hay método de pago), dejamos la factura abierta
+                pass
 
         return jsonify({
             "ok": True,
             "customer_id": customer.id,
-            "invoice_id": result.id,
-            "status": result.status,
-            "hosted_invoice_url": result.hosted_invoice_url
-        })
+            "invoice_id": invoice.id,
+            "status": invoice.status,
+            "hosted_invoice_url": invoice.hosted_invoice_url,
+            "table": table,
+            "total_usd": round(total_usd, 2),
+            "period": {"from": date_from_s, "to": date_to_s},
+            "bot": bot_name,
+            "bot_number": bot_number,
+            "note": ("Si alguna partida quedó en $0, no se agregó a Stripe (regla de Stripe). "
+                     "Aun así, la tabla refleja el cálculo completo.")
+        }), 200
+
     except stripe.error.StripeError as e:
-        # Mensaje claro desde Stripe
         msg = getattr(e, "user_message", None) or str(e)
         print(f"❌ StripeError: {msg}")
-        return jsonify({"error": msg}), 400
+        return jsonify({"error": msg, "table": table, "total_usd": round(total_usd, 2)}), 400
     except Exception as e:
-        print(f"❌ Error facturación: {e}")
-        return jsonify({"error": "No se pudo crear/cobrar la factura"}), 500
-
+        print(f"❌ Error creando factura: {e}")
+        return jsonify({"error": "No se pudo crear la factura en Stripe", "table": table, "total_usd": round(total_usd, 2)}), 500
 
 
 # =======================
@@ -1355,4 +1679,5 @@ def billing_charge():
 # =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    # host 0.0.0.0 para Render
     app.run(host="0.0.0.0", port=port)
