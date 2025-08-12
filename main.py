@@ -1254,21 +1254,24 @@ def billing_ping():
 def billing_charge():
     """
     Crea una factura y cobra automáticamente usando la tarjeta guardada del cliente.
-    Input (JSON):
+    Body JSON esperado:
     {
       "email": "cliente@ejemplo.com",   // obligatorio si no envías customer_id
-      "name": "Nombre del Cliente",     // opcional
+      "name": "Nombre del Cliente",     // opcional, ayuda al crear
       "customer_id": "cus_...",         // opcional; si lo envías, se usa directo
-      "amount": 12.34,                  // obligatorio (> 0)
+      "amount": 12.34,                  // obligatorio (USD por defecto)
       "currency": "usd",                // opcional
-      "description": "Consumo Twilio+GPT ..." // opcional
+      "description": "Consumo Twilio+GPT julio 2025"  // opcional
     }
-    Autorización:
-      - Sesión iniciada, o
-      - Header: X-Admin-Token: <BILLING_TEST_TOKEN>
+    Requiere sesión iniciada en el panel, o el header X-Admin-Token para pruebas.
     """
-    if not _auth_or_test(request):
+
+    # --- bypass opcional para pruebas con curl ---
+    test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
+    has_bypass = bool(test_token) and (request.headers.get("X-Admin-Token") == test_token)
+    if not has_bypass and not session.get("autenticado"):
         return jsonify({"error": "No autenticado"}), 401
+    # --- fin bypass ---
 
     if not STRIPE_API_KEY:
         return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
@@ -1292,7 +1295,10 @@ def billing_charge():
 
     try:
         # Resolver cliente
-        customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
+        if customer_id:
+            customer = stripe.Customer.retrieve(customer_id)
+        else:
+            customer = _find_or_create_customer(email=email, name=name)
 
         # Crear item de la factura
         stripe.InvoiceItem.create(
@@ -1302,36 +1308,46 @@ def billing_charge():
             description=description
         )
 
-        # Crear factura para cobrar automáticamente
+        # Crear factura (con cobro automático)
         invoice = stripe.Invoice.create(
             customer=customer.id,
             collection_method="charge_automatically",
             auto_advance=True
         )
 
-        # Finalizar y cobrar
+        # Finalizar
         invoice = stripe.Invoice.finalize_invoice(invoice.id)
-        paid = stripe.Invoice.pay(invoice.id)
+
+        # Refrescar estado (Stripe puede cobrar automáticamente al finalizar)
+        invoice = stripe.Invoice.retrieve(invoice.id)
+
+        # Si ya está pagada, no intentes pagar otra vez
+        if invoice.status == "paid":
+            result = invoice
+        else:
+            # Si quedó 'open', intentamos pagar manualmente una sola vez
+            if invoice.status == "open":
+                result = stripe.Invoice.pay(invoice.id)
+            else:
+                # Cualquier otro estado lo devolvemos tal cual
+                result = invoice
 
         return jsonify({
             "ok": True,
             "customer_id": customer.id,
-            "invoice_id": paid.id,
-            "status": paid.status,
-            "hosted_invoice_url": paid.hosted_invoice_url
-        }), 200
-
-    except stripe.error.CardError as e:
-        # Tarjeta fue rechazada (solo en modo real con método de pago real)
-        return jsonify({"error": e.user_message or "Tarjeta rechazada"}), 402
+            "invoice_id": result.id,
+            "status": result.status,
+            "hosted_invoice_url": result.hosted_invoice_url
+        })
     except stripe.error.StripeError as e:
-        # Otros errores de Stripe
-        msg = e.user_message or str(e)
+        # Mensaje claro desde Stripe
+        msg = getattr(e, "user_message", None) or str(e)
         print(f"❌ StripeError: {msg}")
         return jsonify({"error": msg}), 400
     except Exception as e:
         print(f"❌ Error facturación: {e}")
         return jsonify({"error": "No se pudo crear/cobrar la factura"}), 500
+
 
 
 # =======================
