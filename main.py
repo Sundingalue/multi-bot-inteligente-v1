@@ -1239,8 +1239,13 @@ def billing_charge():
     }
     Requiere sesión iniciada en el panel (mismo control que tus otras rutas admin).
     """
+    # --- bypass temporal para pruebas con curl ---
+test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
+if not (test_token and request.headers.get("X-Admin-Token") == test_token):
     if not session.get("autenticado"):
         return jsonify({"error": "No autenticado"}), 401
+# --- fin bypass ---
+
 
     if not STRIPE_API_KEY:
         return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
