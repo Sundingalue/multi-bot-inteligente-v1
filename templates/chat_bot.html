@@ -152,12 +152,11 @@
       flex:1 1 auto;
       position: relative;
       z-index: 1;
-      overflow-y: auto;                 /* SOLO aquí hay scroll */
-      -webkit-overflow-scrolling: touch;/* iOS smooth */
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
     }
 
-    /* Decor dentro del área de chat: grid sutil */
     .chat::before{
       content:"";
       position:absolute; inset:0;
@@ -240,11 +239,25 @@
 
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
+    {# ==== LABEL DE COMPAÑÍA CON FALLBACKS ==== #}
+    {% set company_label = 'In Houston Texas' %}
+    {% if bot_data is defined and bot_data %}
+      {% if bot_data.business_name is defined and bot_data.business_name %}
+        {% set company_label = bot_data.business_name %}
+      {% elif bot_data.get is defined and bot_data.get('business_name') %}
+        {% set company_label = bot_data.get('business_name') %}
+      {% endif %}
+    {% elif company_name is defined and company_name %}
+      {% set company_label = company_name %}
+    {% elif bot is defined and bot %}
+      {% set company_label = bot %}
+    {% endif %}
+
     <div class="actions">
       <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">
         ⟵ VOLVER
       </a>
-      <div class="chip-bot">{{ bot or 'SARA' }}</div>
+      <div class="chip-bot">{{ company_label }}</div>
     </div>
 
     <!-- ÚNICO contenedor que hace scroll -->
