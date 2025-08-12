@@ -76,6 +76,15 @@ def _normalize_bot_name(name: str):
             return config["name"]
     return None
 
+def _get_bot_cfg_by_name(name: str):
+    """Devuelve la configuración completa del bot (dict) buscando por 'name'."""
+    if not name:
+        return None
+    for cfg in bots_config.values():
+        if isinstance(cfg, dict) and cfg.get("name", "").lower() == name.lower():
+            return cfg
+    return None
+
 def _find_bot_for_to_number(to_number_raw: str):
     if not to_number_raw:
         return next(iter(bots_config.values())) if bots_config else None
@@ -709,12 +718,25 @@ def chat_general(bot, numero):
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
+
+    # 🔸 Cargar config del bot para pasar business_name al template
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
     data = fb_get_lead(bot_normalizado, numero)
     historial = data.get("historial", [])
     if isinstance(historial, dict):
         historial = [historial[k] for k in sorted(historial.keys())]
     mensajes = [{"texto": r.get("texto",""), "hora": r.get("hora",""), "tipo": r.get("tipo","user")} for r in historial]
-    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
+
+    return render_template(
+        "chat.html",
+        numero=numero,
+        mensajes=mensajes,
+        bot=bot_normalizado,
+        bot_data=bot_cfg,
+        company_name=company_name
+    )
 
 @app.route("/conversacion_bot/<bot>/<numero>")
 def chat_bot(bot, numero):
@@ -725,12 +747,25 @@ def chat_bot(bot, numero):
         return "Bot no encontrado", 404
     if not _user_can_access_bot(bot_normalizado):
         return "No autorizado para este bot", 403
+
+    # 🔸 Cargar config del bot para pasar business_name al template
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
     data = fb_get_lead(bot_normalizado, numero)
     historial = data.get("historial", [])
     if isinstance(historial, dict):
         historial = [historial[k] for k in sorted(historial.keys())]
     mensajes = [{"texto": r.get("texto",""), "hora": r.get("hora",""), "tipo": r.get("tipo","user")} for r in historial]
-    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado)
+
+    return render_template(
+        "chat_bot.html",
+        numero=numero,
+        mensajes=mensajes,
+        bot=bot_normalizado,
+        bot_data=bot_cfg,
+        company_name=company_name
+    )
 
 # =======================
 #  API de polling (ahora lee Firebase)
