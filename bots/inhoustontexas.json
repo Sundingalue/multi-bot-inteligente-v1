@@ -15,7 +15,6 @@
       "always_question": true,
       "avoid_titles": true,
       "human_like": true,
-      "fallback_question": "¿Prefieres ver opciones o te cuento cómo funciona?",
       "probes": [
         "¿Te interesa más el alcance o los beneficios?",
         "¿Prefieres ver formatos o te cuento cómo funciona?",
