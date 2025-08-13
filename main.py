@@ -12,6 +12,7 @@ from io import StringIO
 import re
 import glob
 import random
+import hashlib
 
 # 🔹 Firebase
 import firebase_admin
@@ -24,12 +25,14 @@ load_dotenv("/etc/secrets/.env")
 load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or ""
-# Alias de URL de agenda (tomamos la que exista)
+
+# Alias de URL de agenda (tomamos la que exista) + Fallback fijo a tu link
 GOOGLE_CALENDAR_BOOKING_URL = os.environ.get("GOOGLE_CALENDAR_BOOKING_URL", "").strip()
 BOOKING_URL = (
     GOOGLE_CALENDAR_BOOKING_URL
     or os.environ.get("CALENDAR_BOOKING_URL", "").strip()
     or os.environ.get("BOOKING_URL", "").strip()
+    or "https://calendar.app.google/2PAh6A4Lkxw3qxLC9"  # ✅ Fallback definitivo
 )
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -65,19 +68,19 @@ bots_config = load_bots_folder()
 if not bots_config:
     print("⚠️ No se encontraron bots en ./bots/*.json")
 
-# Memorias por sesión
+# =======================
+#  Memorias por sesión (runtime)
+# =======================
 session_history = {}       # clave_sesion -> mensajes para OpenAI
 last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
-agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "booked": bool}
+agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": str}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 last_probe_used = {}       # clave_sesion -> índice de la última probe usada
 
 # =======================
 #  Helpers generales
 # =======================
-
-# ✅ Fallback genérico neutral (NO la frase antigua)
 GENERIC_FALLBACK_QUESTION = "¿Quieres que continúe con más detalles?"
 
 def _hora_to_epoch_ms(hora_str: str) -> int:
@@ -151,12 +154,10 @@ def _next_probe(clave_sesion: str, bot_cfg: dict) -> str:
     last_probe_used[clave_sesion] = idx
     return probes[idx]
 
-# ===== NUEVA VERSIÓN: asegura una sola pregunta y no añade si ya existe =====
 def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
     """
     Asegura que la respuesta termine con **una sola** pregunta.
-    - Si el texto ya contiene un signo de interrogación (?) en cualquier parte,
-      NO añade probes.
+    - Si el texto ya contiene '?', NO añade probes.
     - Si no contiene preguntas, añade UNA probe elegida por _next_probe.
     - Evita duplicar preguntas seguidas.
     """
@@ -165,13 +166,11 @@ def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
 
     txt = re.sub(r"\s+", " ", text).strip()
 
-    # Ya hay una pregunta en el contenido -> no agregamos nada
     if "?" in txt:
-        # Limpia casos raros: dos preguntas pegadas
+        # limpia casos con dos preguntas pegadas
         txt = re.sub(r"(\?\s*)(¿.+\?)", r"\1", txt)
         return txt
 
-    # No hay preguntas -> añadimos UNA probe elegida
     if not txt.endswith((".", "!", "…")):
         txt += "."
 
@@ -242,6 +241,31 @@ def _is_scheduled_confirmation(texto: str) -> bool:
         "listo", "done", "booked", "i booked", "i scheduled", "scheduled"
     ]
     return any(k in t for k in kws)
+
+# ===== Estado de agenda por sesión =====
+def _now(): return int(time.time())
+def _minutes_since(ts): return (_now() - int(ts or 0)) / 60.0
+def _hash_text(s: str) -> str: return hashlib.md5((s or "").strip().lower().encode("utf-8")).hexdigest()
+
+def _get_agenda(clave):
+    return agenda_state.get(clave) or {"awaiting_confirm": False, "status": "none", "last_update": 0, "last_link_time": 0, "last_bot_hash": ""}
+
+def _set_agenda(clave, **kw):
+    st = _get_agenda(clave)
+    st.update(kw)
+    st["last_update"] = _now()
+    agenda_state[clave] = st
+    return st
+
+def _can_send_link(clave, cooldown_min=10):
+    st = _get_agenda(clave)
+    if st.get("status") in ("link_sent", "confirmed") and _minutes_since(st.get("last_link_time")) < cooldown_min:
+        return False
+    return True
+
+def _already_confirmed_recently(clave, window_days=14):
+    st = _get_agenda(clave)
+    return st.get("status") == "confirmed" and _minutes_since(st.get("last_update")) < (window_days*24*60)
 
 # =======================
 #  Firebase: helpers de leads
@@ -571,38 +595,55 @@ def whatsapp_bot():
     # Guarda el mensaje del usuario
     guardar_lead(bot["name"], sender_number, incoming_msg)
 
-    # ====== FLUJO AGENDA con confirmación basada en JSON ======
-    st = agenda_state.get(clave_sesion, {"awaiting_confirm": False, "booked": False})
+    # ====== FLUJO AGENDA con confirmación, cooldown y antidupe ======
+    st = _get_agenda(clave_sesion)
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
-    # Prepara textos con reemplazo robusto del link
+
+    # Plantillas con reemplazo robusto del link (siempre tendrá URL por fallback)
     confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
-    link_tmpl = agenda_cfg.get("link_message") or f"Agenda aquí:\n{BOOKING_URL or 'https://calendar.app.google/2PAh6A4Lkxw3qxLC9'}"
+    link_tmpl = agenda_cfg.get("link_message") or f"Agenda aquí:\n{{GOOGLE_CALENDAR_BOOKING_URL}}"
     decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
-    closing_default = "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí."
+    closing_default = agenda_cfg.get("closing_message") or (
+        "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. "
+        "Si surge algo, escríbeme aquí."
+    )
     link_msg = _render_template(link_tmpl, {
         "GOOGLE_CALENDAR_BOOKING_URL": BOOKING_URL,
         "CALENDAR_BOOKING_URL": BOOKING_URL,
         "BOOKING_URL": BOOKING_URL
     })
 
-    # ✅ Enviar cierre SOLO cuando el usuario confirma, y luego resetear estado
+    # Confirmación: solo una vez por ventana (evita spam)
     if _is_scheduled_confirmation(incoming_msg):
-        closing = agenda_cfg.get("closing_message") or closing_default
-        msg.body(closing)
-        agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}  # reset
+        if not _already_confirmed_recently(clave_sesion, window_days=14):
+            closing = closing_default
+            # evita duplicar el mismo texto dos veces seguidas
+            if _hash_text(closing) != st.get("last_bot_hash"):
+                msg.body(closing)
+                _set_agenda(clave_sesion, status="confirmed", last_bot_hash=_hash_text(closing))
+            else:
+                msg.body("¡Súper! Si quieres, te comparto casos de éxito o te paso el brochure.")
+                _set_agenda(clave_sesion, status="confirmed")
+        else:
+            msg.body("¡Súper! ¿Te muestro beneficios o prefieres ver diseños?")
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
+    # Si está esperando confirmación del usuario para enviar link
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
-            # Mandamos SOLO el link y cerramos la espera (sin probes extra)
-            msg.body(link_msg if BOOKING_URL else "No tengo un enlace de agenda configurado. Por favor, consulta con soporte para configurar GOOGLE_CALENDAR_BOOKING_URL.")
-            try:
-                ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": link_msg, "hora": ahora_bot})
-            except Exception as e:
-                print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
-            agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}
+            if _can_send_link(clave_sesion, cooldown_min=10):
+                msg.body(link_msg)
+                _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent",
+                            last_link_time=_now(), last_bot_hash=_hash_text(link_msg))
+                try:
+                    ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": link_msg, "hora": ahora_bot})
+                except Exception as e:
+                    print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
+            else:
+                msg.body("Te envié el enlace hace un momento. ¿Quieres que te lo reenvíe o prefieres que te explique cómo funciona?")
+                _set_agenda(clave_sesion, awaiting_confirm=False)
             last_message_time[clave_sesion] = time.time()
             if clave_sesion not in follow_up_flags:
                 follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
@@ -610,7 +651,7 @@ def whatsapp_bot():
             return str(response)
         elif _is_negative(incoming_msg):
             msg.body(_ensure_question(bot, decline_msg, clave_sesion))
-            agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}
+            _set_agenda(clave_sesion, awaiting_confirm=False)
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
@@ -620,9 +661,10 @@ def whatsapp_bot():
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
 
+    # Usuario pide agendar (por keywords configurables del bot)
     if _wants_to_schedule(incoming_msg, bot):
         msg.body(_ensure_question(bot, confirm_q, clave_sesion))
-        agenda_state[clave_sesion] = {"awaiting_confirm": True, "booked": False}
+        _set_agenda(clave_sesion, awaiting_confirm=True)
         last_message_time[clave_sesion] = time.time()
         if clave_sesion not in follow_up_flags:
             follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
@@ -638,14 +680,16 @@ def whatsapp_bot():
         greeted_state[clave_sesion] = False
         last_probe_used[clave_sesion] = None
 
-    # Saludo inicial: solo una vez por conversación
     greeting_text = bot.get("greeting")
     intro_keywords = (bot.get("intro_keywords") or [
         "hola","hello","buenas","hey","buenos días","buenas tardes","buenas noches","quién eres","quien eres"
     ])
     if (not greeted_state.get(clave_sesion)) and any(w in incoming_msg.lower() for w in intro_keywords):
         if greeting_text:
-            msg.body(_ensure_question(bot, greeting_text, clave_sesion))
+            txt = _ensure_question(bot, greeting_text, clave_sesion)
+            # guarda hash para evitar duplicar saludo como respuesta del modelo
+            _set_agenda(clave_sesion, last_bot_hash=_hash_text(txt))
+            msg.body(txt)
             greeted_state[clave_sesion] = True
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
@@ -663,20 +707,18 @@ def whatsapp_bot():
         )
         respuesta = (completion.choices[0].message.content or "").strip()
 
-        # Estilo corto
+        # Estilo corto + última pregunta controlada
         respuesta = _apply_style(bot, respuesta)
-        # Forzar pregunta final (respetando "solo una")
         respuesta = _ensure_question(bot, respuesta, clave_sesion)
 
-        # Si por error el modelo repitió el saludo completo, lo evitamos tras el primer saludo
-        if greeted_state.get(clave_sesion) and greeting_text:
-            rx = re.escape(greeting_text.split("¿")[0].strip())
-            respuesta = re.sub(rf"^{rx}[\s,¡!.\-]*", "", respuesta, flags=re.IGNORECASE).strip()
-            if not respuesta:
-                respuesta = _ensure_question(bot, "Gracias por escribirme.", clave_sesion)
+        # Evita repetir exactamente la misma respuesta del bot dos veces seguidas
+        st = _get_agenda(clave_sesion)
+        if _hash_text(respuesta) == st.get("last_bot_hash"):
+            respuesta = _ensure_question(bot, "Te leo. ¿Prefieres ejemplos reales o ver opciones de tamaños?", clave_sesion)
 
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
+        _set_agenda(clave_sesion, last_bot_hash=_hash_text(respuesta))
 
         try:
             ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -842,4 +884,5 @@ def send_whatsapp_message(to_number, message, bot_number=None):
 # =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    print(f"[BOOT] BOOKING_URL={BOOKING_URL}")  # 🔎 Log para ver el enlace efectivo en Render
     app.run(host="0.0.0.0", port=port)
