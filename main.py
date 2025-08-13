@@ -24,7 +24,13 @@ load_dotenv("/etc/secrets/.env")
 load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or ""
+# Alias de URL de agenda (tomamos la que exista)
 GOOGLE_CALENDAR_BOOKING_URL = os.environ.get("GOOGLE_CALENDAR_BOOKING_URL", "").strip()
+BOOKING_URL = (
+    GOOGLE_CALENDAR_BOOKING_URL
+    or os.environ.get("CALENDAR_BOOKING_URL", "").strip()
+    or os.environ.get("BOOKING_URL", "").strip()
+)
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
@@ -41,8 +47,6 @@ if not firebase_admin._apps:
 
 # =======================
 #  Cargar bots desde carpeta bots/
-#  Cada archivo JSON puede tener uno o varios bots.
-#  Clave esperada: "whatsapp:+1XXXXXXXXXX": { ... }
 # =======================
 def load_bots_folder():
     bots = {}
@@ -73,7 +77,7 @@ last_probe_used = {}       # clave_sesion -> índice de la última probe usada
 #  Helpers generales
 # =======================
 
-# ✅ Fallback genérico neutral (nuevo)
+# ✅ Fallback genérico neutral (NO la frase antigua)
 GENERIC_FALLBACK_QUESTION = "¿Quieres que continúe con más detalles?"
 
 def _hora_to_epoch_ms(hora_str: str) -> int:
@@ -123,10 +127,10 @@ def _apply_style(bot_cfg: dict, text: str) -> str:
 
 def _next_probe(clave_sesion: str, bot_cfg: dict) -> str:
     """
-    Elige una 'probe' (pregunta breve) desde style.probes sin repetir la última.
+    Elige una 'probe' desde style.probes sin repetir la última.
     Si no hay probes:
       - usa style.fallback_question si existe y no está vacía
-      - de lo contrario usa un fallback genérico neutral (NO la frase antigua).
+      - si no, usa un genérico neutral.
     """
     style = (bot_cfg or {}).get("style", {}) or {}
     probes = style.get("probes") or []
@@ -174,6 +178,18 @@ def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
     probe = _next_probe(clave_sesion, bot_cfg)
     return f"{txt} {probe}"
 
+# ===== Render simple de placeholders tipo {NOMBRE} o {{NOMBRE}} =====
+def _render_template(text: str, variables: dict) -> str:
+    if not isinstance(text, str):
+        return ""
+    def repl(m):
+        key = m.group(1) or m.group(2) or ""
+        val = variables.get(key, "")
+        return val if isinstance(val, str) else str(val)
+    # Soporta {KEY} y {{KEY}}
+    pattern = re.compile(r"\{\{\s*([A-Z0-9_]+)\s*\}\}|\{\s*([A-Z0-9_]+)\s*\}")
+    return pattern.sub(repl, text)
+
 def _make_system_message(bot_cfg: dict) -> str:
     """Combina el system_prompt con un recordatorio de estilo breve y pregunta final."""
     base = (bot_cfg or {}).get("system_prompt", "") or ""
@@ -215,7 +231,7 @@ def _is_negative(texto: str) -> bool:
     neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues", "not now"}
     return any(t == n or t.startswith(n + " ") for n in neg)
 
-# ===== NUEVO: detector de confirmación de agendado =====
+# ===== Detector de confirmación de agendado =====
 def _is_scheduled_confirmation(texto: str) -> bool:
     if not texto:
         return False
@@ -558,26 +574,29 @@ def whatsapp_bot():
     # ====== FLUJO AGENDA con confirmación basada en JSON ======
     st = agenda_state.get(clave_sesion, {"awaiting_confirm": False, "booked": False})
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
-    # Prepara textos con reemplazo del link de calendario (ENV)
+    # Prepara textos con reemplazo robusto del link
     confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
     link_tmpl = agenda_cfg.get("link_message") or "Agenda aquí:\n{GOOGLE_CALENDAR_BOOKING_URL}"
     decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
     closing_default = "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí."
-    link_msg = link_tmpl.replace("{GOOGLE_CALENDAR_BOOKING_URL}", GOOGLE_CALENDAR_BOOKING_URL)
+    link_msg = _render_template(link_tmpl, {
+        "GOOGLE_CALENDAR_BOOKING_URL": BOOKING_URL,
+        "CALENDAR_BOOKING_URL": BOOKING_URL,
+        "BOOKING_URL": BOOKING_URL
+    })
 
-    # 🔒 Si el usuario dice "ya agendé / listo", cerramos sin más preguntas
-    if _is_scheduled_confirmation(incoming_msg) or st.get("booked"):
+    # ✅ Enviar cierre SOLO cuando el usuario confirma, y luego resetear estado
+    if _is_scheduled_confirmation(incoming_msg):
         closing = agenda_cfg.get("closing_message") or closing_default
         msg.body(closing)
-        agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": True}
+        agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}  # reset
         last_message_time[clave_sesion] = time.time()
-        # No lanzamos follow-ups cuando ya quedó agendada
         return str(response)
 
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
             # Mandamos SOLO el link y cerramos la espera (sin probes extra)
-            msg.body(link_msg)
+            msg.body(link_msg if BOOKING_URL else "No tengo un enlace de agenda configurado. Por favor, consulta con soporte para configurar GOOGLE_CALENDAR_BOOKING_URL.")
             try:
                 ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": link_msg, "hora": ahora_bot})
