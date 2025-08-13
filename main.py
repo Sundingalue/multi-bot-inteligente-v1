@@ -6,20 +6,13 @@ import os
 import json
 import time
 from threading import Thread
-from datetime import datetime, timedelta
+from datetime import datetime
 import csv
 from io import StringIO
-from twilio.twiml.voice_response import VoiceResponse
-import requests
-from hashlib import md5
-from pathlib import Path
 
 # 🔹 Firebase
 import firebase_admin
 from firebase_admin import credentials, db
-
-# 🔹 Stripe (facturación)
-import stripe
 
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
@@ -27,24 +20,7 @@ import stripe
 load_dotenv("/etc/secrets/.env")
 load_dotenv()
 
-INSTAGRAM_TOKEN = os.getenv("META_IG_ACCESS_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-# 🔑 Stripe keys
-STRIPE_API_KEY = os.getenv("STRIPE_API_KEY", "").strip()
-STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY", "").strip()
-if STRIPE_API_KEY:
-    stripe.api_key = STRIPE_API_KEY
-
-# 💵 Precios configurables (por millón de tokens)
-OPENAI_PRICE_IN_PER_M = float(os.getenv("OPENAI_PRICE_IN_PER_M", "5"))     # USD / 1M input tokens
-OPENAI_PRICE_OUT_PER_M = float(os.getenv("OPENAI_PRICE_OUT_PER_M", "15"))  # USD / 1M output tokens
-BOT_MAINTENANCE_USD = float(os.getenv("BOT_MAINTENANCE_USD", "200"))
-
-# 🔊 Config de voz
-OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "verse")
-VOICE_LANG = os.getenv("VOICE_LANG", "es-US")
 
 # 🔗 Agenda (Google Calendar - enlace público)
 CALENDAR_URL = os.getenv("GOOGLE_CALENDAR_BOOKING_URL") or os.getenv("CALENDAR_URL", "").strip()
@@ -58,7 +34,6 @@ app.secret_key = "supersecreto_sundin_panel_2025"
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
 firebase_db_url = os.getenv("FIREBASE_DB_URL", "https://inhouston-209c0-default-rtdb.firebaseio.com/")
-
 if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_key_path)
     firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
@@ -69,10 +44,10 @@ if not firebase_admin._apps:
 with open("bots_config.json", "r") as f:
     bots_config = json.load(f)
 
+# Memoria simple por sesión de chat (para WhatsApp)
 session_history = {}
 last_message_time = {}
 follow_up_flags = {}
-voice_attempts = {}
 
 # =======================
 #  Helpers generales
@@ -91,166 +66,12 @@ def _normalize_bot_name(name: str):
     return None
 
 def _get_bot_cfg_by_name(name: str):
-    """Devuelve la configuración completa del bot (dict) buscando por 'name'."""
     if not name:
         return None
     for cfg in bots_config.values():
         if isinstance(cfg, dict) and cfg.get("name", "").lower() == name.lower():
             return cfg
     return None
-
-def _find_bot_for_to_number(to_number_raw: str):
-    if not to_number_raw:
-        return next(iter(bots_config.values())) if bots_config else None
-
-    to_num = to_number_raw.strip()
-    if to_num in bots_config:
-        return bots_config[to_num]
-    if to_num.startswith("+"):
-        candidate = f"whatsapp:{to_num}"
-        if candidate in bots_config:
-            return bots_config[candidate]
-    if to_num.startswith("whatsapp:+"):
-        candidate = to_num.replace("whatsapp:", "")
-        if candidate in bots_config:
-            return bots_config[candidate]
-    return next(iter(bots_config.values())) if bots_config else None
-
-def _voice_greeting(bot_cfg):
-    negocio = bot_cfg.get("business_name", "nuestra empresa")
-    return f"Gracias por llamar a {negocio} en Houston, Texas. ¿En qué puedo ayudarte?"
-
-def _build_messages_from_firebase(bot_cfg, numero_tel: str):
-    messages = []
-    system_prompt = bot_cfg.get("system_prompt", "").strip()
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-
-    data = fb_get_lead(bot_cfg["name"], numero_tel)
-    historial = data.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-
-    for reg in historial[-16:]:
-        texto = reg.get("texto", "")
-        tipo = reg.get("tipo", "user")
-        role = "assistant" if tipo == "bot" else "user"
-        if texto:
-            messages.append({"role": role, "content": texto})
-    return messages
-
-# ========= OpenAI TTS (crear y servir MP3) =========
-def _tts_key_for_text(text: str) -> str:
-    return md5(text.encode("utf-8")).hexdigest()[:24]
-
-def _tts_file_path(key: str) -> Path:
-    return Path(f"/tmp/tts-{key}.mp3")
-
-def _make_tts_mp3(text: str) -> str:
-    key = _tts_key_for_text(text)
-    out_path = _tts_file_path(key)
-    if out_path.exists():
-        return key
-    try:
-        with client.audio.speech.with_streaming_response.create(
-            model=OPENAI_TTS_MODEL,
-            voice=OPENAI_TTS_VOICE,
-            input=text,
-            format="mp3"
-        ) as resp:
-            resp.stream_to_file(str(out_path))
-        return key
-    except Exception as e:
-        print(f"❌ Error generando TTS OpenAI: {e}")
-        return ""
-
-def _tts_url_for_text(text: str) -> str:
-    key = _make_tts_mp3(text)
-    if not key:
-        return ""
-    base = request.url_root.rstrip("/")
-    return f"{base}/tts?key={key}"
-
-@app.route("/tts", methods=["GET"])
-def serve_tts():
-    key = (request.args.get("key") or "").strip()
-    path = _tts_file_path(key)
-    if not key or not path.exists():
-        return "Not Found", 404
-    return send_file(str(path), mimetype="audio/mpeg")
-
-# =======================
-#  Gestión de usuarios (login)
-# =======================
-def _load_users():
-    env_users = {}
-    for key, val in os.environ.items():
-        if not key.startswith("USER_"):
-            continue
-        alias = key[len("USER_"):]
-        username = val.strip()
-        password = os.environ.get(f"PASS_{alias}", "").strip()
-        panel = os.environ.get(f"PANEL_{alias}", "").strip()
-        if not username or not password or not panel:
-            continue
-
-        if panel.lower() == "panel":
-            bots_list = ["*"]
-        elif panel.lower().startswith("panel-bot/"):
-            bot_name = panel.split("/", 1)[1].strip()
-            bots_list = [bot_name] if bot_name else []
-        else:
-            bots_list = []
-
-        if bots_list:
-            env_users[username] = {"password": password, "bots": bots_list}
-
-    if env_users:
-        return env_users
-
-    default_users = {"sundin": {"password": "inhouston2025", "bots": ["*"]}}
-    raw = os.getenv("PANEL_USERS_JSON")
-    if not raw:
-        return default_users
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return default_users
-        norm = {}
-        for user, rec in data.items():
-            pwd = rec.get("password") if isinstance(rec, dict) else None
-            bots = rec.get("bots") if isinstance(rec, dict) else None
-            if isinstance(pwd, str) and isinstance(bots, list) and bots:
-                norm[user] = {"password": pwd, "bots": bots}
-        return norm or default_users
-    except Exception as e:
-        print(f"⚠️ PANEL_USERS_JSON inválido: {e}")
-        return default_users
-
-def _auth_user(username, password):
-    users = _load_users()
-    rec = users.get(username)
-    if rec and rec.get("password") == password:
-        return {"username": username, "bots": rec.get("bots", [])}
-    return None
-
-def _is_admin():
-    bots = session.get("bots_permitidos", [])
-    return isinstance(bots, list) and ("*" in bots)
-
-def _first_allowed_bot():
-    bots = session.get("bots_permitidos", [])
-    if isinstance(bots, list):
-        for b in bots:
-            if b != "*":
-                return b
-    return None
-
-def _user_can_access_bot(bot_name):
-    if _is_admin():
-        return True
-    bots = session.get("bots_permitidos", [])
-    return bot_name in bots
 
 # =======================
 #  Firebase: helpers de leads
@@ -310,14 +131,14 @@ def fb_list_leads_by_bot(bot_nombre):
     for numero, data in numeros.items():
         clave = f"{bot_nombre}|{numero}"
         leads[clave] = {
-                "bot": bot_nombre,
-                "numero": numero,
-                "first_seen": data.get("first_seen", ""),
-                "last_message": data.get("last_message", ""),
-                "last_seen": data.get("last_seen", ""),
-                "messages": int(data.get("messages", 0)),
-                "status": data.get("status", "nuevo"),
-                "notes": data.get("notes", "")
+            "bot": bot_nombre,
+            "numero": numero,
+            "first_seen": data.get("first_seen", ""),
+            "last_message": data.get("last_message", ""),
+            "last_seen": data.get("last_seen", ""),
+            "messages": int(data.get("messages", 0)),
+            "status": data.get("status", "nuevo"),
+            "notes": data.get("notes", "")
         }
     return leads
 
@@ -342,28 +163,6 @@ def guardar_lead(bot_nombre, numero, mensaje):
             }
             _lead_ref(bot_nombre, numero).set(lead)
         fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
-
-        archivo = "leads.json"
-        if not os.path.exists(archivo):
-            with open(archivo, "w") as f:
-                json.dump({}, f, indent=4)
-        with open(archivo, "r") as f:
-            leads = json.load(f)
-        clave = f"{bot_nombre}|{numero}"
-        if clave not in leads:
-            leads[clave] = {
-                "bot": bot_nombre, "numero": numero,
-                "first_seen": ahora, "last_message": mensaje, "last_seen": ahora,
-                "messages": 1, "status": "nuevo", "notes": "",
-                "historial": [{"tipo": "user", "texto": mensaje, "hora": ahora}]
-            }
-        else:
-            leads[clave]["messages"] += 1
-            leads[clave]["last_message"] = mensaje
-            leads[clave]["last_seen"] = ahora
-            leads[clave]["historial"].append({"tipo": "user", "texto": mensaje, "hora": ahora})
-        with open(archivo, "w") as f:
-            json.dump(leads, f, indent=4)
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
 
@@ -375,6 +174,73 @@ def permitir_iframe(response):
 # =======================
 #  Rutas UI: Paneles
 # =======================
+def _load_users():
+    env_users = {}
+    for key, val in os.environ.items():
+        if not key.startswith("USER_"):
+            continue
+        alias = key[len("USER_"):]
+        username = val.strip()
+        password = os.environ.get(f"PASS_{alias}", "").strip()
+        panel = os.environ.get(f"PANEL_{alias}", "").strip()
+        if not username or not password or not panel:
+            continue
+        if panel.lower() == "panel":
+            bots_list = ["*"]
+        elif panel.lower().startswith("panel-bot/"):
+            bot_name = panel.split("/", 1)[1].strip()
+            bots_list = [bot_name] if bot_name else []
+        else:
+            bots_list = []
+        if bots_list:
+            env_users[username] = {"password": password, "bots": bots_list}
+    if env_users:
+        return env_users
+
+    default_users = {"sundin": {"password": "inhouston2025", "bots": ["*"]}}
+    raw = os.getenv("PANEL_USERS_JSON")
+    if not raw:
+        return default_users
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return default_users
+        norm = {}
+        for user, rec in data.items():
+            pwd = rec.get("password") if isinstance(rec, dict) else None
+            bots = rec.get("bots") if isinstance(rec, dict) else None
+            if isinstance(pwd, str) and isinstance(bots, list) and bots:
+                norm[user] = {"password": pwd, "bots": bots}
+        return norm or default_users
+    except Exception as e:
+        print(f"⚠️ PANEL_USERS_JSON inválido: {e}")
+        return default_users
+
+def _auth_user(username, password):
+    users = _load_users()
+    rec = users.get(username)
+    if rec and rec.get("password") == password:
+        return {"username": username, "bots": rec.get("bots", [])}
+    return None
+
+def _is_admin():
+    bots = session.get("bots_permitidos", [])
+    return isinstance(bots, list) and ("*" in bots)
+
+def _first_allowed_bot():
+    bots = session.get("bots_permitidos", [])
+    if isinstance(bots, list):
+        for b in bots:
+            if b != "*":
+                return b
+    return None
+
+def _user_can_access_bot(bot_name):
+    if _is_admin():
+        return True
+    bots = session.get("bots_permitidos", [])
+    return bot_name in bots
+
 @app.route("/panel-bot/<bot_nombre>")
 def panel_exclusivo_bot(bot_nombre):
     if not session.get("autenticado"):
@@ -397,565 +263,6 @@ def panel_exclusivo_bot(bot_nombre):
 def home():
     return "✅ Bot inteligente activo en Render."
 
-# =======================
-#  ✅ VOZ (Twilio Voice Webhook - IVR clásico)
-# =======================
-@app.route("/voice", methods=["GET", "POST"])
-def voice_incoming():
-    try:
-        from_num = request.values.get("From", "")
-        to_num = request.values.get("To", "")
-        print(f"📞 Llamada entrante (IVR clásico) -> From={from_num} To={to_num} @ {datetime.now()}")
-    except Exception as e:
-        print(f"⚠️ Error leyendo parámetros de voz: {e}")
-
-    vr = VoiceResponse()
-    with vr.gather(
-        num_digits=1,
-        action="/voice/menu",
-        method="POST",
-        timeout=6
-    ) as g:
-        g.say("Gracias por llamar a In Houston Texas. "
-              "Para ventas, marque uno. "
-              "Para información de revista y distribución, marque dos. "
-              "Para dejar un mensaje, quédese en la línea.",
-              voice="Polly.Lupe-Neural", language="es-US")
-    vr.say("No recibí una selección. Por favor, deje su mensaje después del tono. "
-           "Presione numeral para finalizar.", voice="Polly.Lupe-Neural", language="es-US")
-    vr.record(max_length=120, play_beep=True, finish_on_key="#")
-    vr.hangup()
-    return Response(str(vr), mimetype="text/xml")
-
-@app.route("/voice/menu", methods=["POST"])
-def voice_menu():
-    digit = request.values.get("Digits", "")
-    vr = VoiceResponse()
-    if digit == "1":
-        vr.say("Gracias. Te comunicamos con ventas. En este momento todos nuestros asesores "
-               "están ocupados. Deja tu mensaje y te regresamos la llamada.",
-               voice="Polly.Lupe-Neural", language="es-US")
-        vr.record(max_length=120, play_beep=True, finish_on_key="#")
-        vr.hangup()
-    elif digit == "2":
-        vr.say("Información de revista y distribución. Visita nuestra página o deja tu mensaje ahora.",
-               voice="Polly.Lupe-Neural", language="es-US")
-        vr.record(max_length=120, play_beep=True, finish_on_key="#")
-        vr.hangup()
-    else:
-        vr.redirect("/voice")
-    return Response(str(vr), mimetype="text/xml")
-
-# =======================
-#  🧠 VOZ IA (Twilio + GPT) + OpenAI TTS
-# =======================
-def _log_gpt_usage(bot_name: str, who: str, model: str, usage_obj: dict, store_file: str = "billing_usage.json"):
-    """
-    Guarda acumulados por fecha (YYYY-MM), bot y contacto.
-    usage_obj esperado: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
-    """
-    try:
-        today = datetime.now()
-        period = today.strftime("%Y-%m")
-        record = {
-            "ts": today.strftime("%Y-%m-%d %H:%M:%S"),
-            "bot": bot_name,
-            "who": who,
-            "model": model,
-            "prompt_tokens": int(usage_obj.get("prompt_tokens", 0)),
-            "completion_tokens": int(usage_obj.get("completion_tokens", 0)),
-            "total_tokens": int(usage_obj.get("total_tokens", 0)),
-        }
-        data = {}
-        if os.path.exists(store_file):
-            with open(store_file, "r") as f:
-                data = json.load(f)
-        data.setdefault(period, [])
-        data[period].append(record)
-        with open(store_file, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        print(f"⚠️ No pude registrar uso GPT: {e}")
-
-def _sum_gpt_cost(bot_name: str, date_from: datetime, date_to: datetime, store_file: str = "billing_usage.json"):
-    """
-    Lee billing_usage.json y suma tokens/costo para el bot y rango dado.
-    Retorna (prompt_tokens, completion_tokens, total_tokens, cost_usd)
-    """
-    prompt = completion = total = 0
-    if not os.path.exists(store_file):
-        return (0, 0, 0, 0.0)
-    try:
-        with open(store_file, "r") as f:
-            data = json.load(f)
-        # Recorremos todos los periodos por simplicidad
-        for period, rows in data.items():
-            for r in rows:
-                if r.get("bot") != bot_name:
-                    continue
-                ts_str = r.get("ts")
-                try:
-                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    continue
-                if not (date_from <= ts <= date_to):
-                    continue
-                prompt += int(r.get("prompt_tokens", 0))
-                completion += int(r.get("completion_tokens", 0))
-                total += int(r.get("total_tokens", 0))
-        # Costos (por millón de tokens)
-        cost_in = (prompt / 1_000_000.0) * OPENAI_PRICE_IN_PER_M
-        cost_out = (completion / 1_000_000.0) * OPENAI_PRICE_OUT_PER_M
-        cost = round(cost_in + cost_out, 4)
-        return (prompt, completion, total, cost)
-    except Exception as e:
-        print(f"⚠️ Error sumando GPT: {e}")
-        return (prompt, completion, total, 0.0)
-
-@app.route("/voice/ai", methods=["GET", "POST"])
-def voice_ai():
-    call_sid = request.values.get("CallSid", "")
-    from_num = request.values.get("From", "")
-    to_num = request.values.get("To", "")
-    speech = (request.values.get("SpeechResult", "") or "").strip()
-
-    bot_cfg = _find_bot_for_to_number(to_num)
-    if not bot_cfg:
-        vr = VoiceResponse()
-        vr.say("Lo siento, el sistema no está disponible en este momento.", voice="Polly.Lupe-Neural", language="es-US")
-        vr.hangup()
-        return Response(str(vr), mimetype="text/xml")
-
-    bot_name = bot_cfg["name"]
-    lead_num = f"tel:{from_num}"
-    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    print(f"🎙️ VOICE-AI -> CallSid={call_sid} From={from_num} To={to_num} Bot={bot_name}")
-    if call_sid not in voice_attempts:
-        voice_attempts[call_sid] = 0
-
-    vr = VoiceResponse()
-
-    if not speech:
-        voice_attempts[call_sid] += 1
-        greeting = _voice_greeting(bot_cfg)
-        audio_url = _tts_url_for_text(greeting)
-        with vr.gather(
-            input="speech",
-            language=VOICE_LANG,
-            action="/voice/ai",
-            method="POST",
-            speech_timeout="auto",
-            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, Texas, In Houston Texas"
-        ) as g:
-            if audio_url:
-                g.play(audio_url)
-            else:
-                g.say(greeting, voice="Polly.Lupe-Neural", language="es-US")
-
-        if voice_attempts[call_sid] >= 2:
-            msg = "No recibí audio. Por favor, deja tu mensaje después del tono. Presiona numeral para finalizar."
-            url = _tts_url_for_text(msg)
-            if url:
-                vr.play(url)
-            else:
-                vr.say(msg, voice="Polly.Lupe-Neural", language="es-US")
-            vr.record(max_length=120, play_beep=True, finish_on_key="#")
-            vr.hangup()
-        return Response(str(vr), mimetype="text/xml")
-
-    print(f"👤 STT: {speech}")
-    try:
-        if not fb_get_lead(bot_name, lead_num):
-            guardar_lead(bot_name, lead_num, speech)
-        else:
-            fb_append_historial(bot_name, lead_num, {"tipo": "user", "texto": speech, "hora": ahora})
-
-        messages = _build_messages_from_firebase(bot_cfg, lead_num)
-        messages.append({"role": "user", "content": speech})
-
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages
-        )
-        respuesta = completion.choices[0].message.content.strip()
-
-        # 🔢 Log de tokens/costo GPT (voz)
-        usage = getattr(completion, "usage", None)
-        if usage:
-            _log_gpt_usage(bot_name, lead_num, "gpt-4o", {
-                "prompt_tokens": usage.prompt_tokens,
-                "completion_tokens": usage.completion_tokens,
-                "total_tokens": usage.total_tokens
-            })
-
-        fb_append_historial(bot_name, lead_num, {"tipo": "bot", "texto": respuesta, "hora": ahora})
-
-        url_resp = _tts_url_for_text(respuesta)
-        if url_resp:
-            vr.play(url_resp)
-        else:
-            vr.say(respuesta, voice="Polly.Lupe-Neural", language="es-US")
-
-        follow = "¿Te ayudo con algo más?"
-        url_follow = _tts_url_for_text(follow)
-        with vr.gather(
-            input="speech",
-            language=VOICE_LANG,
-            action="/voice/ai",
-            method="POST",
-            speech_timeout="auto",
-            hints="publicidad, revista, anuncio, precios, cita, distribución, Houston, Texas, In Houston Texas"
-        ) as g:
-            if url_follow:
-                g.play(url_follow)
-            else:
-                g.say(follow, voice="Polly.Lupe-Neural", language="es-US")
-
-        return Response(str(vr), mimetype="text/xml")
-
-    except Exception as e:
-        print(f"❌ Error en VOICE-AI: {e}")
-        msg = "Tuve un inconveniente procesando tu solicitud. Por favor deja tu mensaje después del tono."
-        url_err = _tts_url_for_text(msg)
-        if url_err:
-            vr.play(url_err)
-        else:
-            vr.say(msg, voice="Polly.Lupe-Neural", language="es-US")
-        vr.record(max_length=120, play_beep=True, finish_on_key="#")
-        vr.hangup()
-        return Response(str(vr), mimetype="text/xml")
-
-# =======================
-#  Webhook WhatsApp
-# =======================
-@app.route("/webhook", methods=["GET"])
-def verify_whatsapp():
-    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_WHATSAPP")
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge, 200
-    else:
-        return "Token inválido", 403
-
-def _is_agenda(texto: str) -> bool:
-    if not texto:
-        return False
-    t = texto.strip().lower()
-    keywords = {"agenda", "agendar", "cita", "agendar cita", "agendar reunión", "agendar reunion"}
-    return any(k in t for k in keywords)
-
-@app.route("/webhook", methods=["POST"])
-def whatsapp_bot():
-    incoming_msg = request.values.get("Body", "").strip()
-    sender_number = request.values.get("From", "")
-    bot_number = request.values.get("To", "")
-    clave_sesion = f"{bot_number}|{sender_number}"
-    bot = bots_config.get(bot_number)
-
-    if not bot:
-        response = MessagingResponse()
-        response.message("Lo siento, este número no está asignado a ningún bot.")
-        return str(response)
-
-    # Guarda el mensaje del usuario
-    guardar_lead(bot["name"], sender_number, incoming_msg)
-
-    # Respuesta Twilio
-    response = MessagingResponse()
-    msg = response.message()
-
-    # ====== FLUJO AGENDA (Google Calendar) ======
-    if _is_agenda(incoming_msg):
-        print("FLOW:AGENDA", {"to": bot_number, "from": sender_number, "has_url": bool(CALENDAR_URL)})
-        if CALENDAR_URL:
-            texto_agenda = (
-                "¡Perfecto! Aquí puedes **agendar tu cita** directamente en mi Google Calendar:\n"
-                f"{CALENDAR_URL}\n\n"
-                "Elige el día y la hora que te convengan; recibirás confirmación automática. "
-            )
-        else:
-            texto_agenda = (
-                "Puedo agendarte en Google Calendar. Por favor dime **dos opciones de día y hora** "
-                "y te envío la confirmación enseguida. (Tip: también puedes configurar la variable "
-                "`GOOGLE_CALENDAR_BOOKING_URL` en Render para compartir el enlace de agenda)."
-            )
-
-        msg.body(texto_agenda)
-
-        # Guardar respuesta del bot en Firebase + leads.json
-        try:
-            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
-            if os.path.exists("leads.json"):
-                with open("leads.json", "r") as f:
-                    leads = json.load(f)
-            else:
-                leads = {}
-            clave = f"{bot['name']}|{sender_number}"
-            if clave not in leads:
-                leads[clave] = {
-                    "bot": bot["name"],
-                    "numero": sender_number,
-                    "first_seen": ahora_bot,
-                    "last_message": texto_agenda,
-                    "last_seen": ahora_bot,
-                    "messages": 1,
-                    "status": "nuevo",
-                    "notes": "",
-                    "historial": [{"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot}]
-                }
-            else:
-                leads[clave]["messages"] = int(leads[clave].get("messages", 0)) + 1
-                leads[clave]["last_message"] = texto_agenda
-                leads[clave]["last_seen"] = ahora_bot
-                leads[clave]["historial"].append({"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
-            with open("leads.json", "w") as f:
-                json.dump(leads, f, indent=4)
-        except Exception as e:
-            print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
-
-        # Marcar actividad y follow-up
-        last_message_time[clave_sesion] = time.time()
-        if clave_sesion not in follow_up_flags:
-            follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
-        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-        return str(response)
-    # ====== FIN FLUJO AGENDA ======
-
-    # Sesión / saludo
-    if clave_sesion not in session_history:
-        session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
-        follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
-
-    if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        if bot["name"] == "Camila":
-            saludo = "Hola, soy Camila, especialista en polizas de gastos finales de Senior Life. ¿Con quien tengo el gusto?"
-        else:
-            saludo = f"Hola, soy {bot['name']}, la asistente del Sr Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
-        msg.body(saludo)
-        last_message_time[clave_sesion] = time.time()
-        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-        return str(response)
-
-    # Continuación normal (GPT)
-    session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
-    last_message_time[clave_sesion] = time.time()
-    Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=session_history[clave_sesion]
-        )
-        respuesta = completion.choices[0].message.content.strip()
-
-        # 🔢 Log de tokens/costo GPT (WhatsApp)
-        usage = getattr(completion, "usage", None)
-        if usage:
-            _log_gpt_usage(bot["name"], sender_number, "gpt-4o", {
-                "prompt_tokens": usage.prompt_tokens,
-                "completion_tokens": usage.completion_tokens,
-                "total_tokens": usage.total_tokens
-            })
-
-        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
-        msg.body(respuesta)
-
-        try:
-            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
-            if os.path.exists("leads.json"):
-                with open("leads.json", "r") as f:
-                    leads = json.load(f)
-            else:
-                leads = {}
-            clave = f"{bot['name']}|{sender_number}"
-            if clave not in leads:
-                leads[clave] = {
-                    "bot": bot["name"],
-                    "numero": sender_number,
-                    "first_seen": ahora_bot,
-                    "last_message": respuesta,
-                    "last_seen": ahora_bot,
-                    "messages": 1,
-                    "status": "nuevo",
-                    "notes": "",
-                    "historial": [{"tipo": "bot", "texto": respuesta, "hora": ahora_bot}]
-                }
-            else:
-                leads[clave]["messages"] = int(leads[clave].get("messages", 0)) + 1
-                leads[clave]["last_message"] = respuesta
-                leads[clave]["last_seen"] = ahora_bot
-                leads[clave]["historial"].append({"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
-            with open("leads.json", "w") as f:
-                json.dump(leads, f, indent=4)
-        except Exception as e:
-            print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
-
-    except Exception as e:
-        print(f"❌ Error con GPT: {e}")
-        msg.body("Lo siento, hubo un error generando la respuesta.")
-
-    return str(response)
-
-# =======================
-#  Vistas de conversación (leen Firebase)
-# =======================
-@app.route("/conversacion_general/<bot>/<numero>")
-def chat_general(bot, numero):
-    if not session.get("autenticado"):
-        return redirect(url_for("panel"))
-    bot_normalizado = _normalize_bot_name(bot)
-    if not bot_normalizado:
-        return "Bot no encontrado", 404
-    if not _user_can_access_bot(bot_normalizado):
-        return "No autorizado para este bot", 403
-
-    # 🔸 Cargar config del bot para pasar business_name al template
-    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
-    company_name = bot_cfg.get("business_name", bot_normalizado)
-
-    data = fb_get_lead(bot_normalizado, numero)
-    historial = data.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-    mensajes = [{"texto": r.get("texto",""), "hora": r.get("hora",""), "tipo": r.get("tipo","user")} for r in historial]
-
-    return render_template(
-        "chat.html",
-        numero=numero,
-        mensajes=mensajes,
-        bot=bot_normalizado,
-        bot_data=bot_cfg,
-        company_name=company_name
-    )
-
-@app.route("/conversacion_bot/<bot>/<numero>")
-def chat_bot(bot, numero):
-    if not session.get("autenticado"):
-        return redirect(url_for("panel"))
-    bot_normalizado = _normalize_bot_name(bot)
-    if not bot_normalizado:
-        return "Bot no encontrado", 404
-    if not _user_can_access_bot(bot_normalizado):
-        return "No autorizado para este bot", 403
-
-    # 🔸 Cargar config del bot para pasar business_name al template
-    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
-    company_name = bot_cfg.get("business_name", bot_normalizado)
-
-    data = fb_get_lead(bot_normalizado, numero)
-    historial = data.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-    mensajes = [{"texto": r.get("texto",""), "hora": r.get("hora",""), "tipo": r.get("tipo","user")} for r in historial]
-
-    return render_template(
-        "chat_bot.html",
-        numero=numero,
-        mensajes=mensajes,
-        bot=bot_normalizado,
-        bot_data=bot_cfg,
-        company_name=company_name
-    )
-
-# =======================
-#  API de polling (ahora lee Firebase)
-# =======================
-@app.route("/api/chat/<bot>/<numero>", methods=["GET"])
-def api_chat(bot, numero):
-    if not session.get("autenticado"):
-        return jsonify({"error": "No autenticado"}), 401
-    bot_normalizado = _normalize_bot_name(bot)
-    if not bot_normalizado:
-        return jsonify({"error": "Bot no encontrado"}), 404
-    if not _user_can_access_bot(bot_normalizado):
-        return jsonify({"error": "No autorizado"}), 403
-
-    since_param = request.args.get("since", "").strip()
-    try:
-        since_ms = int(since_param) if since_param else 0
-    except ValueError:
-        since_ms = 0
-
-    data = fb_get_lead(bot_normalizado, numero)
-    historial = data.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-
-    nuevos = []
-    last_ts = since_ms
-    for reg in historial:
-        ts = _hora_to_epoch_ms(reg.get("hora", ""))
-        if ts > since_ms:
-            nuevos.append({
-                "texto": reg.get("texto", ""),
-                "hora": reg.get("hora", ""),
-                "tipo": reg.get("tipo", "user"),
-                "ts": ts
-            })
-        if ts > last_ts:
-            last_ts = ts
-
-    if since_ms == 0 and not nuevos and historial:
-        for reg in historial:
-            ts = _hora_to_epoch_ms(reg.get("hora", ""))
-            if ts > last_ts:
-                last_ts = ts
-        nuevos = [{
-            "texto": reg.get("texto", ""),
-            "hora": reg.get("hora", ""),
-            "tipo": reg.get("tipo", "user"),
-            "ts": _hora_to_epoch_ms(reg.get("hora", ""))
-        } for reg in historial]
-
-    return jsonify({"mensajes": nuevos, "last_ts": last_ts})
-
-# =======================
-#  🔺 Borrar conversación (Firebase + leads.json)
-# =======================
-@app.route("/api/delete_chat", methods=["POST"])
-def api_delete_chat():
-    if not session.get("autenticado"):
-        return jsonify({"error": "No autenticado"}), 401
-    data = request.get_json(silent=True) or {}
-    bot_nombre = (data.get("bot") or "").strip()
-    numero = (data.get("numero") or "").strip()
-    if not bot_nombre or not numero:
-        return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
-
-    bot_normalizado = _normalize_bot_name(bot_nombre)
-    if not bot_normalizado:
-        return jsonify({"error": "Bot no encontrado"}), 404
-    if not _user_can_access_bot(bot_normalizado):
-        return jsonify({"error": "No autorizado"}), 403
-
-    try:
-        ref = _lead_ref(bot_normalizado, numero)
-        ref.delete()
-    except Exception as e:
-        print(f"⚠️ No se pudo eliminar en Firebase: {e}")
-
-    try:
-        if os.path.exists("leads.json"):
-            with open("leads.json", "r") as f:
-                leads = json.load(f)
-            clave = f"{bot_normalizado}|{numero}"
-            if clave in leads:
-                del leads[clave]
-                with open("leads.json", "w") as f:
-                    json.dump(leads, f, indent=4)
-    except Exception as e:
-        print(f"⚠️ No se pudo actualizar leads.json: {e}")
-
-    return jsonify({"ok": True})
-
-# =======================
-#  Login / Logout / Panel principal
-# =======================
 @app.route("/login", methods=["GET"])
 def login_redirect():
     return redirect(url_for("panel"))
@@ -1009,7 +316,7 @@ def logout():
     return redirect(url_for("panel"))
 
 # =======================
-#  Guardar/Exportar/Instagram
+#  Guardar/Exportar
 # =======================
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -1027,37 +334,15 @@ def guardar_edicion():
     try:
         ref = _lead_ref(bot_normalizado, numero)
         current = ref.get() or {}
-        current["status"] = estado or current.get("status", "nuevo")
-        current["notes"] = nota if nota != "" else current.get("notes", "")
+        if estado:
+            current["status"] = estado
+        if nota != "":
+            current["notes"] = nota
         current.setdefault("bot", bot_normalizado)
         current.setdefault("numero", numero)
         ref.set(current)
     except Exception as e:
         print(f"⚠️ No se pudo actualizar en Firebase: {e}")
-
-    try:
-        if os.path.exists("leads.json"):
-            with open("leads.json", "r") as f:
-                leads = json.load(f)
-            if numero_key in leads:
-                leads[numero_key]["status"] = estado or leads[numero_key].get("status", "nuevo")
-                if nota != "":
-                    leads[numero_key]["notes"] = nota
-            else:
-                leads[numero_key] = {
-                    "bot": bot_normalizado,
-                    "numero": numero,
-                    "first_seen": current.get("first_seen", ""),
-                    "last_message": current.get("last_message", ""),
-                    "last_seen": current.get("last_seen", ""),
-                    "messages": int(current.get("messages", 0)),
-                    "status": estado or current.get("status", "nuevo"),
-                    "notes": nota or current.get("notes", "")
-                }
-            with open("leads.json", "w") as f:
-                json.dump(leads, f, indent=4)
-    except Exception as e:
-        print(f"⚠️ No se pudo actualizar leads.json: {e}")
 
     return jsonify({"mensaje": "Lead actualizado"})
 
@@ -1083,9 +368,12 @@ def exportar():
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
-@app.route("/webhook_instagram", methods=["GET"])
-def verify_instagram():
-    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_INSTAGRAM")
+# =======================
+#  Webhook WhatsApp
+# =======================
+@app.route("/webhook", methods=["GET"])
+def verify_whatsapp():
+    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN_WHATSAPP")
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
@@ -1094,46 +382,237 @@ def verify_instagram():
     else:
         return "Token inválido", 403
 
-@app.route("/webhook_instagram", methods=["POST"])
-def recibir_instagram():
-    data = request.json
-    print("📥 Mensaje recibido desde Instagram:", json.dumps(data, indent=2))
-    try:
-        for entry in data.get("entry", []):
-            for messaging_event in entry.get("messaging", []):
-                sender_id = messaging_event.get("sender", {}).get("id")
-                message = messaging_event.get("message", {})
-                if message.get("is_echo"):
-                    continue
-                if sender_id and message.get("text"):
-                    enviar_respuesta_instagram(sender_id)
-        return "EVENT_RECEIVED", 200
-    except Exception as e:
-        print(f"❌ Error procesando mensaje de Instagram: {e}")
-        return "Error", 500
+def _is_agenda(texto: str) -> bool:
+    if not texto:
+        return False
+    t = texto.strip().lower()
+    keywords = {"agenda", "agendar", "cita", "agendar cita", "agendar reunión", "agendar reunion"}
+    return any(k in t for k in keywords)
 
-def enviar_respuesta_instagram(psid):
-    url = "https://graph.facebook.com/v18.0/me/messages"
-    headers = {
-        "Authorization": f"Bearer {INSTAGRAM_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_type": "RESPONSE",
-        "recipient": {"id": psid},
-        "message": {"text": "¡Hola! Gracias por escribirnos por Instagram. Soy Sara, de IN Houston Texas. ¿En qué puedo ayudarte?"}
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print("📤 Respuesta enviada a Instagram:", r.status_code, r.text)
+@app.route("/webhook", methods=["POST"])
+def whatsapp_bot():
+    incoming_msg = request.values.get("Body", "").strip()
+    sender_number = request.values.get("From", "")
+    bot_number = request.values.get("To", "")
+
+    clave_sesion = f"{bot_number}|{sender_number}"
+    bot = bots_config.get(bot_number)
+
+    if not bot:
+        response = MessagingResponse()
+        response.message("Lo siento, este número no está asignado a ningún bot.")
+        return str(response)
+
+    # Guarda el mensaje del usuario
+    guardar_lead(bot["name"], sender_number, incoming_msg)
+
+    # Respuesta Twilio
+    response = MessagingResponse()
+    msg = response.message()
+
+    # ====== FLUJO AGENDA (Google Calendar público)
+    if _is_agenda(incoming_msg):
+        if CALENDAR_URL:
+            texto_agenda = (
+                "¡Perfecto! Aquí puedes **agendar tu cita** directamente en mi Google Calendar:\n"
+                f"{CALENDAR_URL}\n\n"
+                "Elige el día y la hora que te convengan; recibirás confirmación automática."
+            )
+        else:
+            texto_agenda = (
+                "Puedo agendarte en Google Calendar. Dime **dos opciones de día y hora** "
+                "y te envío la confirmación enseguida."
+            )
+
+        msg.body(texto_agenda)
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
+
+        last_message_time[clave_sesion] = time.time()
+        if clave_sesion not in follow_up_flags:
+            follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+        return str(response)
+    # ====== FIN FLUJO AGENDA ======
+
+    # Sesión / saludo
+    if clave_sesion not in session_history:
+        session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
+        follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+
+    if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
+        if bot["name"] == "Camila":
+            saludo = "Hola, soy Camila, especialista en pólizas de gastos finales de Senior Life. ¿Con quién tengo el gusto?"
+        else:
+            saludo = f"Hola, soy {bot['name']}, la asistente del Sr. Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
+        msg.body(saludo)
+        last_message_time[clave_sesion] = time.time()
+        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+        return str(response)
+
+    # Continuación normal (GPT)
+    session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
+    last_message_time[clave_sesion] = time.time()
+    Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=session_history[clave_sesion]
+        )
+        respuesta = completion.choices[0].message.content.strip()
+        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
+        msg.body(respuesta)
+
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
+
+    except Exception as e:
+        print(f"❌ Error con GPT: {e}")
+        msg.body("Lo siento, hubo un error generando la respuesta.")
+
+    return str(response)
 
 # =======================
-#  Follow-up y Twilio
+#  Vistas de conversación (leen Firebase)
+# =======================
+@app.route("/conversacion_general/<bot>/<numero>")
+def chat_general(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+@app.route("/conversacion_bot/<bot>/<numero>")
+def chat_bot(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+# =======================
+#  API de polling (lee Firebase)
+# =======================
+@app.route("/api/chat/<bot>/<numero>", methods=["GET"])
+def api_chat(bot, numero):
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return jsonify({"error": "Bot no encontrado"}), 404
+    if not _user_can_access_bot(bot_normalizado):
+        return jsonify({"error": "No autorizado"}), 403
+
+    since_param = request.args.get("since", "").strip()
+    try:
+        since_ms = int(since_param) if since_param else 0
+    except ValueError:
+        since_ms = 0
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+
+    nuevos = []
+    last_ts = since_ms
+    for reg in historial:
+        ts = _hora_to_epoch_ms(reg.get("hora", ""))
+        if ts > since_ms:
+            nuevos.append({
+                "texto": reg.get("texto", ""),
+                "hora": reg.get("hora", ""),
+                "tipo": reg.get("tipo", "user"),
+                "ts": ts
+            })
+        if ts > last_ts:
+            last_ts = ts
+
+    if since_ms == 0 and not nuevos and historial:
+        for reg in historial:
+            ts = _hora_to_epoch_ms(reg.get("hora", ""))
+            if ts > last_ts:
+                last_ts = ts
+        nuevos = [{
+            "texto": reg.get("texto", ""),
+            "hora": reg.get("hora", ""),
+            "tipo": reg.get("tipo", "user"),
+            "ts": _hora_to_epoch_ms(reg.get("hora", ""))
+        } for reg in historial]
+
+    return jsonify({"mensajes": nuevos, "last_ts": last_ts})
+
+# =======================
+#  🔺 Borrar conversación (Firebase)
+# =======================
+@app.route("/api/delete_chat", methods=["POST"])
+def api_delete_chat():
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    data = request.get_json(silent=True) or {}
+    bot_nombre = (data.get("bot") or "").strip()
+    numero = (data.get("numero") or "").strip()
+    if not bot_nombre or not numero:
+        return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
+
+    bot_normalizado = _normalize_bot_name(bot_nombre)
+    if not bot_normalizado:
+        return jsonify({"error": "Bot no encontrado"}), 404
+    if not _user_can_access_bot(bot_normalizado):
+        return jsonify({"error": "No autorizado"}), 403
+
+    try:
+        ref = _lead_ref(bot_normalizado, numero)
+        ref.delete()
+    except Exception as e:
+        print(f"⚠️ No se pudo eliminar en Firebase: {e}")
+
+    return jsonify({"ok": True})
+
+# =======================
+#  Follow-up (WhatsApp vía Twilio)
 # =======================
 def follow_up_task(clave_sesion, bot_number):
+    # 5 minutos
     time.sleep(300)
     if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 300 and not follow_up_flags[clave_sesion]["5min"]:
         send_whatsapp_message(clave_sesion.split("|")[1], "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊", bot_number)
         follow_up_flags[clave_sesion]["5min"] = True
+    # +55 minutos (total ~60)
     time.sleep(3300)
     if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 3600 and not follow_up_flags[clave_sesion]["60min"]:
         send_whatsapp_message(clave_sesion.split("|")[1], "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉", bot_number)
@@ -1147,558 +626,9 @@ def send_whatsapp_message(to_number, message, bot_number=None):
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
 
-# ======================================================
-#   Google OAuth + Calendar + Sheets (NUEVO)
-# ======================================================
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-
-GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/spreadsheets"
-]
-GOOGLE_CLIENT_FILE = os.getenv("GOOGLE_CLIENT_FILE", "credentials/google_oauth_client.json")
-GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID", "")
-
-def _oauth_store(creds_dict, owner_key="global"):
-    try:
-        session["google_creds"] = creds_dict
-    except Exception:
-        pass
-    try:
-        ref = db.reference(f"oauth_tokens/{owner_key}")
-        ref.set(creds_dict)
-    except Exception as e:
-        print(f"⚠️ No pude guardar tokens en Firebase: {e}")
-
-def _oauth_load(owner_key="global"):
-    try:
-        if "google_creds" in session:
-            return session["google_creds"]
-    except Exception:
-        pass
-    try:
-        ref = db.reference(f"oauth_tokens/{owner_key}")
-        data = ref.get()
-        return data or None
-    except Exception as e:
-        print(f"⚠️ No pude leer tokens en Firebase: {e}")
-        return None
-
-def _get_creds(owner_key="global"):
-    data = _oauth_load(owner_key)
-    if not data:
-        return None
-    creds = Credentials.from_authorized_user_info(data, GOOGLE_SCOPES)
-    return creds
-
-@app.route("/google/auth")
-def google_auth_start():
-    owner = request.args.get("owner", "global")
-    session["oauth_owner"] = owner
-    redirect_uri = url_for("google_oauth_callback", _external=True)
-    flow = Flow.from_client_secrets_file(
-        GOOGLE_CLIENT_FILE,
-        scopes=GOOGLE_SCOPES,
-        redirect_uri=redirect_uri
-    )
-    auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent"
-    )
-    session["oauth_state"] = state
-    return redirect(auth_url)
-
-@app.route("/oauth2callback")
-def google_oauth_callback():
-    state = session.get("oauth_state")
-    owner = session.get("oauth_owner", "global")
-    redirect_uri = url_for("google_oauth_callback", _external=True)
-    flow = Flow.from_client_secrets_file(
-        GOOGLE_CLIENT_FILE,
-        scopes=GOOGLE_SCOPES,
-        redirect_uri=redirect_uri
-    )
-    flow.fetch_token(authorization_response=request.url)
-    creds = flow.credentials
-    creds_dict = {
-        "token": creds.token,
-        "refresh_token": getattr(creds, "refresh_token", None),
-        "token_uri": creds.token_uri,
-        "client_id": creds.client_id,
-        "client_secret": creds.client_secret,
-        "scopes": creds.scopes,
-    }
-    _oauth_store(creds_dict, owner_key=owner)
-    return "✅ Permisos concedidos. Ya puedes usar Calendar y Sheets."
-
-@app.route("/gcal/test")
-def gcal_test():
-    owner = request.args.get("owner", "global")
-    creds = _get_creds(owner)
-    if not creds:
-        return redirect(url_for("google_auth_start", owner=owner))
-
-    service = build("calendar", "v3", credentials=creds)
-    start = (datetime.now() + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-    end   = start.replace(hour=10, minute=30)
-    event = {
-        "summary": "Cita de prueba (IN-Houston CRM)",
-        "description": "Evento de verificación",
-        "start": {"dateTime": start.isoformat(), "timeZone": "America/Chicago"},
-        "end":   {"dateTime": end.isoformat(),   "timeZone": "America/Chicago"},
-    }
-    created = service.events().insert(calendarId="primary", body=event).execute()
-    return f"✅ Evento creado: {created.get('htmlLink')}"
-
-@app.route("/gsheets/test")
-def gsheets_test():
-    owner = request.args.get("owner", "global")
-    if not GOOGLE_SHEETS_ID:
-        return "Configura GOOGLE_SHEETS_ID en variables de entorno.", 400
-
-    creds = _get_creds(owner)
-    if not creds:
-        return redirect(url_for("google_auth_start", owner=owner))
-
-    sheets = build("sheets", "v4", credentials=creds)
-    valores = [[
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "Prueba", "Contacto Demo", owner
-    ]]
-    body = {"values": valores}
-    sheets.spreadsheets().values().append(
-        spreadsheetId=GOOGLE_SHEETS_ID,
-        range="Hoja1!A:D",
-        valueInputOption="USER_ENTERED",
-        body=body
-    ).execute()
-    return "✅ Fila agregada a Google Sheets."
-
-# ======================================================
-#   💳 Facturación por consumo (Stripe) + Estimación
-# ======================================================
-def _find_or_create_customer(email: str = None, name: str = None, customer_id: str = None):
-    """
-    - Si llega customer_id, lo usamos directo.
-    - Si no, buscamos/creamos por email.
-    """
-    if not STRIPE_API_KEY:
-        raise RuntimeError("Falta STRIPE_API_KEY en variables de entorno.")
-
-    if customer_id:
-        return stripe.Customer.retrieve(customer_id)
-
-    if not email:
-        raise ValueError("Debes enviar 'email' o 'customer_id'.")
-
-    # Intento 1: búsqueda nativa
-    try:
-        res = stripe.Customer.search(query=f"email:'{email}'", limit=1)
-        if res and getattr(res, "data", None):
-            return res.data[0]
-    except Exception:
-        # Fallback: listar
-        try:
-            lst = stripe.Customer.list(limit=50)
-            for c in lst.data:
-                if (getattr(c, "email", "") or "").lower() == email.lower():
-                    return c
-        except Exception:
-            pass
-
-    # Crear si no existe
-    created = stripe.Customer.create(email=email, name=name or "")
-    return created
-
-def _auth_or_test(req) -> bool:
-    """
-    Devuelve True si:
-      - hay sesión de admin (session['autenticado']), o
-      - llega X-Admin-Token con el BILLING_TEST_TOKEN de tu .env
-    """
-    if session.get("autenticado"):
-        return True
-    test_token = os.getenv("BILLING_TEST_TOKEN", "").strip()
-    header = (req.headers.get("X-Admin-Token") or "").strip()
-    return bool(test_token and header and header == test_token)
-
-# ---------- Twilio usage helpers ----------
-def _twilio_client():
-    from twilio.rest import Client as TwilioClient
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-    if not account_sid or not auth_token:
-        raise RuntimeError("Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN")
-    return TwilioClient(account_sid, auth_token)
-
-def _parse_date(s: str) -> datetime:
-    return datetime.strptime(s, "%Y-%m-%d")
-
-def _sum_twilio_cost(bot_number: str, date_from: datetime, date_to: datetime):
-    """
-    Suma precios de mensajes y llamadas (from o to = bot_number) en el rango [date_from, date_to].
-    Retorna dict con desglose y total.
-    Nota: depende del campo price que expone Twilio (puede ser negativo en cargos).
-    """
-    try:
-        client_twilio = _twilio_client()
-    except Exception as e:
-        print(f"⚠️ No se pudo crear cliente Twilio: {e}")
-        return {
-            "messages": {"count": 0, "unit": "USD", "total": 0.0, "observacion": "Sin credenciales o sin acceso"},
-            "calls": {"count": 0, "unit": "USD", "total": 0.0, "observacion": "Sin credenciales o sin acceso"},
-            "total_usd": 0.0
-        }
-
-    # Ajuste de rangos (Twilio usa UTC en filtros)
-    start = date_from
-    end = date_to + timedelta(days=1)  # inclusivo hasta final del día
-
-    # Mensajes
-    msg_total = 0.0
-    msg_count = 0
-    try:
-        messages = client_twilio.messages.list(
-            date_sent_after=start,
-            date_sent_before=end
-        )
-        for m in messages:
-            if getattr(m, "from_", "") == bot_number or getattr(m, "to", "") == bot_number:
-                msg_count += 1
-                price = m.price  # puede ser string como "-0.00750"
-                if price is not None:
-                    try:
-                        msg_total += abs(float(price))
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"⚠️ Error listando mensajes Twilio: {e}")
-
-    # Llamadas
-    call_total = 0.0
-    call_count = 0
-    try:
-        calls = client_twilio.calls.list(
-            start_time_after=start,
-            start_time_before=end
-        )
-        for c in calls:
-            if getattr(c, "from_", "") == bot_number or getattr(c, "to", "") == bot_number:
-                call_count += 1
-                price = getattr(c, "price", None)
-                if price is not None:
-                    try:
-                        call_total += abs(float(price))
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"⚠️ Error listando llamadas Twilio: {e}")
-
-    return {
-        "messages": {"count": msg_count, "unit": "USD", "total": round(msg_total, 4)},
-        "calls": {"count": call_count, "unit": "USD", "total": round(call_total, 4)},
-        "total_usd": round(msg_total + call_total, 4)
-    }
-
-@app.route("/billing/ping", methods=["GET"])
-def billing_ping():
-    """
-    Salud de facturación: útil para probar despliegue/Stripe.
-    No requiere auth; solo informa estado.
-    """
-    return jsonify({
-        "ok": True,
-        "stripe_key_loaded": bool(STRIPE_API_KEY),
-        "public_key_loaded": bool(STRIPE_PUBLIC_KEY),
-    }), 200
-
-# ---------- NUEVO: Estimar consumo y devolver tabla ----------
-@app.route("/billing/estimate", methods=["POST"])
-def billing_estimate():
-    """
-    Body JSON:
-    {
-      "bot": "Sara",                       // obligatorio (nombre del bot en bots_config)
-      "from": "2025-08-01",                // obligatorio (YYYY-MM-DD)
-      "to": "2025-08-31",                  // obligatorio
-      "bot_number": "whatsapp:+13469882323", // opcional; si se omite se busca por nombre
-      "include_maint": true                // opcional, default true (200 USD)
-    }
-    Respuesta: {"ok": true, "table": [...], "total_usd": X.YZ, "period": {"from": "...", "to": "..."}}
-    """
-    if not _auth_or_test(request):
-        return jsonify({"error": "No autenticado"}), 401
-
-    data = request.get_json(silent=True) or {}
-    bot_name = (data.get("bot") or "").strip()
-    date_from_s = (data.get("from") or "").strip()
-    date_to_s = (data.get("to") or "").strip()
-    include_maint = bool(data.get("include_maint", True))
-
-    if not bot_name or not date_from_s or not date_to_s:
-        return jsonify({"error": "Parámetros requeridos: bot, from, to"}), 400
-
-    bot_cfg = _get_bot_cfg_by_name(bot_name)
-    if not bot_cfg:
-        return jsonify({"error": f"Bot '{bot_name}' no encontrado"}), 404
-
-    # Número Twilio del bot
-    bot_number = (data.get("bot_number") or "").strip()
-    if not bot_number:
-        # Buscar key en bots_config que tenga name == bot_name
-        for k, v in bots_config.items():
-            if v.get("name") == bot_name:
-                bot_number = k
-                break
-
-    try:
-        date_from = _parse_date(date_from_s)
-        date_to = _parse_date(date_to_s)
-    except Exception:
-        return jsonify({"error": "Formato de fechas inválido (use YYYY-MM-DD)"}), 400
-
-    # 1) Twilio: mensajes+llamadas
-    twilio = _sum_twilio_cost(bot_number, date_from, date_to)
-
-    # 2) GPT: tokens + costo
-    prompt, completion, total_tokens, gpt_cost = _sum_gpt_cost(bot_name, date_from, date_to)
-
-    # 3) Tabla formateada
-    table = [
-        {
-            "Concepto": "Consumo Twilio",
-            "Detalle": f"Msgs: {twilio['messages']['count']}, Calls: {twilio['calls']['count']} "
-                       f"(precio total: ${twilio['total_usd']})",
-            "Fuente": "API de Twilio"
-        },
-        {
-            "Concepto": "Consumo GPT",
-            "Detalle": f"Tokens (in/out/total): {prompt}/{completion}/{total_tokens}. "
-                       f"Precio total: ${gpt_cost} (in {OPENAI_PRICE_IN_PER_M}/M, out {OPENAI_PRICE_OUT_PER_M}/M)",
-            "Fuente": "Logs del bot (billing_usage.json)"
-        }
-    ]
-
-    total_usd = twilio["total_usd"] + gpt_cost
-
-    if include_maint:
-        table.append({
-            "Concepto": "Entrenamiento y mantenimiento del bot",
-            "Detalle": f"${BOT_MAINTENANCE_USD} USD fijos (mensual)",
-            "Fuente": "Sistema (opcional, se puede excluir)"
-        })
-        total_usd += BOT_MAINTENANCE_USD
-
-    return jsonify({
-        "ok": True,
-        "table": table,
-        "total_usd": round(total_usd, 2),
-        "period": {"from": date_from_s, "to": date_to_s},
-        "bot": bot_name,
-        "bot_number": bot_number
-    }), 200
-
-# ---------- NUEVO: Crear factura Stripe con partidas ----------
-@app.route("/billing/invoice", methods=["POST"])
-def billing_invoice():
-    """
-    Crea una factura en Stripe con los importes estimados.
-    Body JSON:
-    {
-      "email": "cliente@ejemplo.com",   // o "customer_id": "cus_..."
-      "name": "Nombre Cliente",         // opcional
-      "bot": "Sara",
-      "from": "2025-08-01",
-      "to": "2025-08-31",
-      "bot_number": "whatsapp:+13469882323", // opcional
-      "include_maint": true,            // default true
-      "currency": "usd"                 // default usd
-    }
-    Respuesta: { ok, customer_id, invoice_id, status, hosted_invoice_url, table, total_usd }
-    """
-    if not _auth_or_test(request):
-        return jsonify({"error": "No autenticado"}), 401
-
-    if not STRIPE_API_KEY:
-        return jsonify({"error": "STRIPE_API_KEY no configurada en el servidor"}), 500
-
-    data = request.get_json(silent=True) or {}
-    bot_name = (data.get("bot") or "").strip()
-    date_from_s = (data.get("from") or "").strip()
-    date_to_s = (data.get("to") or "").strip()
-    include_maint = bool(data.get("include_maint", True))
-    currency = (data.get("currency") or "usd").lower()
-    email = (data.get("email") or "").strip()
-    name = (data.get("name") or "").strip()
-    customer_id = (data.get("customer_id") or "").strip()
-
-    if not bot_name or not date_from_s or not date_to_s:
-        return jsonify({"error": "Parámetros requeridos: bot, from, to"}), 400
-
-    bot_cfg = _get_bot_cfg_by_name(bot_name)
-    if not bot_cfg:
-        return jsonify({"error": f"Bot '{bot_name}' no encontrado"}), 404
-
-    # Número Twilio del bot
-    bot_number = (data.get("bot_number") or "").strip()
-    if not bot_number:
-        for k, v in bots_config.items():
-            if v.get("name") == bot_name:
-                bot_number = k
-                break
-
-    # ⚙️ Fallbacks por bot (opcional) si no recibimos email/customer_id
-    if not email and isinstance(bot_cfg, dict):
-        email = (bot_cfg.get("billing_email") or "").strip()
-    if not customer_id and isinstance(bot_cfg, dict):
-        customer_id = (bot_cfg.get("stripe_customer_id") or "").strip()
-
-    try:
-        date_from = _parse_date(date_from_s)
-        date_to = _parse_date(date_to_s)
-    except Exception:
-        return jsonify({"error": "Formato de fechas inválido (use YYYY-MM-DD)"}), 400
-
-    # 1) Estimaciones
-    twilio = _sum_twilio_cost(bot_number, date_from, date_to)
-    prompt, completion, total_tokens, gpt_cost = _sum_gpt_cost(bot_name, date_from, date_to)
-
-    # 2) Resolver cliente (por email o customer_id)
-    try:
-        customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
-    except Exception as e:
-        return jsonify({"error": f"No se pudo resolver el cliente: {e}"}), 400
-
-    # ✅ items bien inicializado (bug fix)
-    items = []
-
-    # Item Twilio
-    twilio_amount = round(twilio["total_usd"], 2)
-    items.append({
-        "description": f"Consumo Twilio ({date_from_s} a {date_to_s}) - msgs {twilio['messages']['count']}, calls {twilio['calls']['count']}",
-        "amount_usd": twilio_amount,
-        "source": "twilio"
-    })
-
-    # Item GPT
-    gpt_amount = round(gpt_cost, 2)
-    items.append({
-        "description": (f"Consumo GPT ({date_from_s} a {date_to_s}) - "
-                        f"tokens in/out/total: {prompt}/{completion}/{total_tokens}. "
-                        f"Tarifas: in ${OPENAI_PRICE_IN_PER_M}/M, out ${OPENAI_PRICE_OUT_PER_M}/M"),
-        "amount_usd": gpt_amount,
-        "source": "gpt"
-    })
-
-    # Item Mantenimiento (opcional)
-    if include_maint:
-        items.append({
-            "description": "Entrenamiento, codificación y mantenimiento del bot (mensual)",
-            "amount_usd": float(BOT_MAINTENANCE_USD),
-            "source": "maintenance"
-        })
-
-    # Tabla solicitada (para tu panel / UI)
-    table = [
-        {
-            "Concepto": "Consumo Twilio",
-            "Detalle": f"Mensajes: {twilio['messages']['count']}, Llamadas: {twilio['calls']['count']}. Precio total: ${twilio_amount}",
-            "Fuente": "API de Twilio"
-        },
-        {
-            "Concepto": "Consumo GPT",
-            "Detalle": (f"Tokens (in/out/total): {prompt}/{completion}/{total_tokens}. "
-                        f"Precio total: ${gpt_amount} (in ${OPENAI_PRICE_IN_PER_M}/M, out ${OPENAI_PRICE_OUT_PER_M}/M)"),
-            "Fuente": "Logs del bot (billing_usage.json)"
-        }
-    ]
-    total_usd = twilio_amount + gpt_amount
-
-    if include_maint:
-        table.append({
-            "Concepto": "Entrenamiento y mantenimiento del bot",
-            "Detalle": f"${BOT_MAINTENANCE_USD} USD fijos (mensual)",
-            "Fuente": "Sistema (opcional, se puede excluir)"
-        })
-        total_usd += float(BOT_MAINTENANCE_USD)
-
-    try:
-        # Crear/obtener cliente en Stripe
-        customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
-
-        # Crear InvoiceItems (Stripe no acepta montos 0)
-        created_any = False
-        for it in items:
-            amount_cents = int(round(float(it["amount_usd"]) * 100))
-            if amount_cents <= 0:
-                continue
-            metadata = {
-                "bot": bot_name,
-                "bot_number": bot_number,
-                "period_from": date_from_s,
-                "period_to": date_to_s,
-                "source": it.get("source", "other")
-            }
-            stripe.InvoiceItem.create(
-                customer=customer.id,
-                amount=amount_cents,
-                currency=currency,
-                description=it["description"],
-                metadata=metadata
-            )
-            created_any = True
-
-        # Crear factura
-        invoice = stripe.Invoice.create(
-            customer=customer.id,
-            collection_method="charge_automatically",
-            auto_advance=True
-        )
-
-        # Finalizar y (si hace falta) cobrar
-        invoice = stripe.Invoice.finalize_invoice(invoice.id)
-        invoice = stripe.Invoice.retrieve(invoice.id)
-
-        if invoice.status == "open":
-            try:
-                invoice = stripe.Invoice.pay(invoice.id)
-            except Exception:
-                # Si no se pudo pagar (p.ej. no hay método de pago), dejamos la factura abierta
-                pass
-
-        print(f"🧾 Stripe Invoice creada -> id={invoice.id} status={invoice.status} url={invoice.hosted_invoice_url}")
-
-        return jsonify({
-            "ok": True,
-            "customer_id": customer.id,
-            "invoice_id": invoice.id,
-            "status": invoice.status,
-            "hosted_invoice_url": invoice.hosted_invoice_url,
-            "table": table,
-            "total_usd": round(total_usd, 2),
-            "period": {"from": date_from_s, "to": date_to_s},
-            "bot": bot_name,
-            "bot_number": bot_number,
-            "note": ("Si alguna partida quedó en $0, no se agregó a Stripe (regla de Stripe). "
-                     "Aun así, la tabla refleja el cálculo completo.")
-        }), 200
-
-    except stripe.error.StripeError as e:
-        msg = getattr(e, "user_message", None) or str(e)
-        print(f"❌ StripeError: {msg}")
-        return jsonify({"error": msg, "table": table, "total_usd": round(total_usd, 2)}), 400
-    except Exception as e:
-        print(f"❌ Error creando factura: {e}")
-        return jsonify({"error": "No se pudo crear la factura en Stripe", "table": table, "total_usd": round(total_usd, 2)}), 500
-
-
 # =======================
 #  Run
 # =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # host 0.0.0.0 para Render
     app.run(host="0.0.0.0", port=port)
