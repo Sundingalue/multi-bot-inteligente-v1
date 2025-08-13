@@ -488,6 +488,7 @@ def whatsapp_bot():
         return str(response)
     # ====== FIN FLUJO AGENDA ======
 
+
     # Sesión / saludo
     if clave_sesion not in session_history:
         session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
@@ -497,7 +498,7 @@ def whatsapp_bot():
         if bot["name"] == "Camila":
             saludo = "Hola, soy Camila, especialista en pólizas de gastos finales de Senior Life. ¿Con quién tengo el gusto?"
         else:
-            saludo = f"Hola, soy {bot['name']}, la asistente del Sr. Sundin Galué, CEO de {bot['business_name']}. ¿Con quién tengo el gusto?"
+            saludo = f"Hola, soy {bot['name']}, de {bot['business_name']}. ¿Con quién tengo el gusto?"
         msg.body(saludo)
         last_message_time[clave_sesion] = time.time()
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
@@ -507,6 +508,7 @@ def whatsapp_bot():
     session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
     last_message_time[clave_sesion] = time.time()
     Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+    
 
     try:
         completion = client.chat.completions.create(
@@ -675,6 +677,18 @@ def send_whatsapp_message(to_number, message, bot_number=None):
     from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
+
+    # ===== System prompt breve: respuestas cortas y humanas =====
+def _compose_system_prompt(bot_cfg: dict) -> str:
+    base = (bot_cfg.get("system_prompt") or "").strip()
+    estilo = (
+        "Estilo: responde en español natural y cercano. Sé breve (máx. 1–2 frases). "
+        "Evita párrafos largos y listas. Haz 1 pregunta clarificadora cuando falte contexto. "
+        "Tono cálido y profesional. Si saludan, saluda y pregunta en qué puedes ayudar."
+    )
+    if base:
+        return f"{base}\n\n{estilo}"
+    return estilo
 
 # =======================
 #  Run
