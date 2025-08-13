@@ -11,6 +11,7 @@ import csv
 from io import StringIO
 import re
 import glob
+import random
 
 # 🔹 Firebase
 import firebase_admin
@@ -66,6 +67,7 @@ last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
+last_probe_used = {}       # clave_sesion -> índice de la última probe usada
 
 # =======================
 #  Helpers generales
@@ -115,22 +117,47 @@ def _apply_style(bot_cfg: dict, text: str) -> str:
 
     return text
 
-def _ensure_question(bot_cfg: dict, text: str) -> str:
-    """Si la respuesta no termina en ?, agrega una pregunta breve para avanzar."""
+def _next_probe(clave_sesion: str, bot_cfg: dict) -> str:
+    """
+    Elige una 'probe' (pregunta breve) desde style.probes sin repetir la última.
+    Si no hay probes, usa fallback_question o una por defecto.
+    """
+    style = (bot_cfg or {}).get("style", {}) or {}
+    probes = style.get("probes") or []
+    probes = [p.strip() for p in probes if isinstance(p, str) and p.strip()]
+
+    fallback = style.get("fallback_question") or "¿Te cuento cómo funciona o prefieres ver opciones?"
+
+    if not probes:
+        return fallback
+
+    last_idx = last_probe_used.get(clave_sesion, None)
+
+    # Construir lista de índices candidatos evitando repetir el último
+    candidates = list(range(len(probes)))
+    if last_idx is not None and last_idx in candidates and len(candidates) > 1:
+        candidates.remove(last_idx)
+
+    idx = random.choice(candidates)
+    last_probe_used[clave_sesion] = idx
+    return probes[idx]
+
+def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
+    """Si la respuesta no termina en ?, agrega una pregunta breve para avanzar (rotando probes)."""
     if not text:
         return text
     trimmed = text.strip()
     if trimmed.endswith("?"):
         return trimmed
 
-    # Pregunta de cortesía configurable (o por defecto)
-    default_q = "¿Te cuento cómo funciona o prefieres ver opciones?"
-    fallback_q = (bot_cfg.get("style", {}) or {}).get("fallback_question") or default_q
-
-    # Si el texto ya llega al límite de oraciones, añadimos con espacio.
+    # Si el texto ya llega al límite de oraciones, cerramos con punto.
     if not trimmed.endswith((".", "!", "…")):
         trimmed += "."
-    return f"{trimmed} {fallback_q}"
+
+    probe = _next_probe(clave_sesion, bot_cfg) if clave_sesion else (
+        (bot_cfg.get("style", {}) or {}).get("fallback_question") or "¿Te cuento cómo funciona o prefieres ver opciones?"
+    )
+    return f"{trimmed} {probe}"
 
 def _make_system_message(bot_cfg: dict) -> str:
     """Combina el system_prompt con un recordatorio de estilo breve y pregunta final."""
@@ -525,19 +552,19 @@ def whatsapp_bot():
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
         elif _is_negative(incoming_msg):
-            msg.body(_ensure_question(bot, decline_msg))
+            msg.body(_ensure_question(bot, decline_msg, clave_sesion))
             agenda_state[clave_sesion] = {"awaiting_confirm": False}
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
         else:
-            msg.body(_ensure_question(bot, confirm_q))
+            msg.body(_ensure_question(bot, confirm_q, clave_sesion))
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
 
     if _wants_to_schedule(incoming_msg, bot):
-        msg.body(_ensure_question(bot, confirm_q))
+        msg.body(_ensure_question(bot, confirm_q, clave_sesion))
         agenda_state[clave_sesion] = {"awaiting_confirm": True}
         last_message_time[clave_sesion] = time.time()
         if clave_sesion not in follow_up_flags:
@@ -552,13 +579,16 @@ def whatsapp_bot():
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
         greeted_state[clave_sesion] = False
+        last_probe_used[clave_sesion] = None
 
     # Saludo inicial: solo una vez por conversación
     greeting_text = bot.get("greeting")
-    intro_keywords = (bot.get("intro_keywords") or ["hola", "hello", "buenas", "hey", "buenos días", "buenas tardes", "buenas noches", "quién eres", "quien eres"])
+    intro_keywords = (bot.get("intro_keywords") or [
+        "hola","hello","buenas","hey","buenos días","buenas tardes","buenas noches","quién eres","quien eres"
+    ])
     if (not greeted_state.get(clave_sesion)) and any(w in incoming_msg.lower() for w in intro_keywords):
         if greeting_text:
-            msg.body(_ensure_question(bot, greeting_text))
+            msg.body(_ensure_question(bot, greeting_text, clave_sesion))
             greeted_state[clave_sesion] = True
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
@@ -578,16 +608,15 @@ def whatsapp_bot():
 
         # Estilo corto
         respuesta = _apply_style(bot, respuesta)
-        # Forzar pregunta final
-        respuesta = _ensure_question(bot, respuesta)
+        # Forzar pregunta final (rotando probes)
+        respuesta = _ensure_question(bot, respuesta, clave_sesion)
 
         # Si por error el modelo repitió el saludo completo, lo evitamos tras el primer saludo
         if greeted_state.get(clave_sesion) and greeting_text:
-            # elimina saludo si viene textual al inicio
             rx = re.escape(greeting_text.split("¿")[0].strip())
             respuesta = re.sub(rf"^{rx}[\s,¡!.\-]*", "", respuesta, flags=re.IGNORECASE).strip()
             if not respuesta:
-                respuesta = _ensure_question(bot, "¿Te cuento cómo funciona o prefieres ver opciones?")
+                respuesta = _ensure_question(bot, "Gracias por escribirme.", clave_sesion)
 
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
