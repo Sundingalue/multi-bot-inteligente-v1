@@ -1550,6 +1550,12 @@ def billing_invoice():
                 bot_number = k
                 break
 
+    # ⚙️ Fallbacks por bot (opcional) si no recibimos email/customer_id
+    if not email and isinstance(bot_cfg, dict):
+        email = (bot_cfg.get("billing_email") or "").strip()
+    if not customer_id and isinstance(bot_cfg, dict):
+        customer_id = (bot_cfg.get("stripe_customer_id") or "").strip()
+
     try:
         date_from = _parse_date(date_from_s)
         date_to = _parse_date(date_to_s)
@@ -1560,18 +1566,21 @@ def billing_invoice():
     twilio = _sum_twilio_cost(bot_number, date_from, date_to)
     prompt, completion, total_tokens, gpt_cost = _sum_gpt_cost(bot_name, date_from, date_to)
 
-    # 2) Resolver cliente
+    # 2) Resolver cliente (por email o customer_id)
     try:
         customer = _find_or_create_customer(email=email, name=name, customer_id=customer_id)
     except Exception as e:
         return jsonify({"error": f"No se pudo resolver el cliente: {e}"}), 400
 
-        items = []
+    # ✅ items bien inicializado (bug fix)
+    items = []
+
     # Item Twilio
     twilio_amount = round(twilio["total_usd"], 2)
     items.append({
         "description": f"Consumo Twilio ({date_from_s} a {date_to_s}) - msgs {twilio['messages']['count']}, calls {twilio['calls']['count']}",
-        "amount_usd": twilio_amount
+        "amount_usd": twilio_amount,
+        "source": "twilio"
     })
 
     # Item GPT
@@ -1580,14 +1589,16 @@ def billing_invoice():
         "description": (f"Consumo GPT ({date_from_s} a {date_to_s}) - "
                         f"tokens in/out/total: {prompt}/{completion}/{total_tokens}. "
                         f"Tarifas: in ${OPENAI_PRICE_IN_PER_M}/M, out ${OPENAI_PRICE_OUT_PER_M}/M"),
-        "amount_usd": gpt_amount
+        "amount_usd": gpt_amount,
+        "source": "gpt"
     })
 
     # Item Mantenimiento (opcional)
     if include_maint:
         items.append({
             "description": "Entrenamiento, codificación y mantenimiento del bot (mensual)",
-            "amount_usd": float(BOT_MAINTENANCE_USD)
+            "amount_usd": float(BOT_MAINTENANCE_USD),
+            "source": "maintenance"
         })
 
     # Tabla solicitada (para tu panel / UI)
@@ -1624,11 +1635,19 @@ def billing_invoice():
             amount_cents = int(round(float(it["amount_usd"]) * 100))
             if amount_cents <= 0:
                 continue
+            metadata = {
+                "bot": bot_name,
+                "bot_number": bot_number,
+                "period_from": date_from_s,
+                "period_to": date_to_s,
+                "source": it.get("source", "other")
+            }
             stripe.InvoiceItem.create(
                 customer=customer.id,
                 amount=amount_cents,
                 currency=currency,
-                description=it["description"]
+                description=it["description"],
+                metadata=metadata
             )
             created_any = True
 
@@ -1649,6 +1668,8 @@ def billing_invoice():
             except Exception:
                 # Si no se pudo pagar (p.ej. no hay método de pago), dejamos la factura abierta
                 pass
+
+        print(f"🧾 Stripe Invoice creada -> id={invoice.id} status={invoice.status} url={invoice.hosted_invoice_url}")
 
         return jsonify({
             "ok": True,
