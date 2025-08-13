@@ -72,6 +72,10 @@ last_probe_used = {}       # clave_sesion -> índice de la última probe usada
 # =======================
 #  Helpers generales
 # =======================
+
+# ✅ Fallback genérico neutral (nuevo)
+GENERIC_FALLBACK_QUESTION = "¿Quieres que continúe con más detalles?"
+
 def _hora_to_epoch_ms(hora_str: str) -> int:
     try:
         dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
@@ -120,20 +124,21 @@ def _apply_style(bot_cfg: dict, text: str) -> str:
 def _next_probe(clave_sesion: str, bot_cfg: dict) -> str:
     """
     Elige una 'probe' (pregunta breve) desde style.probes sin repetir la última.
-    Si no hay probes, usa fallback_question o una por defecto.
+    Si no hay probes:
+      - usa style.fallback_question si existe y no está vacía
+      - de lo contrario usa un fallback genérico neutral (NO la frase antigua).
     """
     style = (bot_cfg or {}).get("style", {}) or {}
     probes = style.get("probes") or []
     probes = [p.strip() for p in probes if isinstance(p, str) and p.strip()]
 
-    fallback = style.get("fallback_question") or "¿Te cuento cómo funciona o prefieres ver opciones?"
-
     if not probes:
-        return fallback
+        fb = style.get("fallback_question")
+        if isinstance(fb, str) and fb.strip():
+            return fb.strip()
+        return GENERIC_FALLBACK_QUESTION
 
     last_idx = last_probe_used.get(clave_sesion, None)
-
-    # Construir lista de índices candidatos evitando repetir el último
     candidates = list(range(len(probes)))
     if last_idx is not None and last_idx in candidates and len(candidates) > 1:
         candidates.remove(last_idx)
@@ -148,7 +153,7 @@ def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
     Asegura que la respuesta termine con **una sola** pregunta.
     - Si el texto ya contiene un signo de interrogación (?) en cualquier parte,
       NO añade probes.
-    - Si no contiene preguntas, añade UNA probe (fallback o la definida).
+    - Si no contiene preguntas, añade UNA probe elegida por _next_probe.
     - Evita duplicar preguntas seguidas.
     """
     if not text:
@@ -162,14 +167,11 @@ def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
         txt = re.sub(r"(\?\s*)(¿.+\?)", r"\1", txt)
         return txt
 
-    # No hay preguntas -> añadimos UNA
+    # No hay preguntas -> añadimos UNA probe elegida
     if not txt.endswith((".", "!", "…")):
         txt += "."
 
-    probe = (
-        (bot_cfg.get("style", {}) or {}).get("fallback_question")
-        or "¿Te cuento cómo funciona o prefieres ver opciones?"
-    )
+    probe = _next_probe(clave_sesion, bot_cfg)
     return f"{txt} {probe}"
 
 def _make_system_message(bot_cfg: dict) -> str:
