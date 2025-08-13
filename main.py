@@ -65,7 +65,7 @@ if not bots_config:
 session_history = {}       # clave_sesion -> mensajes para OpenAI
 last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
-agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool}
+agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "booked": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 last_probe_used = {}       # clave_sesion -> índice de la última probe usada
 
@@ -142,39 +142,35 @@ def _next_probe(clave_sesion: str, bot_cfg: dict) -> str:
     last_probe_used[clave_sesion] = idx
     return probes[idx]
 
+# ===== NUEVA VERSIÓN: asegura una sola pregunta y no añade si ya existe =====
 def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
     """
     Asegura que la respuesta termine con **una sola** pregunta.
-    - Si el texto ya contiene al menos un signo de interrogación (?) en cualquier parte,
+    - Si el texto ya contiene un signo de interrogación (?) en cualquier parte,
       NO añade probes.
-    - Si no contiene preguntas, añade UNA probe (rotando) o la fallback.
+    - Si no contiene preguntas, añade UNA probe (fallback o la definida).
     - Evita duplicar preguntas seguidas.
     """
     if not text:
         text = ""
 
-    # Normaliza espacios
     txt = re.sub(r"\s+", " ", text).strip()
 
-    # Si ya hay alguna pregunta en el contenido, no agregamos más
+    # Ya hay una pregunta en el contenido -> no agregamos nada
     if "?" in txt:
-        # además, limpia posibles repeticiones del estilo "¿...?" "¿...?"
-        # dejando solo la primera pregunta final si hay dos pegadas
-        txt = re.sub(r"(\?\s*)(¿.+\?)", r"\1", txt)  # conserva la primera
+        # Limpia casos raros: dos preguntas pegadas
+        txt = re.sub(r"(\?\s*)(¿.+\?)", r"\1", txt)
         return txt
 
-    # Aún no hay pregunta -> añadimos UNA
+    # No hay preguntas -> añadimos UNA
     if not txt.endswith((".", "!", "…")):
         txt += "."
 
-    probe = _next_probe(clave_sesion, bot_cfg) if clave_sesion else (
-        (bot_cfg.get("style", {}) or {}).get("fallback_question") or
-        "¿Te cuento cómo funciona o prefieres ver opciones?"
+    probe = (
+        (bot_cfg.get("style", {}) or {}).get("fallback_question")
+        or "¿Te cuento cómo funciona o prefieres ver opciones?"
     )
-
-    # Garantiza solo una pregunta final
     return f"{txt} {probe}"
-
 
 def _make_system_message(bot_cfg: dict) -> str:
     """Combina el system_prompt con un recordatorio de estilo breve y pregunta final."""
@@ -182,8 +178,8 @@ def _make_system_message(bot_cfg: dict) -> str:
     style = (bot_cfg or {}).get("style", {}) or {}
     short = "Responde en mensajes cortos." if style.get("short_replies", True) else ""
     max_s = style.get("max_sentences")
+    askq = "Termina cada respuesta con una sola pregunta clara para avanzar."
     extra = f" Usa como máximo {max_s} oraciones." if isinstance(max_s, int) else ""
-    askq = "Termina cada respuesta con una sola pregunta clara para avanzar."  # forzado global
     squeeze = f"\n\nDirectriz de estilo: {short}{extra} {askq}".strip()
     return (base + squeeze).strip()
 
@@ -216,6 +212,18 @@ def _is_negative(texto: str) -> bool:
     t = texto.strip().lower()
     neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues", "not now"}
     return any(t == n or t.startswith(n + " ") for n in neg)
+
+# ===== NUEVO: detector de confirmación de agendado =====
+def _is_scheduled_confirmation(texto: str) -> bool:
+    if not texto:
+        return False
+    t = texto.lower()
+    kws = [
+        "ya agende", "ya agendé", "agende", "agendé", "ya programe", "ya programé",
+        "ya agendado", "agendado", "confirmé", "confirmado",
+        "listo", "done", "booked", "i booked", "i scheduled", "scheduled"
+    ]
+    return any(k in t for k in kws)
 
 # =======================
 #  Firebase: helpers de leads
@@ -546,23 +554,34 @@ def whatsapp_bot():
     guardar_lead(bot["name"], sender_number, incoming_msg)
 
     # ====== FLUJO AGENDA con confirmación basada en JSON ======
-    st = agenda_state.get(clave_sesion, {"awaiting_confirm": False})
+    st = agenda_state.get(clave_sesion, {"awaiting_confirm": False, "booked": False})
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
     # Prepara textos con reemplazo del link de calendario (ENV)
     confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
     link_tmpl = agenda_cfg.get("link_message") or "Agenda aquí:\n{GOOGLE_CALENDAR_BOOKING_URL}"
     decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
+    closing_default = "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí."
     link_msg = link_tmpl.replace("{GOOGLE_CALENDAR_BOOKING_URL}", GOOGLE_CALENDAR_BOOKING_URL)
+
+    # 🔒 Si el usuario dice "ya agendé / listo", cerramos sin más preguntas
+    if _is_scheduled_confirmation(incoming_msg) or st.get("booked"):
+        closing = agenda_cfg.get("closing_message") or closing_default
+        msg.body(closing)
+        agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": True}
+        last_message_time[clave_sesion] = time.time()
+        # No lanzamos follow-ups cuando ya quedó agendada
+        return str(response)
 
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
+            # Mandamos SOLO el link y cerramos la espera (sin probes extra)
             msg.body(link_msg)
             try:
                 ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": link_msg, "hora": ahora_bot})
             except Exception as e:
                 print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
-            agenda_state[clave_sesion] = {"awaiting_confirm": False}
+            agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}
             last_message_time[clave_sesion] = time.time()
             if clave_sesion not in follow_up_flags:
                 follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
@@ -570,7 +589,7 @@ def whatsapp_bot():
             return str(response)
         elif _is_negative(incoming_msg):
             msg.body(_ensure_question(bot, decline_msg, clave_sesion))
-            agenda_state[clave_sesion] = {"awaiting_confirm": False}
+            agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
@@ -582,7 +601,7 @@ def whatsapp_bot():
 
     if _wants_to_schedule(incoming_msg, bot):
         msg.body(_ensure_question(bot, confirm_q, clave_sesion))
-        agenda_state[clave_sesion] = {"awaiting_confirm": True}
+        agenda_state[clave_sesion] = {"awaiting_confirm": True, "booked": False}
         last_message_time[clave_sesion] = time.time()
         if clave_sesion not in follow_up_flags:
             follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
@@ -625,7 +644,7 @@ def whatsapp_bot():
 
         # Estilo corto
         respuesta = _apply_style(bot, respuesta)
-        # Forzar pregunta final (rotando probes)
+        # Forzar pregunta final (respetando "solo una")
         respuesta = _ensure_question(bot, respuesta, clave_sesion)
 
         # Si por error el modelo repitió el saludo completo, lo evitamos tras el primer saludo
