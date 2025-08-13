@@ -15,7 +15,13 @@
       "always_question": true,                
       "tail_question_es": "¿Prefieres ver opciones o te cuento cómo funciona?",
       "avoid_titles": true,
-      "human_like": true
+      "human_like": true,
+      "probes": [
+        "¿Te interesa más el alcance o los beneficios?",
+        "¿Prefieres ver formatos o te cuento cómo funciona?",
+        "¿Buscas más llamadas o más visitas al local?",
+        "¿Quieres que te muestre casos de clientes similares?"
+      ]
     },
 
     "agenda": {
