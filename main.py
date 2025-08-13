@@ -576,7 +576,7 @@ def whatsapp_bot():
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
     # Prepara textos con reemplazo robusto del link
     confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
-    link_tmpl = agenda_cfg.get("link_message") or "Agenda aquí:\n{GOOGLE_CALENDAR_BOOKING_URL}"
+    link_tmpl = agenda_cfg.get("link_message") or f"Agenda aquí:\n{BOOKING_URL or 'https://calendar.app.google/2PAh6A4Lkxw3qxLC9'}"
     decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
     closing_default = "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí."
     link_msg = _render_template(link_tmpl, {
