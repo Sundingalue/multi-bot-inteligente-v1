@@ -37,10 +37,32 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
 
 # =======================
-#  Configuración de bots (TODO centralizado en bots_config.json)
+#  Cargar TODOS los bots desde /bots/*.json
+#  (Cada archivo debe mapear "whatsapp:+1..." -> {config})
 # =======================
-with open("bots_config.json", "r") as f:
-    bots_config = json.load(f)
+def _load_all_bots_from_dir(bots_dir: str = "bots"):
+    merged = {}
+    try:
+        if not os.path.isdir(bots_dir):
+            return merged
+        for fname in os.listdir(bots_dir):
+            if not fname.lower().endswith(".json"):
+                continue
+            path = os.path.join(bots_dir, fname)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    # combinamos por número (clave externa)
+                    for k, v in data.items():
+                        merged[k] = v
+            except Exception as e:
+                print(f"⚠️ No pude leer {path}: {e}")
+    except Exception as e:
+        print(f"⚠️ Error cargando bots de {bots_dir}: {e}")
+    return merged
+
+bots_config = _load_all_bots_from_dir("bots")
 
 # Memoria simple por sesión de chat (para WhatsApp)
 session_history = {}
@@ -76,11 +98,10 @@ def _get_bot_cfg_by_number(to_number: str):
     """Devuelve el dict del bot usando la clave del número To (ej: 'whatsapp:+1346...')."""
     return bots_config.get(to_number)
 
-# ===== Intención de agenda y confirmación (usando bots_config) =====
+# ===== Intención de agenda y confirmación (usando config del bot) =====
 def _bot_agenda_keywords(bot_cfg):
     agenda = (bot_cfg or {}).get("agenda", {}) or {}
     kws = agenda.get("keywords") or []
-    # normalizar
     return [k.lower() for k in kws if isinstance(k, str) and k.strip()]
 
 def _wants_to_schedule(texto: str, bot_cfg: dict) -> bool:
@@ -96,7 +117,7 @@ def _is_affirmative(texto: str) -> bool:
     t = texto.strip().lower()
     afirm = {
         "si", "sí", "ok", "okay", "dale", "va", "claro", "por favor",
-        "hagamoslo", "hagámoslo", "perfecto", "de una", "yes", "yep", "yeah"
+        "hagamoslo", "hagámoslo", "perfecto", "de una", "yes", "yep", "yeah", "sure"
     }
     return any(t == a or t.startswith(a + " ") for a in afirm)
 
@@ -104,14 +125,11 @@ def _is_negative(texto: str) -> bool:
     if not texto:
         return False
     t = texto.strip().lower()
-    neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues"}
+    neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues", "not now"}
     return any(t == n or t.startswith(n + " ") for n in neg)
 
-def _split_sentences_es(text: str):
-    # Separación básica por oraciones para recortar respuestas
-    # Evita cortar dentro de URLs.
+def _split_sentences(text: str):
     parts = re.split(r'(?<=[\.\!\?])\s+', text.strip())
-    # Si no había signos, usa un fallback suave por longitud
     if len(parts) == 1 and len(text) > 280:
         parts = [text[:200].strip(), text[200:].strip()]
     return [p for p in parts if p]
@@ -126,35 +144,52 @@ def _apply_style(bot_cfg: dict, text: str) -> str:
         return text
 
     if short:
-        sents = _split_sentences_es(text)
+        sents = _split_sentences(text)
         text = " ".join(sents[:max_sents]).strip()
 
-    # Opcional: si piden hacer preguntas aclaratorias y la respuesta no termina en '?'
     ask_q = bool(style.get("ask_clarifying_question", True))
     if ask_q:
         trimmed = text.rstrip()
         if not trimmed.endswith("?"):
-            # agrega una pregunta breve y neutral
             extra_q = " ¿Te cuento cómo funciona o prefieres ver opciones?"
-            # Evitar exceder mucho el límite; si ya usamos el máximo, no agregamos
-            if not short or (short and len(_split_sentences_es(text)) < max_sents):
+            if not short or (short and len(_split_sentences(text)) < max_sents):
                 text = (trimmed + extra_q).strip()
 
     return text
 
 def _make_system_message(bot_cfg: dict) -> str:
-    """Combina el system_prompt del bot con un apretón de estilo (brevity)."""
+    """Combina el system_prompt del bot con pautas de brevedad."""
     base = (bot_cfg or {}).get("system_prompt", "") or ""
     style = (bot_cfg or {}).get("style", {}) or {}
     short = "Responde en mensajes cortos" if style.get("short_replies", True) else ""
-    max_s = style.get("max_sentences")
-    if isinstance(max_s, int):
-        extra = f" como máximo {max_s} oraciones por mensaje."
-    else:
-        extra = "."
+    extra = f" como máximo {int(style.get('max_sentences', 2))} oraciones por mensaje."
     askq = "Haz una pregunta breve y útil al final si ayuda a avanzar." if style.get("ask_clarifying_question", True) else ""
     squeeze = f"\n\nDirectriz de estilo: {short}{extra} {askq}".strip()
     return (base + squeeze).strip()
+
+def _detect_intro(incoming_text: str, bot_cfg: dict) -> bool:
+    kws = (bot_cfg or {}).get("intro_keywords") or []
+    kws = [k.lower() for k in kws if isinstance(k, str)]
+    if not kws:
+        # fallback básico
+        kws = ["hola", "hello", "buenas", "hey", "buenos días", "buenas tardes", "buenas noches", "quién eres", "quien eres", "hi"]
+    t = (incoming_text or "").lower()
+    return any(k in t for k in kws)
+
+def _choose_greeting(bot_cfg: dict, incoming_text: str) -> str:
+    g = (bot_cfg or {}).get("greeting")
+    if isinstance(g, dict):
+        # detección súper simple: si el usuario escribió en español (tiene tildes o palabras comunes)
+        t = (incoming_text or "").lower()
+        spanish_markers = ["hola", "buenos", "buenas", "qué", "que", "gracias", "¿", "¡"]
+        is_es = any(w in t for w in spanish_markers)
+        return g.get("es") if is_es and g.get("es") else (g.get("en") or "")
+    if isinstance(g, str):
+        return g
+    # fallback
+    name = (bot_cfg or {}).get("name", "")
+    business = (bot_cfg or {}).get("business_name", "")
+    return f"Hola, soy {name} de {business}. ¿En qué te ayudo?"
 
 # =======================
 #  Firebase: helpers de leads
@@ -487,12 +522,15 @@ def whatsapp_bot():
     # ====== FLUJO AGENDA desde bots_config ======
     st = agenda_state.get(clave_sesion, {"awaiting_confirm": False})
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
-    cal_url = bot.get("calendar_url", "").strip()
+    cal_url = (bot.get("calendar_url") or "").strip()
 
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
             if cal_url:
                 link_msg_tmpl = agenda_cfg.get("link_message") or "Agenda aquí:\n{calendar_url}"
+                # Soportar dict es/en
+                if isinstance(link_msg_tmpl, dict):
+                    link_msg_tmpl = link_msg_tmpl.get("es") or link_msg_tmpl.get("en") or "Agenda aquí:\n{calendar_url}"
                 texto_agenda = link_msg_tmpl.replace("{calendar_url}", cal_url)
             else:
                 texto_agenda = "Puedo agendarte. Envíame dos opciones de día y hora y te confirmo enseguida."
@@ -512,6 +550,8 @@ def whatsapp_bot():
 
         elif _is_negative(incoming_msg):
             decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
+            if isinstance(decline_msg, dict):
+                decline_msg = decline_msg.get("es") or decline_msg.get("en") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
             msg.body(decline_msg)
             agenda_state[clave_sesion] = {"awaiting_confirm": False}
             last_message_time[clave_sesion] = time.time()
@@ -520,6 +560,8 @@ def whatsapp_bot():
 
         else:
             confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
+            if isinstance(confirm_q, dict):
+                confirm_q = confirm_q.get("es") or confirm_q.get("en") or "¿Quieres que te comparta el enlace para agendar?"
             msg.body(confirm_q)
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
@@ -528,6 +570,8 @@ def whatsapp_bot():
     # Detectar intención de agenda según keywords del bot
     if _wants_to_schedule(incoming_msg, bot):
         confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
+        if isinstance(confirm_q, dict):
+            confirm_q = confirm_q.get("es") or confirm_q.get("en") or "¿Quieres que te comparta el enlace para agendar?"
         msg.body(confirm_q)
         agenda_state[clave_sesion] = {"awaiting_confirm": True}
         last_message_time[clave_sesion] = time.time()
@@ -537,17 +581,16 @@ def whatsapp_bot():
         return str(response)
     # ====== FIN FLUJO AGENDA ======
 
-    # Sesión / saludo (todo desde bots_config)
+    # Sesión / saludo (todo desde archivo del bot)
     if clave_sesion not in session_history:
-        # construimos el mensaje de sistema fusionado con estilo
         sysmsg = _make_system_message(bot)
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
-    # saludo inicial si el usuario dijo "hola", etc.
-    if any(w in incoming_msg.lower() for w in ["hola", "hello", "buenas", "hey", "buenos días", "buenas tardes", "buenas noches", "quién eres", "quien eres"]):
-        greeting = bot.get("greeting") or f"Hola, soy {bot.get('name','')}."
-        msg.body(greeting)
+    # saludo inicial si el usuario dijo "hola", etc. (según intro_keywords)
+    if _detect_intro(incoming_msg, bot):
+        greeting_text = _choose_greeting(bot, incoming_msg)
+        msg.body(greeting_text)
         last_message_time[clave_sesion] = time.time()
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
         return str(response)
@@ -563,8 +606,6 @@ def whatsapp_bot():
             messages=session_history[clave_sesion]
         )
         respuesta = (completion.choices[0].message.content or "").strip()
-
-        # aplicar estilo corto/clarificador según bots_config
         respuesta = _apply_style(bot, respuesta)
 
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
