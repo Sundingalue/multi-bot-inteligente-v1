@@ -1,4 +1,4 @@
-from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template
+from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -10,7 +10,7 @@ from datetime import datetime
 import csv
 from io import StringIO
 import re
-from pathlib import Path
+from glob import glob
 
 # 🔹 Firebase
 import firebase_admin
@@ -38,46 +38,37 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
 
 # =======================
-#  Configuración de bots (auto-carga desde carpeta /bots)
+#  Carga automática de bots desde /bots/*.json
 # =======================
-def _load_all_bots(dir_path: str = "bots"):
+BOTS_DIR = os.getenv("BOTS_DIR", "bots")
+
+def _load_all_bots_from_dir():
     """
-    Lee todos los archivos *.json dentro de /bots y fusiona su contenido en un solo dict.
-    Cada archivo debe tener el formato:
-      {
-        "whatsapp:+1XXXXXXXXXX": { ...config del bot... },
-        "whatsapp:+1YYYYYYYYYY": { ...config de otro bot... }
-      }
-    Si hay una clave (número) repetida, prevalece la última.
+    Lee todos los JSON dentro de /bots y construye un único dict:
+    { "whatsapp:+1...": {config}, ... }
     """
     merged = {}
-    base = Path(dir_path)
-    if not base.exists():
-        print(f"⚠️ Carpeta '{dir_path}' no existe; crea /bots y coloca tus JSON ahí.")
+    if not os.path.isdir(BOTS_DIR):
         return merged
 
-    files = sorted(base.glob("*.json"))
-    if not files:
-        print(f"⚠️ No se encontraron JSON en '{dir_path}'.")
-        return merged
-
-    for fp in files:
+    for path in glob(os.path.join(BOTS_DIR, "*.json")):
         try:
-            with open(fp, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
+                # cada archivo puede traer { numero: config, ... }
                 for k, v in data.items():
                     merged[k] = v
-            else:
-                print(f"⚠️ {fp} no contiene un objeto JSON raíz (dict). Omitido.")
         except Exception as e:
-            print(f"❌ Error leyendo {fp}: {e}")
-    print(f"✅ Bots cargados desde /{dir_path}: {len(files)} archivos, {len(merged)} números configurados.")
+            print(f"⚠️ No pude leer {path}: {e}")
     return merged
 
-bots_config = _load_all_bots("bots")
+# Carga inicial
+bots_config = _load_all_bots_from_dir()
 
-# Memoria simple por sesión de chat (para WhatsApp)
+# =======================
+#  Memorias en RAM
+# =======================
 session_history = {}
 last_message_time = {}
 follow_up_flags = {}
@@ -94,9 +85,10 @@ def _hora_to_epoch_ms(hora_str: str) -> int:
         return 0
 
 def _normalize_bot_name(name: str):
-    for config in bots_config.values():
-        if config.get("name", "").lower() == str(name).lower():
-            return config["name"]
+    # Recorre configs por nombre
+    for cfg in bots_config.values():
+        if cfg.get("name", "").lower() == str(name).lower():
+            return cfg["name"]
     return None
 
 def _get_bot_cfg_by_name(name: str):
@@ -110,27 +102,6 @@ def _get_bot_cfg_by_name(name: str):
 def _get_bot_cfg_by_number(to_number: str):
     """Devuelve el dict del bot usando la clave del número To (ej: 'whatsapp:+1346...')."""
     return bots_config.get(to_number)
-
-# ===== Detección simple de idioma (ES/EN) =====
-def _lang_from_text(text: str) -> str:
-    if not text:
-        return "es"
-    t = text.lower()
-    en_hits = ["hello", "hi", "price", "how", "when", "where", "call", "meeting", "schedule", "book", "appointment", "help"]
-    es_hits = ["hola", "buenas", "precio", "cómo", "como", "cuándo", "dónde", "cita", "agendar", "reunión", "llamada", "ayuda"]
-    if any(w in t for w in en_hits) and not any(w in t for w in es_hits):
-        return "en"
-    return "es"
-
-def _choose_greeting(bot_cfg: dict, user_text: str) -> str:
-    g = bot_cfg.get("greeting")
-    if isinstance(g, dict):
-        lang = _lang_from_text(user_text)
-        return g.get(lang) or g.get("es") or g.get("en") or f"Hola, soy {bot_cfg.get('name','')}."
-    if isinstance(g, str):
-        return g
-    # fallback
-    return f"Hola, soy {bot_cfg.get('name','')}."
 
 # ===== Intención de agenda y confirmación (usando bots_config) =====
 def _bot_agenda_keywords(bot_cfg):
@@ -151,7 +122,7 @@ def _is_affirmative(texto: str) -> bool:
     t = texto.strip().lower()
     afirm = {
         "si", "sí", "ok", "okay", "dale", "va", "claro", "por favor",
-        "hagamoslo", "hagámoslo", "perfecto", "de una", "yes", "yep", "yeah", "sure", "please"
+        "hagamoslo", "hagámoslo", "perfecto", "de una", "yes", "yep", "yeah", "sure"
     }
     return any(t == a or t.startswith(a + " ") for a in afirm)
 
@@ -159,10 +130,11 @@ def _is_negative(texto: str) -> bool:
     if not texto:
         return False
     t = texto.strip().lower()
-    neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues", "not now", "later"}
+    neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues", "not now"}
     return any(t == n or t.startswith(n + " ") for n in neg)
 
 def _split_sentences(text: str):
+    # Separación básica por oraciones; evita cortar dentro de URLs.
     parts = re.split(r'(?<=[\.\!\?])\s+', text.strip())
     if len(parts) == 1 and len(text) > 280:
         parts = [text[:200].strip(), text[200:].strip()]
@@ -185,30 +157,23 @@ def _apply_style(bot_cfg: dict, text: str) -> str:
     if ask_q:
         trimmed = text.rstrip()
         if not trimmed.endswith("?"):
-            # pregunta breve para avanzar
             extra_q = " ¿Prefieres que te explique cómo funciona o ver opciones?"
-            # Si ya usamos el máximo de oraciones, no agregamos
-            sents_now = _split_sentences(trimmed)
-            if not short or len(sents_now) < max_sents:
+            # Solo añade si no excedemos el límite de oraciones
+            if not short or (short and len(_split_sentences(text)) < max_sents):
                 text = (trimmed + extra_q).strip()
 
     return text
 
 def _make_system_message(bot_cfg: dict) -> str:
-    """Combina el system_prompt del bot con una directriz breve de estilo."""
+    """Combina el system_prompt del bot con una directriz de estilo (brevedad/pregunta final)."""
     base = (bot_cfg or {}).get("system_prompt", "") or ""
     style = (bot_cfg or {}).get("style", {}) or {}
-    line1 = "Responde en mensajes cortos" if style.get("short_replies", True) else "Responde con la extensión necesaria"
+    short = "Responde en mensajes cortos" if style.get("short_replies", True) else ""
     max_s = style.get("max_sentences")
-    extra = f" (máx. {max_s} oraciones por mensaje)." if isinstance(max_s, int) else "."
-    askq = " Haz una pregunta breve al final si ayuda a avanzar." if style.get("ask_clarifying_question", True) else ""
-    squeeze = f"\n\nDirectriz de estilo: {line1}{extra}{askq}".strip()
+    extra = f" (máximo {max_s} oraciones)." if isinstance(max_s, int) else "."
+    askq = "Termina con una pregunta breve si ayuda a avanzar." if style.get("ask_clarifying_question", True) else ""
+    squeeze = f"\n\nDirectriz de estilo: {short}{extra} {askq}".strip()
     return (base + squeeze).strip()
-
-@app.after_request
-def permitir_iframe(response):
-    response.headers["X-Frame-Options"] = "ALLOWALL"
-    return response
 
 # =======================
 #  Firebase: helpers de leads
@@ -280,7 +245,36 @@ def fb_list_leads_by_bot(bot_nombre):
     return leads
 
 # =======================
-#  Rutas UI: Paneles
+#  Leads y WhatsApp
+# =======================
+def guardar_lead(bot_nombre, numero, mensaje):
+    try:
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lead = fb_get_lead(bot_nombre, numero)
+        if not lead:
+            lead = {
+                "bot": bot_nombre,
+                "numero": numero,
+                "first_seen": ahora,
+                "last_message": mensaje,
+                "last_seen": ahora,
+                "messages": 0,
+                "status": "nuevo",
+                "notes": "",
+                "historial": []
+            }
+            _lead_ref(bot_nombre, numero).set(lead)
+        fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
+    except Exception as e:
+        print(f"❌ Error guardando lead: {e}")
+
+@app.after_request
+def permitir_iframe(response):
+    response.headers["X-Frame-Options"] = "ALLOWALL"
+    return response
+
+# =======================
+#  Rutas UI: Paneles / Auth
 # =======================
 def _load_users():
     env_users = {}
@@ -349,7 +343,7 @@ def _user_can_access_bot(bot_name):
     bots = session.get("bots_permitidos", [])
     return bot_name in bots
 
-@app.route("/panel-bot/<bot_nombre>")
+@app.route("/panel-bot/<bot_nombre>", endpoint="panel_exclusivo_bot")
 def panel_exclusivo_bot(bot_nombre):
     if not session.get("autenticado"):
         return redirect(url_for("panel"))
@@ -477,17 +471,6 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 # =======================
-#  Admin: recargar bots sin redeploy (opcional)
-# =======================
-@app.route("/admin/reload-bots", methods=["POST", "GET"])
-def admin_reload_bots():
-    if not session.get("autenticado"):
-        return jsonify({"error": "No autenticado"}), 401
-    global bots_config
-    bots_config = _load_all_bots("bots")
-    return jsonify({"ok": True, "count": len(bots_config)})
-
-# =======================
 #  Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
@@ -518,30 +501,22 @@ def whatsapp_bot():
         return str(response)
 
     # Guarda el mensaje del usuario
-    guardar_lead(bot["name"], sender_number, incoming_msg)
+    guardar_lead(bot.get("name","Bot"), sender_number, incoming_msg)
 
     # ====== FLUJO AGENDA desde bots_config ======
     st = agenda_state.get(clave_sesion, {"awaiting_confirm": False})
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
     cal_url = (bot.get("calendar_url") or "").strip()
 
-    def _pick_lang_text(value, user_text, default_es=""):
-        """Devuelve string desde value (dict por idioma o string)."""
-        if isinstance(value, dict):
-            lang = _lang_from_text(user_text)
-            return value.get(lang) or value.get("es") or value.get("en") or default_es
-        if isinstance(value, str):
-            return value
-        return default_es
-
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
-            link_tmpl = _pick_lang_text(agenda_cfg.get("link_message"), incoming_msg, "Agenda aquí:\n{calendar_url}")
-            texto_agenda = link_tmpl.replace("{calendar_url}", cal_url) if cal_url else "Puedo agendarte. Envíame dos opciones de día y hora y te confirmo enseguida."
+            link_msg_tmpl = agenda_cfg.get("link_message") or "Agenda aquí:\n{calendar_url}"
+            texto_agenda = link_msg_tmpl.replace("{calendar_url}", cal_url) if cal_url else \
+                "Puedo agendarte. Envíame dos opciones de día y hora y te confirmo enseguida."
             msg.body(texto_agenda)
             try:
                 ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
+                fb_append_historial(bot.get("name","Bot"), sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
             except Exception as e:
                 print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
 
@@ -553,7 +528,7 @@ def whatsapp_bot():
             return str(response)
 
         elif _is_negative(incoming_msg):
-            decline_msg = _pick_lang_text(agenda_cfg.get("decline_message"), incoming_msg, "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace.")
+            decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
             msg.body(decline_msg)
             agenda_state[clave_sesion] = {"awaiting_confirm": False}
             last_message_time[clave_sesion] = time.time()
@@ -561,7 +536,7 @@ def whatsapp_bot():
             return str(response)
 
         else:
-            confirm_q = _pick_lang_text(agenda_cfg.get("confirm_question"), incoming_msg, "¿Quieres que te comparta el enlace para agendar?")
+            confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
             msg.body(confirm_q)
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
@@ -569,7 +544,7 @@ def whatsapp_bot():
 
     # Detectar intención de agenda según keywords del bot
     if _wants_to_schedule(incoming_msg, bot):
-        confirm_q = _pick_lang_text(agenda_cfg.get("confirm_question"), incoming_msg, "¿Quieres que te comparta el enlace para agendar?")
+        confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
         msg.body(confirm_q)
         agenda_state[clave_sesion] = {"awaiting_confirm": True}
         last_message_time[clave_sesion] = time.time()
@@ -585,14 +560,26 @@ def whatsapp_bot():
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
-    # saludo inicial si el usuario dijo "hola", etc. (puede venir como dict por idiomas)
-    intro_words = (bot.get("intro_keywords") or [
-        "hola", "hello", "buenas", "hey", "buenos días", "buenas tardes", "buenas noches", "quién eres", "quien eres", "hi"
-    ])
-    if any(w in incoming_msg.lower() for w in intro_words):
-        greeting = _choose_greeting(bot, incoming_msg)
+    # Saludos según bots_config.greeting o fallback
+    lower = incoming_msg.lower()
+    intro_kws = (bot.get("intro_keywords") or [])
+    greet_cfg = bot.get("greeting")
+    said_intro = False
+    if intro_kws and any(kw.lower() in lower for kw in intro_kws):
+        # greeting puede ser dict con 'es'/'en' o string
+        if isinstance(greet_cfg, dict):
+            # detectar idioma básico
+            if any(x in lower for x in ["hello", "hi", "good morning", "good afternoon", "good evening", "who are you"]):
+                greeting = greet_cfg.get("en") or greet_cfg.get("es") or f"Hola, soy {bot.get('name','')}."
+            else:
+                greeting = greet_cfg.get("es") or greet_cfg.get("en") or f"Hola, soy {bot.get('name','')}."
+        else:
+            greeting = greet_cfg or f"Hola, soy {bot.get('name','')}."
         msg.body(greeting)
         last_message_time[clave_sesion] = time.time()
+        said_intro = True
+
+    if said_intro:
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
         return str(response)
 
@@ -614,7 +601,7 @@ def whatsapp_bot():
 
         try:
             ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+            fb_append_historial(bot.get("name","Bot"), sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
         except Exception as e:
             print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
 
@@ -623,6 +610,51 @@ def whatsapp_bot():
         msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
+
+# =======================
+#  Vistas de conversación (leen Firebase)
+# =======================
+@app.route("/conversacion_general/<bot>/<numero>", endpoint="chat_general")
+def chat_general(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+@app.route("/conversacion_bot/<bot>/<numero>", endpoint="chat_bot")
+def chat_bot(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 # =======================
 #  API de polling (lee Firebase)
@@ -725,6 +757,17 @@ def send_whatsapp_message(to_number, message, bot_number=None):
     from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
+
+# =======================
+#  Utilidad: recargar bots sin redeploy
+# =======================
+@app.route("/reload-bots", methods=["POST"])
+def reload_bots():
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    global bots_config
+    bots_config = _load_all_bots_from_dir()
+    return jsonify({"ok": True, "bots_loaded": list(bots_config.keys())})
 
 # =======================
 #  Run
