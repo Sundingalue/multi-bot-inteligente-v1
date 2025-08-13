@@ -72,7 +72,6 @@ follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "booked": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 last_probe_used = {}       # clave_sesion -> índice de la última probe usada
-price_requests_count = {}  # clave_sesion -> cuántas veces pidió precios
 
 # =======================
 #  Helpers generales
@@ -80,13 +79,6 @@ price_requests_count = {}  # clave_sesion -> cuántas veces pidió precios
 
 # ✅ Fallback genérico neutral (NO la frase antigua)
 GENERIC_FALLBACK_QUESTION = "¿Quieres que continúe con más detalles?"
-
-# Tabla de precios ES (segunda insistencia)
-PRICE_TABLE_ES = (
-    "1/4 pág: $420 · 1/2 pág: $750 · Página completa: $1300 · "
-    "2 interiores: $2200 · 2 centrales/primeras/últimas: $3000. "
-    "Descuentos del 50%, 25% o 15% según tamaño y duración."
-)
 
 def _hora_to_epoch_ms(hora_str: str) -> int:
     try:
@@ -222,17 +214,6 @@ def _wants_to_schedule(texto: str, bot_cfg: dict) -> bool:
     kws = _bot_agenda_keywords(bot_cfg)
     return any(k in t for k in kws)
 
-# ===== Detección de intención de precios =====
-def _asks_prices(texto: str) -> bool:
-    if not texto:
-        return False
-    t = texto.lower()
-    keywords = [
-        "precio", "precios", "costo", "costos", "tarifa", "tarifas", "cuánto", "cuanto", 
-        "vale", "valen", "cuesta", "cuestan", "price", "prices", "how much", "cost"
-    ]
-    return any(k in t for k in keywords)
-
 def _is_affirmative(texto: str) -> bool:
     if not texto:
         return False
@@ -261,13 +242,6 @@ def _is_scheduled_confirmation(texto: str) -> bool:
         "listo", "done", "booked", "i booked", "i scheduled", "scheduled"
     ]
     return any(k in t for k in kws)
-
-# ===== Mensajes de precios =====
-def _price_first_msg() -> str:
-    return "Encantada. Antes de hablar de precios, ¿buscas más llamadas o más visitas al local?"
-
-def _price_table_msg() -> str:
-    return f"¡Claro! Aquí tienes los precios generales:\n{PRICE_TABLE_ES}"
 
 # =======================
 #  Firebase: helpers de leads
@@ -327,14 +301,14 @@ def fb_list_leads_by_bot(bot_nombre):
     for numero, data in numeros.items():
         clave = f"{bot_nombre}|{numero}"
         leads[clave] = {
-                "bot": bot_nombre,
-                "numero": numero,
-                "first_seen": data.get("first_seen", ""),
-                "last_message": data.get("last_message", ""),
-                "last_seen": data.get("last_seen", ""),
-                "messages": int(data.get("messages", 0)),
-                "status": data.get("status", "nuevo"),
-                "notes": data.get("notes", "")
+            "bot": bot_nombre,
+            "numero": numero,
+            "first_seen": data.get("first_seen", ""),
+            "last_message": data.get("last_message", ""),
+            "last_seen": data.get("last_seen", ""),
+            "messages": int(data.get("messages", 0)),
+            "status": data.get("status", "nuevo"),
+            "notes": data.get("notes", "")
         }
     return leads
 
@@ -611,11 +585,7 @@ def whatsapp_bot():
         "BOOKING_URL": BOOKING_URL
     })
 
-    # ✅ Reset contador de precios si es primera vez en la sesión
-    if clave_sesion not in price_requests_count:
-        price_requests_count[clave_sesion] = 0
-
-    # ✅ CIERRE: Enviar UNA sola vez y resetear estado
+    # ✅ Enviar cierre SOLO cuando el usuario confirma, y luego resetear estado
     if _is_scheduled_confirmation(incoming_msg):
         closing = agenda_cfg.get("closing_message") or closing_default
         msg.body(closing)
@@ -623,28 +593,10 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ✅ Si está esperando confirmación para agendar pero el usuario pide PRECIOS, desviamos el flujo
-    if st.get("awaiting_confirm") and _asks_prices(incoming_msg):
-        count = price_requests_count.get(clave_sesion, 0)
-        if count == 0:
-            text = _price_first_msg()
-            text = _ensure_question(bot, _apply_style(bot, text), clave_sesion)
-            msg.body(text)
-            price_requests_count[clave_sesion] = 1
-        else:
-            text = _price_table_msg()
-            text = _ensure_question(bot, _apply_style(bot, text), clave_sesion)
-            msg.body(text)
-            # no incrementamos más; con 1+ ya muestra precios
-        agenda_state[clave_sesion] = {"awaiting_confirm": False, "booked": False}
-        last_message_time[clave_sesion] = time.time()
-        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-        return str(response)
-
-    # ✅ Flujo de agenda normal
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
-            msg.body(link_msg if BOOKING_URL else "No tengo un enlace de agenda configurado. Por favor, configura GOOGLE_CALENDAR_BOOKING_URL.")
+            # Mandamos SOLO el link y cerramos la espera (sin probes extra)
+            msg.body(link_msg if BOOKING_URL else "No tengo un enlace de agenda configurado. Por favor, consulta con soporte para configurar GOOGLE_CALENDAR_BOOKING_URL.")
             try:
                 ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": link_msg, "hora": ahora_bot})
@@ -668,21 +620,6 @@ def whatsapp_bot():
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
 
-    # ✅ Si el usuario pide PRECIOS (fuera del flujo de agenda)
-    if _asks_prices(incoming_msg):
-        count = price_requests_count.get(clave_sesion, 0)
-        if count == 0:
-            text = _price_first_msg()
-            price_requests_count[clave_sesion] = 1
-        else:
-            text = _price_table_msg()
-        text = _ensure_question(bot, _apply_style(bot, text), clave_sesion)
-        msg.body(text)
-        last_message_time[clave_sesion] = time.time()
-        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-        return str(response)
-
-    # ✅ Si detecta intención de agendar (y NO está preguntando precios), empieza el flujo de agenda
     if _wants_to_schedule(incoming_msg, bot):
         msg.body(_ensure_question(bot, confirm_q, clave_sesion))
         agenda_state[clave_sesion] = {"awaiting_confirm": True, "booked": False}
@@ -691,6 +628,7 @@ def whatsapp_bot():
             follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
         return str(response)
+    # ====== FIN FLUJO AGENDA ======
 
     # ====== Sesión / saludo ======
     if clave_sesion not in session_history:
@@ -699,7 +637,6 @@ def whatsapp_bot():
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
         greeted_state[clave_sesion] = False
         last_probe_used[clave_sesion] = None
-        price_requests_count[clave_sesion] = 0
 
     # Saludo inicial: solo una vez por conversación
     greeting_text = bot.get("greeting")
@@ -851,7 +788,7 @@ def api_chat(bot, numero):
     return jsonify({"mensajes": nuevos, "last_ts": last_ts})
 
 # =======================
-#   Borrar conversación (Firebase)
+#  🔺 Borrar conversación (Firebase)
 # =======================
 @app.route("/api/delete_chat", methods=["POST"])
 def api_delete_chat():
