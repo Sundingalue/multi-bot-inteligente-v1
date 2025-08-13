@@ -851,7 +851,7 @@ def api_chat(bot, numero):
     return jsonify({"mensajes": nuevos, "last_ts": last_ts})
 
 # =======================
-#  🔺 Borrar conversación (Firebase)
+#   Borrar conversación (Firebase)
 # =======================
 @app.route("/api/delete_chat", methods=["POST"])
 def api_delete_chat():
@@ -860,7 +860,7 @@ def api_delete_chat():
     data = request.get_json(silent=True) or {}
     bot_nombre = (data.get("bot") or "").strip()
     numero = (data.get("numero") or "").strip()
-    if not bot_nombre o  r not numero:
+    if not bot_nombre or not numero:
         return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
 
     bot_normalizado = _normalize_bot_name(bot_nombre)
