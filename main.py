@@ -23,6 +23,7 @@ load_dotenv()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # 🔗 Agenda (Google Calendar - enlace público)
+# Ejemplo: GOOGLE_CALENDAR_BOOKING_URL=https://calendar.app.google/2PAh6A4Lkxw3qxLC9
 CALENDAR_URL = os.getenv("GOOGLE_CALENDAR_BOOKING_URL") or os.getenv("CALENDAR_URL", "").strip()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -49,6 +50,9 @@ session_history = {}
 last_message_time = {}
 follow_up_flags = {}
 
+# Estado simple de agenda por conversación (confirmación Sí/No)
+agenda_state = {}  # clave_sesion -> {"awaiting_confirm": bool}
+
 # =======================
 #  Helpers generales
 # =======================
@@ -72,6 +76,35 @@ def _get_bot_cfg_by_name(name: str):
         if isinstance(cfg, dict) and cfg.get("name", "").lower() == name.lower():
             return cfg
     return None
+
+# ===== Intención de agenda y confirmación =====
+def _wants_to_schedule(texto: str) -> bool:
+    if not texto:
+        return False
+    t = texto.lower()
+    keys = {
+        "agenda", "agendar", "agendame", "agéndame", "cita", "agendar cita",
+        "reunion", "reunión", "llamada", "call", "schedule", "book",
+        "booking", "appointment", "meet"
+    }
+    return any(k in t for k in keys)
+
+def _is_affirmative(texto: str) -> bool:
+    if not texto:
+        return False
+    t = texto.strip().lower()
+    afirm = {
+        "si", "sí", "ok", "okay", "dale", "va", "claro", "por favor",
+        "hagamoslo", "hagámoslo", "perfecto", "de una", "yes", "yep", "yeah"
+    }
+    return any(t == a or t.startswith(a + " ") for a in afirm)
+
+def _is_negative(texto: str) -> bool:
+    if not texto:
+        return False
+    t = texto.strip().lower()
+    neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues"}
+    return any(t == n or t.startswith(n + " ") for n in neg)
 
 # =======================
 #  Firebase: helpers de leads
@@ -382,13 +415,6 @@ def verify_whatsapp():
     else:
         return "Token inválido", 403
 
-def _is_agenda(texto: str) -> bool:
-    if not texto:
-        return False
-    t = texto.strip().lower()
-    keywords = {"agenda", "agendar", "cita", "agendar cita", "agendar reunión", "agendar reunion"}
-    return any(k in t for k in keywords)
-
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
     incoming_msg = request.values.get("Body", "").strip()
@@ -410,27 +436,51 @@ def whatsapp_bot():
     response = MessagingResponse()
     msg = response.message()
 
-    # ====== FLUJO AGENDA (Google Calendar público)
-    if _is_agenda(incoming_msg):
-        if CALENDAR_URL:
-            texto_agenda = (
-                "¡Perfecto! Aquí puedes **agendar tu cita** directamente en mi Google Calendar:\n"
-                f"{CALENDAR_URL}\n\n"
-                "Elige el día y la hora que te convengan; recibirás confirmación automática."
-            )
+    # ====== FLUJO AGENDA con confirmación (Google Calendar público) ======
+    st = agenda_state.get(clave_sesion, {"awaiting_confirm": False})
+    if st.get("awaiting_confirm"):
+        if _is_affirmative(incoming_msg):
+            if CALENDAR_URL:
+                texto_agenda = (
+                    "¡Excelente! Aquí puedes **agendar tu cita o llamada con el Sr. Sundin**:\n"
+                    f"{CALENDAR_URL}\n\n"
+                    "Elige el día y la hora que te convengan; te llegará la invitación por correo 📩."
+                )
+            else:
+                texto_agenda = (
+                    "Puedo agendarte por Google Calendar. Envíame **dos opciones de día y hora** "
+                    "y te mando la confirmación enseguida."
+                )
+            msg.body(texto_agenda)
+            try:
+                ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
+            except Exception as e:
+                print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
+
+            agenda_state[clave_sesion] = {"awaiting_confirm": False}
+            last_message_time[clave_sesion] = time.time()
+            if clave_sesion not in follow_up_flags:
+                follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+            Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+            return str(response)
+
+        elif _is_negative(incoming_msg):
+            msg.body("¡Sin problema! Si más tarde quieres agendar, dime *agenda* o *cita* y te envío el enlace.")
+            agenda_state[clave_sesion] = {"awaiting_confirm": False}
+            last_message_time[clave_sesion] = time.time()
+            Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+            return str(response)
+
         else:
-            texto_agenda = (
-                "Puedo agendarte en Google Calendar. Dime **dos opciones de día y hora** "
-                "y te envío la confirmación enseguida."
-            )
+            msg.body("¿Deseas que te envíe el enlace para **agendar**? Responde *Sí* o *No* 👍")
+            last_message_time[clave_sesion] = time.time()
+            Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+            return str(response)
 
-        msg.body(texto_agenda)
-        try:
-            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": texto_agenda, "hora": ahora_bot})
-        except Exception as e:
-            print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
-
+    if _wants_to_schedule(incoming_msg):
+        msg.body("¿Quieres **agendar** una *cita o llamada* con el Sr. Sundin? Responde *Sí* y te envío el enlace para elegir fecha y hora.")
+        agenda_state[clave_sesion] = {"awaiting_confirm": True}
         last_message_time[clave_sesion] = time.time()
         if clave_sesion not in follow_up_flags:
             follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
