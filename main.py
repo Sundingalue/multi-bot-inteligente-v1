@@ -9,6 +9,7 @@ from threading import Thread
 from datetime import datetime
 import csv
 from io import StringIO
+import re
 
 # 🔹 Firebase
 import firebase_admin
@@ -21,10 +22,6 @@ load_dotenv("/etc/secrets/.env")
 load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-# 🔗 Agenda (Google Calendar - enlace público)
-# Ejemplo: GOOGLE_CALENDAR_BOOKING_URL=https://calendar.app.google/2PAh6A4Lkxw3qxLC9
-CALENDAR_URL = os.getenv("GOOGLE_CALENDAR_BOOKING_URL") or os.getenv("CALENDAR_URL", "").strip()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
@@ -40,7 +37,7 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
 
 # =======================
-#  Configuración de bots
+#  Configuración de bots (TODO centralizado en bots_config.json)
 # =======================
 with open("bots_config.json", "r") as f:
     bots_config = json.load(f)
@@ -49,8 +46,6 @@ with open("bots_config.json", "r") as f:
 session_history = {}
 last_message_time = {}
 follow_up_flags = {}
-
-# Estado simple de agenda por conversación (confirmación Sí/No)
 agenda_state = {}  # clave_sesion -> {"awaiting_confirm": bool}
 
 # =======================
@@ -65,7 +60,7 @@ def _hora_to_epoch_ms(hora_str: str) -> int:
 
 def _normalize_bot_name(name: str):
     for config in bots_config.values():
-        if config["name"].lower() == name.lower():
+        if config.get("name", "").lower() == str(name).lower():
             return config["name"]
     return None
 
@@ -77,17 +72,23 @@ def _get_bot_cfg_by_name(name: str):
             return cfg
     return None
 
-# ===== Intención de agenda y confirmación =====
-def _wants_to_schedule(texto: str) -> bool:
+def _get_bot_cfg_by_number(to_number: str):
+    """Devuelve el dict del bot usando la clave del número To (ej: 'whatsapp:+1346...')."""
+    return bots_config.get(to_number)
+
+# ===== Intención de agenda y confirmación (usando bots_config) =====
+def _bot_agenda_keywords(bot_cfg):
+    agenda = (bot_cfg or {}).get("agenda", {}) or {}
+    kws = agenda.get("keywords") or []
+    # normalizar
+    return [k.lower() for k in kws if isinstance(k, str) and k.strip()]
+
+def _wants_to_schedule(texto: str, bot_cfg: dict) -> bool:
     if not texto:
         return False
     t = texto.lower()
-    keys = {
-        "agenda", "agendar", "agendame", "agéndame", "cita", "agendar cita",
-        "reunion", "reunión", "llamada", "call", "schedule", "book",
-        "booking", "appointment", "meet"
-    }
-    return any(k in t for k in keys)
+    kws = _bot_agenda_keywords(bot_cfg)
+    return any(k in t for k in kws)
 
 def _is_affirmative(texto: str) -> bool:
     if not texto:
@@ -105,6 +106,55 @@ def _is_negative(texto: str) -> bool:
     t = texto.strip().lower()
     neg = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues"}
     return any(t == n or t.startswith(n + " ") for n in neg)
+
+def _split_sentences_es(text: str):
+    # Separación básica por oraciones para recortar respuestas
+    # Evita cortar dentro de URLs.
+    parts = re.split(r'(?<=[\.\!\?])\s+', text.strip())
+    # Si no había signos, usa un fallback suave por longitud
+    if len(parts) == 1 and len(text) > 280:
+        parts = [text[:200].strip(), text[200:].strip()]
+    return [p for p in parts if p]
+
+def _apply_style(bot_cfg: dict, text: str) -> str:
+    """Aplica reglas simples de estilo desde bots_config: short_replies y max_sentences."""
+    style = (bot_cfg or {}).get("style", {}) or {}
+    short = bool(style.get("short_replies", True))
+    max_sents = int(style.get("max_sentences", 2) or 2)
+
+    if not text:
+        return text
+
+    if short:
+        sents = _split_sentences_es(text)
+        text = " ".join(sents[:max_sents]).strip()
+
+    # Opcional: si piden hacer preguntas aclaratorias y la respuesta no termina en '?'
+    ask_q = bool(style.get("ask_clarifying_question", True))
+    if ask_q:
+        trimmed = text.rstrip()
+        if not trimmed.endswith("?"):
+            # agrega una pregunta breve y neutral
+            extra_q = " ¿Te cuento cómo funciona o prefieres ver opciones?"
+            # Evitar exceder mucho el límite; si ya usamos el máximo, no agregamos
+            if not short or (short and len(_split_sentences_es(text)) < max_sents):
+                text = (trimmed + extra_q).strip()
+
+    return text
+
+def _make_system_message(bot_cfg: dict) -> str:
+    """Combina el system_prompt del bot con un apretón de estilo (brevity)."""
+    base = (bot_cfg or {}).get("system_prompt", "") or ""
+    style = (bot_cfg or {}).get("style", {}) or {}
+    short = "Responde en mensajes cortos" if style.get("short_replies", True) else ""
+    max_s = style.get("max_sentences")
+    if isinstance(max_s, int):
+        extra = f" como máximo {max_s} oraciones por mensaje."
+    else:
+        extra = "."
+    askq = "Haz una pregunta breve y útil al final si ayuda a avanzar." if style.get("ask_clarifying_question", True) else ""
+    squeeze = f"\n\nDirectriz de estilo: {short}{extra} {askq}".strip()
+    return (base + squeeze).strip()
 
 # =======================
 #  Firebase: helpers de leads
@@ -287,7 +337,7 @@ def panel_exclusivo_bot(bot_nombre):
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
          for config in bots_config.values()
-         if config["name"] == bot_normalizado),
+         if config.get("name") == bot_normalizado),
         bot_normalizado
     )
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
@@ -417,40 +467,35 @@ def verify_whatsapp():
 
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
-    incoming_msg = request.values.get("Body", "").strip()
+    incoming_msg = (request.values.get("Body", "") or "").strip()
     sender_number = request.values.get("From", "")
     bot_number = request.values.get("To", "")
 
     clave_sesion = f"{bot_number}|{sender_number}"
-    bot = bots_config.get(bot_number)
+    bot = _get_bot_cfg_by_number(bot_number)
+
+    response = MessagingResponse()
+    msg = response.message()
 
     if not bot:
-        response = MessagingResponse()
-        response.message("Lo siento, este número no está asignado a ningún bot.")
+        msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
     # Guarda el mensaje del usuario
     guardar_lead(bot["name"], sender_number, incoming_msg)
 
-    # Respuesta Twilio
-    response = MessagingResponse()
-    msg = response.message()
-
-    # ====== FLUJO AGENDA con confirmación (Google Calendar público) ======
+    # ====== FLUJO AGENDA desde bots_config ======
     st = agenda_state.get(clave_sesion, {"awaiting_confirm": False})
+    agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
+    cal_url = bot.get("calendar_url", "").strip()
+
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
-            if CALENDAR_URL:
-                texto_agenda = (
-                    "¡Excelente! Aquí puedes **agendar tu cita o llamada con el Sr. Sundin**:\n"
-                    f"{CALENDAR_URL}\n\n"
-                    "Elige el día y la hora que te convengan; te llegará la invitación por correo 📩."
-                )
+            if cal_url:
+                link_msg_tmpl = agenda_cfg.get("link_message") or "Agenda aquí:\n{calendar_url}"
+                texto_agenda = link_msg_tmpl.replace("{calendar_url}", cal_url)
             else:
-                texto_agenda = (
-                    "Puedo agendarte por Google Calendar. Envíame **dos opciones de día y hora** "
-                    "y te mando la confirmación enseguida."
-                )
+                texto_agenda = "Puedo agendarte. Envíame dos opciones de día y hora y te confirmo enseguida."
             msg.body(texto_agenda)
             try:
                 ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -466,20 +511,24 @@ def whatsapp_bot():
             return str(response)
 
         elif _is_negative(incoming_msg):
-            msg.body("¡Sin problema! Si más tarde quieres agendar, dime *agenda* o *cita* y te envío el enlace.")
+            decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
+            msg.body(decline_msg)
             agenda_state[clave_sesion] = {"awaiting_confirm": False}
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
 
         else:
-            msg.body("¿Deseas que te envíe el enlace para **agendar**? Responde *Sí* o *No* 👍")
+            confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
+            msg.body(confirm_q)
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
 
-    if _wants_to_schedule(incoming_msg):
-        msg.body("¿Quieres **agendar** una *cita o llamada* con el Sr. Sundin? Responde *Sí* y te envío el enlace para elegir fecha y hora.")
+    # Detectar intención de agenda según keywords del bot
+    if _wants_to_schedule(incoming_msg, bot):
+        confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
+        msg.body(confirm_q)
         agenda_state[clave_sesion] = {"awaiting_confirm": True}
         last_message_time[clave_sesion] = time.time()
         if clave_sesion not in follow_up_flags:
@@ -488,18 +537,17 @@ def whatsapp_bot():
         return str(response)
     # ====== FIN FLUJO AGENDA ======
 
-
-    # Sesión / saludo
+    # Sesión / saludo (todo desde bots_config)
     if clave_sesion not in session_history:
-        session_history[clave_sesion] = [{"role": "system", "content": bot["system_prompt"]}]
+        # construimos el mensaje de sistema fusionado con estilo
+        sysmsg = _make_system_message(bot)
+        session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
-    if any(word in incoming_msg.lower() for word in ["hola", "hello", "buenas", "hey"]):
-        if bot["name"] == "Camila":
-            saludo = "Hola, soy Camila, especialista en pólizas de gastos finales de Senior Life. ¿Con quién tengo el gusto?"
-        else:
-            saludo = f"Hola, soy {bot['name']}, de {bot['business_name']}. ¿Con quién tengo el gusto?"
-        msg.body(saludo)
+    # saludo inicial si el usuario dijo "hola", etc.
+    if any(w in incoming_msg.lower() for w in ["hola", "hello", "buenas", "hey", "buenos días", "buenas tardes", "buenas noches", "quién eres", "quien eres"]):
+        greeting = bot.get("greeting") or f"Hola, soy {bot.get('name','')}."
+        msg.body(greeting)
         last_message_time[clave_sesion] = time.time()
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
         return str(response)
@@ -508,14 +556,17 @@ def whatsapp_bot():
     session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
     last_message_time[clave_sesion] = time.time()
     Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-    
 
     try:
         completion = client.chat.completions.create(
             model="gpt-4o",
             messages=session_history[clave_sesion]
         )
-        respuesta = completion.choices[0].message.content.strip()
+        respuesta = (completion.choices[0].message.content or "").strip()
+
+        # aplicar estilo corto/clarificador según bots_config
+        respuesta = _apply_style(bot, respuesta)
+
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
 
@@ -662,12 +713,12 @@ def follow_up_task(clave_sesion, bot_number):
     # 5 minutos
     time.sleep(300)
     if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 300 and not follow_up_flags[clave_sesion]["5min"]:
-        send_whatsapp_message(clave_sesion.split("|")[1], "¿Sigues por aquí? Si tienes alguna duda, estoy lista para ayudarte 😊", bot_number)
+        send_whatsapp_message(clave_sesion.split("|")[1], "¿Sigues por aquí? Si tienes alguna duda, te ayudo 😊", bot_number)
         follow_up_flags[clave_sesion]["5min"] = True
     # +55 minutos (total ~60)
     time.sleep(3300)
     if clave_sesion in last_message_time and time.time() - last_message_time[clave_sesion] >= 3600 and not follow_up_flags[clave_sesion]["60min"]:
-        send_whatsapp_message(clave_sesion.split("|")[1], "Solo quería confirmar si deseas que agendemos tu cita con el Sr. Sundin Galue. Si prefieres escribir más tarde, aquí estaré 😉", bot_number)
+        send_whatsapp_message(clave_sesion.split("|")[1], "Si quieres, puedo ayudarte a agendar tu cita. Cuando gustes 👍", bot_number)
         follow_up_flags[clave_sesion]["60min"] = True
 
 def send_whatsapp_message(to_number, message, bot_number=None):
@@ -677,18 +728,6 @@ def send_whatsapp_message(to_number, message, bot_number=None):
     from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
     client_twilio = Client(account_sid, auth_token)
     client_twilio.messages.create(body=message, from_=from_number, to=to_number)
-
-    # ===== System prompt breve: respuestas cortas y humanas =====
-def _compose_system_prompt(bot_cfg: dict) -> str:
-    base = (bot_cfg.get("system_prompt") or "").strip()
-    estilo = (
-        "Estilo: responde en español natural y cercano. Sé breve (máx. 1–2 frases). "
-        "Evita párrafos largos y listas. Haz 1 pregunta clarificadora cuando falte contexto. "
-        "Tono cálido y profesional. Si saludan, saluda y pregunta en qué puedes ayudar."
-    )
-    if base:
-        return f"{base}\n\n{estilo}"
-    return estilo
 
 # =======================
 #  Run
