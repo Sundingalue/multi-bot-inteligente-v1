@@ -143,21 +143,38 @@ def _next_probe(clave_sesion: str, bot_cfg: dict) -> str:
     return probes[idx]
 
 def _ensure_question(bot_cfg: dict, text: str, clave_sesion: str = "") -> str:
-    """Si la respuesta no termina en ?, agrega una pregunta breve para avanzar (rotando probes)."""
+    """
+    Asegura que la respuesta termine con **una sola** pregunta.
+    - Si el texto ya contiene al menos un signo de interrogación (?) en cualquier parte,
+      NO añade probes.
+    - Si no contiene preguntas, añade UNA probe (rotando) o la fallback.
+    - Evita duplicar preguntas seguidas.
+    """
     if not text:
-        return text
-    trimmed = text.strip()
-    if trimmed.endswith("?"):
-        return trimmed
+        text = ""
 
-    # Si el texto ya llega al límite de oraciones, cerramos con punto.
-    if not trimmed.endswith((".", "!", "…")):
-        trimmed += "."
+    # Normaliza espacios
+    txt = re.sub(r"\s+", " ", text).strip()
+
+    # Si ya hay alguna pregunta en el contenido, no agregamos más
+    if "?" in txt:
+        # además, limpia posibles repeticiones del estilo "¿...?" "¿...?"
+        # dejando solo la primera pregunta final si hay dos pegadas
+        txt = re.sub(r"(\?\s*)(¿.+\?)", r"\1", txt)  # conserva la primera
+        return txt
+
+    # Aún no hay pregunta -> añadimos UNA
+    if not txt.endswith((".", "!", "…")):
+        txt += "."
 
     probe = _next_probe(clave_sesion, bot_cfg) if clave_sesion else (
-        (bot_cfg.get("style", {}) or {}).get("fallback_question") or "¿Te cuento cómo funciona o prefieres ver opciones?"
+        (bot_cfg.get("style", {}) or {}).get("fallback_question") or
+        "¿Te cuento cómo funciona o prefieres ver opciones?"
     )
-    return f"{trimmed} {probe}"
+
+    # Garantiza solo una pregunta final
+    return f"{txt} {probe}"
+
 
 def _make_system_message(bot_cfg: dict) -> str:
     """Combina el system_prompt con un recordatorio de estilo breve y pregunta final."""
