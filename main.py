@@ -400,6 +400,38 @@ def fb_list_leads_by_bot(bot_nombre):
     return leads
 
 # =======================
+#  🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
+# =======================
+def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_number: str):
+    """Rellena session_history desde Firebase si el proceso se reinició."""
+    if clave_sesion in session_history:
+        return
+    bot_name = (bot_cfg or {}).get("name", "")
+    if not bot_name:
+        return
+    lead = fb_get_lead(bot_name, sender_number) or {}
+    historial = lead.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+
+    msgs = []
+    sysmsg = _make_system_message(bot_cfg)
+    if sysmsg:
+        msgs.append({"role": "system", "content": sysmsg})
+
+    for reg in historial:
+        texto = reg.get("texto", "")
+        if not texto:
+            continue
+        role = "assistant" if (reg.get("tipo", "user") != "user") else "user"
+        msgs.append({"role": role, "content": texto})
+
+    if msgs:
+        session_history[clave_sesion] = msgs
+        greeted_state[clave_sesion] = True
+        follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+
+# =======================
 #  Leads y WhatsApp
 # =======================
 def guardar_lead(bot_nombre, numero, mensaje):
@@ -683,6 +715,9 @@ def whatsapp_bot():
         msg.body("Este número no está asignado a ningún bot.")
         return str(response)
 
+    # 🔄 NUEVO: reconstruir contexto desde Firebase si no hay memoria en RAM
+    _hydrate_session_from_firebase(clave_sesion, bot, sender_number)
+
     # Guarda el mensaje del usuario
     guardar_lead(bot["name"], sender_number, incoming_msg)
 
@@ -691,7 +726,7 @@ def whatsapp_bot():
     if _wants_app_download(incoming_msg):
         url_app = _effective_app_url(bot)
         if url_app:
-            # 🔸 NUEVO: mensaje personalizable desde JSON -> links.app_message
+            # 🔸 Mensaje personalizable desde JSON -> links.app_message
             links_cfg = bot.get("links") or {}
             app_msg = (links_cfg.get("app_message") or "").strip() if isinstance(links_cfg, dict) else ""
             if app_msg:
@@ -749,7 +784,7 @@ def whatsapp_bot():
             if _can_send_link(clave_sesion, cooldown_min=10):
                 link = _effective_booking_url(bot)
 
-                # 🔸 NUEVO: mensaje personalizable desde JSON -> agenda.link_message
+                # 🔸 Mensaje personalizable desde JSON -> agenda.link_message
                 link_message = (agenda_cfg.get("link_message") or "").strip()
                 link_message = _sanitize_link_placeholders_for_bot(link_message, bot)
                 if link_message:
@@ -972,6 +1007,7 @@ def api_delete_chat():
         print(f"⚠️ No se pudo eliminar en Firebase: {e}")
 
     return jsonify({"ok": True})
+
 
 # =======================
 #  Follow-up (WhatsApp vía Twilio)
