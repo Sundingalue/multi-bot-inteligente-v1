@@ -72,7 +72,8 @@
     "policies": {
       "prices_first_time": "no_numbers",
       "prices_second_time_response_es": "Los planes y espacios comienzan desde los montos indicados en la tabla (varía por tamaño y período). ¿Te muestro 2 opciones ajustadas a tu objetivo y presupuesto?",
-      "send_links_note": "No escribas links manualmente; usa el enlace de BOT_CONTEXT_JSON.links.booking_url si el cliente acepta agendar."
+      "send_links_note": "No escribas links manualmente; usa el enlace de BOT_CONTEXT_JSON.links.booking_url si el cliente acepta agendar.",
+      "polite_closure_message": "¡De nada! Ha sido un placer hablar contigo. ¡Quedo a tu disposición si necesitas algo más. Feliz día!"
     },
 
     "agenda": {
