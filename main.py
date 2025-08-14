@@ -77,6 +77,10 @@ agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status"
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 last_probe_used = {}       # clave_sesion -> índice de la última probe usada
 
+# 👇 Nuevo: nombre detectado y segundo saludo
+contact_name = {}          # clave_sesion -> "Carlos"
+second_greet_sent = {}     # clave_sesion -> bool
+
 # =======================
 #  Helpers generales
 # =======================
@@ -566,6 +570,29 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 # =======================
+#  Utilidad: detectar nombre
+# =======================
+def _extract_name(text: str) -> str:
+    if not text:
+        return ""
+    t = text.strip()
+    # Patrones comunes
+    m = re.search(r"(?:me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", t, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().capitalize()
+    m = re.search(r"^soy\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", t, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().capitalize()
+    # Si empieza con "Hola, Carlos" o "Carlos"
+    m = re.search(r"^(?:hola[,!\s]+)?([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,})\b", t, re.IGNORECASE)
+    if m:
+        posible = m.group(1).strip().capitalize()
+        # Evitar palabras genéricas
+        if posible.lower() not in {"hola","buenas","buenos","dias","días","tardes","noches"}:
+            return posible
+    return ""
+
+# =======================
 #  Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
@@ -600,7 +627,8 @@ def whatsapp_bot():
 
     # ❌ STOP conversacional si el usuario dice "no" o declina
     if _is_negative(incoming_msg):
-        cierre = f"Entendido. Quedo a la orden. Aquí te dejo el enlace por si luego lo quieres usar: {BOOKING_URL}"
+        nombre = contact_name.get(clave_sesion, "")
+        cierre = f"Entendido{f', {nombre}' if nombre else ''}. Quedo a la orden. Aquí tienes el enlace por si luego lo quieres usar: {BOOKING_URL}"
         msg.body(_ensure_question(bot, cierre, clave_sesion, allow_question=False))  # sin pregunta final
         close_conversation(clave_sesion)
         last_message_time[clave_sesion] = time.time()
@@ -612,7 +640,6 @@ def whatsapp_bot():
 
     # Preguntas/Respuestas fijas (sin plantillas de URL)
     confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
-    link_msg = f"Agenda aquí:\n{BOOKING_URL}"
     decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
     closing_default = agenda_cfg.get("closing_message") or (
         "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. "
@@ -643,12 +670,14 @@ def whatsapp_bot():
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
             if _can_send_link(clave_sesion, cooldown_min=10):
-                msg.body(link_msg)  # se envía link directo, sin plantillas
+                nombre = contact_name.get(clave_sesion, "")
+                personal_link = f"¡Perfecto{f', {nombre}' if nombre else ''}! Aquí está el enlace para agendar: {BOOKING_URL}"
+                msg.body(personal_link)  # envío directo, sin plantillas
                 _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent",
-                            last_link_time=_now(), last_bot_hash=_hash_text(link_msg))
+                            last_link_time=_now(), last_bot_hash=_hash_text(personal_link))
                 try:
                     ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": link_msg, "hora": ahora_bot})
+                    fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": personal_link, "hora": ahora_bot})
                 except Exception as e:
                     print(f"⚠️ No se pudo guardar respuesta AGENDA: {e}")
             else:
@@ -672,39 +701,52 @@ def whatsapp_bot():
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
 
-    # Usuario pide agendar (por keywords configurables del bot)
-    if _wants_to_schedule(incoming_msg, bot):
-        msg.body(_ensure_question(bot, confirm_q, clave_sesion))
-        _set_agenda(clave_sesion, awaiting_confirm=True)
-        last_message_time[clave_sesion] = time.time()
-        if clave_sesion not in follow_up_flags:
-            follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
-        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
-        return str(response)
-    # ====== FIN FLUJO AGENDA ======
-
-    # ====== Sesión / saludo ======
+    # ====== Sesión / saludo y segundo mensaje fijo ======
     if clave_sesion not in session_history:
         sysmsg = _make_system_message(bot)
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
         greeted_state[clave_sesion] = False
+        second_greet_sent[clave_sesion] = False
         last_probe_used[clave_sesion] = None
 
     greeting_text = bot.get("greeting")
     intro_keywords = (bot.get("intro_keywords") or [
         "hola","hello","buenas","hey","buenos días","buenas tardes","buenas noches","quién eres","quien eres"
     ])
+
+    # Si es el saludo inicial (usuario dijo hola/hey/etc.)
     if (not greeted_state.get(clave_sesion)) and any(w in incoming_msg.lower() for w in intro_keywords):
         if greeting_text:
             txt = _ensure_question(bot, greeting_text, clave_sesion)
-            # guarda hash para evitar duplicar saludo como respuesta del modelo
             _set_agenda(clave_sesion, last_bot_hash=_hash_text(txt))
             msg.body(txt)
             greeted_state[clave_sesion] = True
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
+
+    # Si ya saludamos y aún no mandamos el segundo mensaje, intentamos extraer nombre y lo mandamos
+    if greeted_state.get(clave_sesion) and not second_greet_sent.get(clave_sesion, False):
+        nombre_detectado = _extract_name(incoming_msg)
+        if nombre_detectado:
+            contact_name[clave_sesion] = nombre_detectado
+        nombre = contact_name.get(clave_sesion, "")
+
+        saludo2 = (
+            f"¡Hola, {nombre}! Gracias por escribirnos. Somos la revista IN Houston Texas, "
+            f"el único directorio en español, ¿te gustaría saber cómo funciona?"
+        ) if nombre else (
+            "¡Hola! Gracias por escribirnos. Somos la revista IN Houston Texas, "
+            "el único directorio en español, ¿te gustaría saber cómo funciona?"
+        )
+
+        # Este mensaje ya trae su propia pregunta; no añadimos otra
+        msg.body(_ensure_question(bot, saludo2, clave_sesion, allow_question=True))
+        second_greet_sent[clave_sesion] = True
+        last_message_time[clave_sesion] = time.time()
+        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+        return str(response)
 
     # ====== Continuación normal (GPT) ======
     session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
