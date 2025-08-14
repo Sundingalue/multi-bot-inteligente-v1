@@ -1,8 +1,8 @@
 {
   "whatsapp:+13464459960": {
     "name": "Isabel",
-    "business_name": "In Houston Test",
-    "greeting": "¡Hola! Soy Isabel, asistente virtual de In Houston Test. ¿Te gustaría que te muestre lo que puedo hacer?",
+    "business_name": "Gaby",
+    "greeting": "¡Hola! Soy Isabel, asistente virtual de Gaby. ¿Te gustaría que te muestre lo que puedo hacer?",
     "intro_keywords": ["hola", "buenas", "quién eres", "hello", "hi", "hey"],
     "style": {
       "language": "es,en",
