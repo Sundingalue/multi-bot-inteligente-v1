@@ -691,7 +691,17 @@ def whatsapp_bot():
     if _wants_app_download(incoming_msg):
         url_app = _effective_app_url(bot)
         if url_app:
-            texto = _compose_with_link("Aquí tienes:", url_app)
+            # 🔸 NUEVO: mensaje personalizable desde JSON -> links.app_message
+            links_cfg = bot.get("links") or {}
+            app_msg = (links_cfg.get("app_message") or "").strip() if isinstance(links_cfg, dict) else ""
+            if app_msg:
+                if ("http://" in app_msg) or ("https://" in app_msg):
+                    texto = app_msg
+                else:
+                    texto = _compose_with_link(app_msg, url_app)
+            else:
+                texto = _compose_with_link("Aquí tienes:", url_app)
+
             msg.body(texto)
             _set_agenda(clave_sesion, status="app_link_sent")
             agenda_state[clave_sesion]["closed"] = True
@@ -743,14 +753,11 @@ def whatsapp_bot():
                 link_message = (agenda_cfg.get("link_message") or "").strip()
                 link_message = _sanitize_link_placeholders_for_bot(link_message, bot)
                 if link_message:
-                    # Si el template ya trae el URL (por placeholder) lo mandamos tal cual.
-                    # Si no trae URL, adjuntamos el link válido al final.
                     if ("http://" in link_message) or ("https://" in link_message):
                         texto = link_message
                     else:
                         texto = _compose_with_link(link_message, link)
                 else:
-                    # Fallback histórico
                     texto = _compose_with_link("Enlace:", link) if link else "Sin enlace disponible."
 
                 msg.body(texto)
