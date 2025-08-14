@@ -755,11 +755,12 @@ def whatsapp_bot():
 
     # Cierre cortés (gracias/bye/etc.) sin insistir
     if _is_polite_closure(incoming_msg):
-        cierre = _compose_with_link("Gracias.", _effective_booking_url(bot))
-        msg.body(cierre)
-        agenda_state.setdefault(clave_sesion, {})["closed"] = True
-        last_message_time[clave_sesion] = time.time()
-        return str(response)
+    # Obtener el mensaje de cierre del JSON, si no existe, usar un fallback genérico.
+      cierre = bot.get("policies", {}).get("polite_closure_message", "Gracias por contactarnos. ¡Hasta pronto!")
+      msg.body(cierre)
+      agenda_state.setdefault(clave_sesion, {})["closed"] = True
+      last_message_time[clave_sesion] = time.time()
+      return str(response)
 
     # ====== FLUJO AGENDA controlado por JSON del bot ======
     st = _get_agenda(clave_sesion)
