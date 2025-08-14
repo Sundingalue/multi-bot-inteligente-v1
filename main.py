@@ -294,11 +294,26 @@ def _is_affirmative(texto: str) -> bool:
     return any(t == a or t.startswith(a + " ") for a in afirm)
 
 def _is_negative(texto: str) -> bool:
+    """Solo detecta un NO real (o frases cortas equivalentes), no 'no quiero...'."""
     if not texto:
         return False
     t = texto.strip().lower()
-    neg = {"no","nop","no gracias","ahora no","luego","después","despues","not now"}
-    return any(t == n or t.startswith(n + " ") for n in neg)
+    # quita puntuación final
+    t = re.sub(r'[.,;:!?]+$', '', t)
+    # normaliza espacios
+    t = re.sub(r'\s+', ' ', t)
+    negatives = {
+        "no",
+        "nop",
+        "no gracias",
+        "ahora no",
+        "luego",
+        "después",
+        "despues",
+        "not now"
+    }
+    return t in negatives
+
 
 def _is_scheduled_confirmation(texto: str) -> bool:
     if not texto:
