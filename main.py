@@ -207,6 +207,36 @@ def _make_system_message(bot_cfg: dict) -> str:
     squeeze = f"\n\nDirectriz de estilo: {short}{extra} {askq}".strip()
     return (base + squeeze).strip()
 
+# ===== Sanitizador de placeholders + detección de intención de link =====
+PLACEHOLDER_PAT = re.compile(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", re.IGNORECASE)
+
+def _sanitize_link_placeholders(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    return PLACEHOLDER_PAT.sub(BOOKING_URL, text)
+
+SCHEDULE_OFFER_PAT = re.compile(
+    r"\b(enlace|link|calendar|calendario|agendar|agenda|reservar|reserva|cita|schedule|book|appointment|meeting|call)\b",
+    re.IGNORECASE
+)
+
+def _wants_link(text: str) -> bool:
+    return bool(SCHEDULE_OFFER_PAT.search(text or ""))
+
+def _assistant_recently_offered_link(clave: str, lookback: int = 3) -> bool:
+    msgs = session_history.get(clave, [])
+    cnt = 0
+    for m in reversed(msgs):
+        if m.get("role") != "assistant":
+            continue
+        cnt += 1
+        content = (m.get("content") or "")
+        if SCHEDULE_OFFER_PAT.search(content):
+            return True
+        if cnt >= lookback:
+            break
+    return False
+
 # ===== Intención de agenda (keywords del JSON del bot) =====
 def _bot_agenda_keywords(bot_cfg):
     agenda = (bot_cfg or {}).get("agenda", {}) or {}
@@ -629,8 +659,23 @@ def whatsapp_bot():
     if _is_negative(incoming_msg):
         nombre = contact_name.get(clave_sesion, "")
         cierre = f"Entendido{f', {nombre}' if nombre else ''}. Quedo a la orden. Aquí tienes el enlace por si luego lo quieres usar: {BOOKING_URL}"
-        msg.body(_ensure_question(bot, cierre, clave_sesion, allow_question=False))  # sin pregunta final
+        msg.body(_ensure_question(bot, _sanitize_link_placeholders(cierre), clave_sesion, allow_question=False))  # sin pregunta final
         close_conversation(clave_sesion)
+        last_message_time[clave_sesion] = time.time()
+        return str(response)
+
+    # ⚡ ATAJO: si el usuario pide el enlace o dice "sí" tras una oferta reciente, enviamos el link YA
+    if _wants_link(incoming_msg) or (_is_affirmative(incoming_msg) and _assistant_recently_offered_link(clave_sesion)):
+        nombre = contact_name.get(clave_sesion, "")
+        personal_link = f"¡Perfecto{f', {nombre}' if nombre else ''}! Aquí está el enlace para agendar: {BOOKING_URL}"
+        msg.body(_sanitize_link_placeholders(personal_link))
+        _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent",
+                    last_link_time=_now(), last_bot_hash=_hash_text(personal_link))
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot["name"], sender_number, {"tipo": "bot", "texto": personal_link, "hora": ahora_bot})
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar respuesta AGENDA (atajo): {e}")
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
@@ -638,13 +683,16 @@ def whatsapp_bot():
     st = _get_agenda(clave_sesion)
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
 
-    # Preguntas/Respuestas fijas (sin plantillas de URL)
+    # Preguntas/Respuestas fijas (sanitizadas)
     confirm_q = agenda_cfg.get("confirm_question") or "¿Quieres que te comparta el enlace para agendar?"
     decline_msg = agenda_cfg.get("decline_message") or "Sin problema. Cuando quieras, escribe *cita* y te envío el enlace."
     closing_default = agenda_cfg.get("closing_message") or (
         "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. "
         "Si surge algo, escríbeme aquí."
     )
+    confirm_q = _sanitize_link_placeholders(confirm_q)
+    decline_msg = _sanitize_link_placeholders(decline_msg)
+    closing_default = _sanitize_link_placeholders(closing_default)
 
     # Confirmación: solo una vez por ventana (evita spam)
     if _is_scheduled_confirmation(incoming_msg):
@@ -672,7 +720,7 @@ def whatsapp_bot():
             if _can_send_link(clave_sesion, cooldown_min=10):
                 nombre = contact_name.get(clave_sesion, "")
                 personal_link = f"¡Perfecto{f', {nombre}' if nombre else ''}! Aquí está el enlace para agendar: {BOOKING_URL}"
-                msg.body(personal_link)  # envío directo, sin plantillas
+                msg.body(_sanitize_link_placeholders(personal_link))  # envío directo, sin plantillas
                 _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent",
                             last_link_time=_now(), last_bot_hash=_hash_text(personal_link))
                 try:
@@ -700,6 +748,16 @@ def whatsapp_bot():
             last_message_time[clave_sesion] = time.time()
             Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
             return str(response)
+
+    # 👉 Usuario pide agendar por keywords (sin haber setado awaiting_confirm antes)
+    if _wants_to_schedule(incoming_msg, bot):
+        msg.body(_ensure_question(bot, confirm_q, clave_sesion))
+        _set_agenda(clave_sesion, awaiting_confirm=True)
+        last_message_time[clave_sesion] = time.time()
+        if clave_sesion not in follow_up_flags:
+            follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+        Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
+        return str(response)
 
     # ====== Sesión / saludo y segundo mensaje fijo ======
     if clave_sesion not in session_history:
@@ -742,7 +800,7 @@ def whatsapp_bot():
         )
 
         # Este mensaje ya trae su propia pregunta; no añadimos otra
-        msg.body(_ensure_question(bot, saludo2, clave_sesion, allow_question=True))
+        msg.body(_ensure_question(bot, _sanitize_link_placeholders(saludo2), clave_sesion, allow_question=True))
         second_greet_sent[clave_sesion] = True
         last_message_time[clave_sesion] = time.time()
         Thread(target=follow_up_task, args=(clave_sesion, bot_number)).start()
