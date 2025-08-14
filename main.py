@@ -30,9 +30,18 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or ""
 BOOKING_URL = (os.environ.get("BOOKING_URL", "").strip()
                or "https://calendar.app.google/2PAh6A4Lkxw3qxLC9")  # Fallback definitivo
 
-# Validación suave de BOOKING_URL
-if not (BOOKING_URL.startswith("http://") or BOOKING_URL.startswith("https://")):
+# ✅ Enlace de descarga de la app (env o fijo)
+APP_DOWNLOAD_URL = (os.environ.get("APP_DOWNLOAD_URL", "").strip()
+                    or "https://inhoustontexas.us/descargar-app/")
+
+# Validación suave de URLs
+def _valid_url(u: str) -> bool:
+    return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
+
+if not _valid_url(BOOKING_URL):
     print(f"⚠️ BOOKING_URL inválido o vacío: '{BOOKING_URL}'. Verifica tus secrets en Render/.env")
+if not _valid_url(APP_DOWNLOAD_URL):
+    print(f"⚠️ APP_DOWNLOAD_URL inválido o vacío: '{APP_DOWNLOAD_URL}'. Verifica tus secrets en Render/.env")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
@@ -215,6 +224,7 @@ def _sanitize_link_placeholders(text: str) -> str:
         return text
     return PLACEHOLDER_PAT.sub(BOOKING_URL, text)
 
+# Palabras relacionadas con agendar (enlace de calendario)
 SCHEDULE_OFFER_PAT = re.compile(
     r"\b(enlace|link|calendar|calendario|agendar|agenda|reservar|reserva|cita|schedule|book|appointment|meeting|call)\b",
     re.IGNORECASE
@@ -236,6 +246,13 @@ def _assistant_recently_offered_link(clave: str, lookback: int = 3) -> bool:
         if cnt >= lookback:
             break
     return False
+
+# Palabras para “descargar la app”
+def _wants_app_download(text: str) -> bool:
+    t = (text or "").lower()
+    has_app_word = any(w in t for w in ["app", "aplicación", "aplicacion", "ios", "android", "play store", "app store"])
+    has_download_intent = any(w in t for w in ["descargar", "download", "bajar", "instalar", "link", "enlace"])
+    return ("descargar app" in t) or ("download app" in t) or (has_app_word and has_download_intent)
 
 # ===== Intención de agenda (keywords del JSON del bot) =====
 def _bot_agenda_keywords(bot_cfg):
@@ -664,7 +681,15 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ⚡ ATAJO: si el usuario pide el enlace o dice "sí" tras una oferta reciente, enviamos el link YA
+    # 📲 ATAJO: si preguntan por la APP, enviamos link de descarga
+    if _wants_app_download(incoming_msg):
+        nombre = contact_name.get(clave_sesion, "")
+        app_msg = f"¡Claro{f', {nombre}' if nombre else ''}! Puedes descargar nuestra app aquí: {APP_DOWNLOAD_URL}"
+        msg.body(_ensure_question(bot, app_msg, clave_sesion))
+        last_message_time[clave_sesion] = time.time()
+        return str(response)
+
+    # ⚡ ATAJO: si el usuario pide el enlace o dice "sí" tras una oferta reciente, enviamos el link de agenda YA
     if _wants_link(incoming_msg) or (_is_affirmative(incoming_msg) and _assistant_recently_offered_link(clave_sesion)):
         nombre = contact_name.get(clave_sesion, "")
         personal_link = f"¡Perfecto{f', {nombre}' if nombre else ''}! Aquí está el enlace para agendar: {BOOKING_URL}"
@@ -1006,5 +1031,6 @@ def send_whatsapp_message(to_number, message, bot_number=None):
 # =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"[BOOT] BOOKING_URL={BOOKING_URL}")  # 🔎 Log para ver el enlace efectivo en Render
+    print(f"[BOOT] BOOKING_URL={BOOKING_URL}")
+    print(f"[BOOT] APP_DOWNLOAD_URL={APP_DOWNLOAD_URL}")
     app.run(host="0.0.0.0", port=port)
