@@ -70,8 +70,6 @@ if not firebase_admin._apps:
         firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
         print(f"[BOOT] Firebase inicializado con RTDB: {firebase_db_url}")
     else:
-        # Inicializar sin URL permite levantar la app, pero db.reference fallará luego.
-        # Se mantiene para no alterar el flujo; los logs anteriores explican cómo fijarlo.
         firebase_admin.initialize_app(cred)
         print("⚠️ Firebase inicializado sin databaseURL (db.reference fallará hasta configurar FIREBASE_DB_URL).")
 
@@ -168,19 +166,15 @@ def _ensure_question(bot_cfg: dict, text: str, force_question: bool) -> str:
     txt = re.sub(r"\s+", " ", (text or "")).strip()
     if not force_question:
         return txt
-    # Evitar duplicar signos si ya hay pregunta
     if "?" in txt:
         return txt
     if not txt.endswith((".", "!", "…")):
         txt += "."
     probe = _next_probe_from_bot(bot_cfg)
-    # Si hay probe definida, úsala; si no, no añadimos nada
     return f"{txt} {probe}".strip() if probe else txt
 
 def _make_system_message(bot_cfg: dict) -> str:
-    """
-    Deja el 'system_prompt' tal cual viene del JSON del bot, sin aditivos ni directrices extra.
-    """
+    """Deja el 'system_prompt' tal cual viene del JSON del bot, sin aditivos."""
     return (bot_cfg or {}).get("system_prompt", "") or ""
 
 # =======================
@@ -744,10 +738,23 @@ def whatsapp_bot():
         if _is_affirmative(incoming_msg):
             if _can_send_link(clave_sesion, cooldown_min=10):
                 link = _effective_booking_url(bot)
-                texto = _compose_with_link("Enlace:", link) if link else "Sin enlace disponible."
+
+                # 🔸 NUEVO: mensaje personalizable desde JSON -> agenda.link_message
+                link_message = (agenda_cfg.get("link_message") or "").strip()
+                link_message = _sanitize_link_placeholders_for_bot(link_message, bot)
+                if link_message:
+                    # Si el template ya trae el URL (por placeholder) lo mandamos tal cual.
+                    # Si no trae URL, adjuntamos el link válido al final.
+                    if ("http://" in link_message) or ("https://" in link_message):
+                        texto = link_message
+                    else:
+                        texto = _compose_with_link(link_message, link)
+                else:
+                    # Fallback histórico
+                    texto = _compose_with_link("Enlace:", link) if link else "Sin enlace disponible."
+
                 msg.body(texto)
                 _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent", last_link_time=_now(), last_bot_hash=_hash_text(texto))
-                # cerrar tras enviar link si así se desea (neutro: cerrar)
                 agenda_state[clave_sesion]["closed"] = True
                 try:
                     ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -768,7 +775,6 @@ def whatsapp_bot():
             return str(response)
         else:
             if confirm_q:
-                # Respeta JSON; si no hay confirm_q, no agrega pregunta automática
                 msg.body(confirm_q)
             last_message_time[clave_sesion] = time.time()
             return str(response)
@@ -800,10 +806,8 @@ def whatsapp_bot():
 
     # ====== Continuación normal (GPT) ======
     if "system" not in [m.get("role") for m in session_history.get(clave_sesion, [])]:
-        # Si no hubo system_prompt, el bot JSON define todo; no imponemos nada por defecto.
         pass
 
-    # Contexto del usuario
     session_history.setdefault(clave_sesion, []).append({"role": "user", "content": incoming_msg})
     last_message_time[clave_sesion] = time.time()
 
@@ -818,18 +822,14 @@ def whatsapp_bot():
         )
         respuesta = (completion.choices[0].message.content or "").strip()
 
-        # Aplicar solo recorte de longitud si el bot lo indica
         respuesta = _apply_style(bot, respuesta)
 
-        # Solo agrega pregunta si el JSON lo pide
         style = (bot.get("style") or {})
         must_ask = bool(style.get("always_question", False))
         respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
 
-        # Evitar repetir exactamente el mismo texto consecutivo
         st_prev = _get_agenda(clave_sesion)
         if _hash_text(respuesta) == st_prev.get("last_bot_hash"):
-            # Si hay 'probes' en el JSON, añade una distinta; si no, deja igual (no forzar actitud).
             probe = _next_probe_from_bot(bot)
             if probe and probe not in respuesta:
                 if not respuesta.endswith((".", "!", "…", "¿", "?")):
@@ -974,7 +974,6 @@ def follow_up_task(clave_sesion, bot_number):
     if agenda_state.get(clave_sesion, {}).get("closed"):
         return
 
-    # Buscar mensajes en JSON del bot
     to_num = bot_number
     bot_cfg = bots_config.get(to_num) or {}
     fu = bot_cfg.get("follow_up", {}) if isinstance(bot_cfg, dict) else {}
@@ -982,7 +981,6 @@ def follow_up_task(clave_sesion, bot_number):
     after_5 = fu.get("after_5min", "").strip() if isinstance(fu, dict) else ""
     after_60 = fu.get("after_60min", "").strip() if isinstance(fu, dict) else ""
 
-    # Si no hay mensajes definidos, no hacemos follow-up (core neutral)
     if not after_5 and not after_60:
         return
 
