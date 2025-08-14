@@ -21,7 +21,7 @@
       "always_question": true,
       "avoid_titles": true,
       "human_like": true,
-      "fallback_question": "¿Prefieres ver ejemplos o agendar una llamada?",
+      "fallback_question": "¿Prefieres más información o agendar una llamada?",
       "probes": [
         "¿Te gustaría que te cuente cómo aprovechamos la revista para que los negocios destaquen en Houston?",
         "¿Quieres que te comparta ideas de campañas que han funcionado muy bien para otros clientes?",
@@ -74,7 +74,8 @@
       "keywords": ["cita", "agenda", "agendar", "reunión", "reunion", "llamada", "agendar cita", "schedule", "book", "appointment", "meeting", "call"],
       "confirm_question": "¡Genial! ¿Quieres que te comparta el enlace para agendar y elegir día y hora? 😄",
       "decline_message": "¡Súper! Si luego quieres agendar, dime *cita* y te envío el enlace. ¿Seguimos viendo opciones?",
-      "closing_message": "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí."
+      "closing_message": "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí.",
+      "link_message": "¡Perfecto! Aquí tienes el enlace para agendar: {{BOOKING_URL}}"
     },
 
     "follow_up": {
