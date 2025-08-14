@@ -28,7 +28,7 @@
     "agenda": {
       "keywords": ["cita","agenda","agendar","reunión","reunion","llamada","agendar cita","schedule","book","appointment","meeting","call"],
       "confirm_question": "¡Genial! ¿Quieres que te comparta el enlace para agendar y elegir día y hora? 😄",
-      "link_message": "¡Perfecto! Elige día y hora aquí:\n{GOOGLE_CALENDAR_BOOKING_URL}\nTe llegará la invitación por correo. ¿Te funciona?",
+      "link_message": "¡Perfecto! Elige día y hora aquí:\n{BOOKING_URL}\nTe llegará la invitación por correo. ¿Te funciona?",
       "decline_message": "¡Súper! Si luego quieres agendar, dime *cita* y te envío el enlace. ¿Seguimos viendo opciones?",
       "closing_message": "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí."
     },
