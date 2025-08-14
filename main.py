@@ -25,13 +25,21 @@ app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
 
 # =======================
-#  Firebase
+#  Firebase (con RTDB garantizada)
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
-firebase_db_url = os.getenv("FIREBASE_DB_URL", "")
+# URL por defecto de tu RTDB (ajústala si tu proyecto cambia)
+DEFAULT_DB_URL = "https://inhouston-209c0-default-rtdb.firebaseio.com/"
+firebase_db_url = os.getenv("FIREBASE_DB_URL", DEFAULT_DB_URL).strip()
+
 if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_key_path)
-    firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url} if firebase_db_url else None)
+    if firebase_db_url:
+        firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
+        print(f"[BOOT] Firebase inicializado con RTDB: {firebase_db_url}")
+    else:
+        firebase_admin.initialize_app(cred)
+        print("[BOOT] Firebase inicializado SIN databaseURL (no recomendado)")
 
 # =======================
 #  Bots desde carpeta bots/
@@ -155,6 +163,8 @@ def guardar_lead(bot_nombre, numero, mensaje):
         fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
+    else:
+        print(f"✅ Lead guardado: bot={bot_nombre} numero={numero} texto='{(mensaje or '')[:80]}'")
 
 # =======================
 #  Utilidades
@@ -179,7 +189,6 @@ def _dump_bot_context(bot_cfg: dict) -> str:
     Pasa variables del bot al modelo como contexto, para que TODO se controle por JSON.
     No decide lógica: solo expone datos.
     """
-    # Exporta campos comunes si existen.
     ctx = {
         "name": bot_cfg.get("name"),
         "business_name": bot_cfg.get("business_name"),
@@ -192,14 +201,12 @@ def _dump_bot_context(bot_cfg: dict) -> str:
         "policies": bot_cfg.get("policies"),
         "preamble": bot_cfg.get("preamble"),
     }
-    # Quita None para que no “ensucie” el prompt
     ctx = {k: v for k, v in ctx.items() if v is not None}
     return "BOT_CONTEXT_JSON = " + json.dumps(ctx, ensure_ascii=False)
 
 def _build_system(bot_cfg: dict) -> str:
     base = (bot_cfg or {}).get("system_prompt", "") or ""
     ctx = _dump_bot_context(bot_cfg)
-    # El modelo recibe tu prompt + el contexto serializado para que obedezca 100% al JSON
     return (base + "\n\n" + ctx).strip()
 
 # =======================
@@ -404,6 +411,7 @@ def whatsapp_bot():
     msg = response.message()
 
     if not bot:
+        print(f"⚠️ To={bot_number} no está mapeado en bots/*.json")
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
@@ -415,7 +423,7 @@ def whatsapp_bot():
         sysmsg = _build_system(bot)
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
 
-    # Detecta nombre de pasada (para que el modelo pueda personalizar si quiere)
+    # Detecta nombre de pasada
     nombre_detectado = _extract_name(incoming_msg)
     if nombre_detectado:
         contact_name[clave_sesion] = nombre_detectado
