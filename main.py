@@ -47,13 +47,33 @@ app.secret_key = "supersecreto_sundin_panel_2025"
 #  Inicializar Firebase
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
-firebase_db_url = os.getenv("FIREBASE_DB_URL", "")
+
+# 1) Intentar como variable de entorno
+firebase_db_url = (os.getenv("FIREBASE_DB_URL") or "").strip()
+
+# 2) Si no existe como env var, leerlo como Secret File en Render: /etc/secrets/FIREBASE_DB_URL
+if not firebase_db_url:
+    try:
+        with open("/etc/secrets/FIREBASE_DB_URL", "r", encoding="utf-8") as f:
+            firebase_db_url = f.read().strip().strip('"').strip("'")
+            if firebase_db_url:
+                print("[BOOT] FIREBASE_DB_URL leído desde Secret File.")
+    except Exception:
+        pass
+
+if not firebase_db_url:
+    print("❌ FIREBASE_DB_URL no configurado. Define la variable de entorno o crea el Secret File /etc/secrets/FIREBASE_DB_URL con la URL completa de tu RTDB.")
+
 if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_key_path)
     if firebase_db_url:
         firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
+        print(f"[BOOT] Firebase inicializado con RTDB: {firebase_db_url}")
     else:
+        # Inicializar sin URL permite levantar la app, pero db.reference fallará luego.
+        # Se mantiene para no alterar el flujo; los logs anteriores explican cómo fijarlo.
         firebase_admin.initialize_app(cred)
+        print("⚠️ Firebase inicializado sin databaseURL (db.reference fallará hasta configurar FIREBASE_DB_URL).")
 
 # =======================
 #  Cargar bots desde carpeta bots/
