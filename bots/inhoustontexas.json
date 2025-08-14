@@ -75,7 +75,7 @@
       "confirm_question": "¡Genial! ¿Quieres que te comparta el enlace para agendar y elegir día y hora? 😄",
       "decline_message": "¡Súper! Si luego quieres agendar, dime *cita* y te envío el enlace. ¿Seguimos viendo opciones?",
       "closing_message": "¡Perfecto! Me alegra que agendaste. El Sr. Sundin Galue estará encantado de hablar contigo en la hora elegida. Si surge algo, escríbeme aquí.",
-      "link_message": "¡Perfecto! Aquí tienes el enlace para agendar: {{BOOKING_URL}}"
+      "link_message": "¡Perfecto! Aquí tienes el enlace para agendar:"
     },
 
     "follow_up": {
