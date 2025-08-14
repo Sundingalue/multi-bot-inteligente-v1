@@ -3,8 +3,7 @@ from flask import Flask, request, session, redirect, url_for, send_file, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
-import os, json, time, csv, glob, re, hashlib
-from threading import Thread
+import os, json, time, csv, glob, re
 from datetime import datetime
 from io import StringIO
 
@@ -179,7 +178,6 @@ def _dump_bot_context(bot_cfg: dict) -> str:
     Pasa variables del bot al modelo como contexto, para que TODO se controle por JSON.
     No decide lógica: solo expone datos.
     """
-    # Exporta campos comunes si existen.
     ctx = {
         "name": bot_cfg.get("name"),
         "business_name": bot_cfg.get("business_name"),
@@ -192,15 +190,27 @@ def _dump_bot_context(bot_cfg: dict) -> str:
         "policies": bot_cfg.get("policies"),
         "preamble": bot_cfg.get("preamble"),
     }
-    # Quita None para que no “ensucie” el prompt
     ctx = {k: v for k, v in ctx.items() if v is not None}
     return "BOT_CONTEXT_JSON = " + json.dumps(ctx, ensure_ascii=False)
 
 def _build_system(bot_cfg: dict) -> str:
     base = (bot_cfg or {}).get("system_prompt", "") or ""
     ctx = _dump_bot_context(bot_cfg)
-    # El modelo recibe tu prompt + el contexto serializado para que obedezca 100% al JSON
     return (base + "\n\n" + ctx).strip()
+
+def _normalize_bot_name(name: str):
+    for cfg in bots_config.values():
+        if cfg.get("name", "").lower() == str(name).lower():
+            return cfg.get("name")
+    return None
+
+def _get_bot_cfg_by_name(name: str):
+    if not name:
+        return None
+    for cfg in bots_config.values():
+        if isinstance(cfg, dict) and cfg.get("name", "").lower() == name.lower():
+            return cfg
+    return None
 
 # =======================
 #  Rutas
@@ -281,20 +291,6 @@ def _first_allowed_bot():
         for b in bots:
             if b != "*":
                 return b
-    return None
-
-def _normalize_bot_name(name: str):
-    for cfg in bots_config.values():
-        if cfg.get("name", "").lower() == str(name).lower():
-            return cfg.get("name")
-    return None
-
-def _get_bot_cfg_by_name(name: str):
-    if not name:
-        return None
-    for cfg in bots_config.values():
-        if isinstance(cfg, dict) and cfg.get("name", "").lower() == name.lower():
-            return cfg
     return None
 
 @app.route("/panel", methods=["GET", "POST"])
@@ -378,7 +374,113 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 # =======================
-#  WhatsApp Webhook — SIN REGLAS duras
+#  Vistas de conversación (leen Firebase)
+# =======================
+@app.route("/conversacion_general/<bot>/<numero>")
+def chat_general(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    bots_ok = session.get("bots_permitidos", [])
+    if not (_is_admin() or bot_normalizado in bots_ok):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+@app.route("/conversacion_bot/<bot>/<numero>")
+def chat_bot(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    bots_ok = session.get("bots_permitidos", [])
+    if not (_is_admin() or bot_normalizado in bots_ok):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+# =======================
+#  Guardar/Editar lead desde el panel
+# =======================
+@app.route("/guardar-lead", methods=["POST"])
+def guardar_edicion():
+    data = request.json or {}
+    numero_key = (data.get("numero") or "").strip()
+    estado = (data.get("estado") or "").strip()
+    nota = (data.get("nota") or "").strip()
+
+    if "|" not in numero_key:
+        return jsonify({"error": "Parámetro 'numero' inválido"}), 400
+
+    bot_nombre, numero = numero_key.split("|", 1)
+    bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
+
+    try:
+        ref = _lead_ref(bot_normalizado, numero)
+        current = ref.get() or {}
+        if estado:
+            current["status"] = estado
+        if nota != "":
+            current["notes"] = nota
+        current.setdefault("bot", bot_normalizado)
+        current.setdefault("numero", numero)
+        ref.set(current)
+    except Exception as e:
+        print(f"⚠️ No se pudo actualizar en Firebase: {e}")
+
+    return jsonify({"mensaje": "Lead actualizado"})
+
+# =======================
+#  🔺 Borrar conversación (Firebase)
+# =======================
+@app.route("/api/delete_chat", methods=["POST"])
+def api_delete_chat():
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    data = request.get_json(silent=True) or {}
+    bot_nombre = (data.get("bot") or "").strip()
+    numero = (data.get("numero") or "").strip()
+    if not bot_nombre or not numero:
+        return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
+
+    bot_normalizado = _normalize_bot_name(bot_nombre)
+    if not bot_normalizado:
+        return jsonify({"error": "Bot no encontrado"}), 404
+    bots_ok = session.get("bots_permitidos", [])
+    if not (_is_admin() or bot_normalizado in bots_ok):
+        return jsonify({"error": "No autorizado"}), 403
+
+    try:
+        ref = _lead_ref(bot_normalizado, numero)
+        ref.delete()
+    except Exception as e:
+        print(f"⚠️ No se pudo eliminar en Firebase: {e}")
+
+    return jsonify({"ok": True})
+
+# =======================
+#  WhatsApp Webhook — SIN REGLAS duras (toda la lógica viene del JSON)
 # =======================
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
@@ -407,33 +509,42 @@ def whatsapp_bot():
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
-    # 1) SIEMPRE crear/actualizar lead con el mensaje del usuario
+    # ===== Persistencia lead
     guardar_lead(bot.get("name", "bot"), sender_number, incoming_msg)
 
-    # 2) System + historial (si usas system_prompt del JSON)
+    # ===== Historial + System (100% desde JSON)
     if clave_sesion not in session_history:
-        sysmsg = _make_system_message(bot)  # o _build_system(bot) si usas el core minimal
+        sysmsg = _build_system(bot)
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
 
-    # 3) Añadir user al historial
+    # Detecta nombre (solo para que el modelo lo use si quiere)
+    nombre_detectado = _extract_name(incoming_msg)
+    if nombre_detectado:
+        contact_name[clave_sesion] = nombre_detectado
+
     session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
 
-    # 4) Llamar a OpenAI y responder
-    completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=session_history[clave_sesion]
-    )
-    respuesta = (completion.choices[0].message.content or "").strip()
-    session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
-    msg.body(respuesta)
-
-    # 5) GUARDAR RESPUESTA DEL BOT (clave para que el panel muestre el hilo)
+    # ===== Llamada al modelo configurado por bot
+    model_name = (bot.get("model") or "gpt-4o")
     try:
-        ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        fb_append_historial(bot.get("name", "bot"), sender_number,
-                            {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=session_history[clave_sesion]
+        )
+        respuesta = (completion.choices[0].message.content or "").strip()
+        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
+        msg.body(respuesta)
+
+        # Guardar respuesta del bot en Firebase
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot.get("name", "bot"), sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
+
     except Exception as e:
-        print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
+        print(f"❌ Error con GPT: {e}")
+        msg.body("Lo siento, hubo un error generando la respuesta.")
 
     return str(response)
 
