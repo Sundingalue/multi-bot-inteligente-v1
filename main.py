@@ -25,21 +25,13 @@ app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
 
 # =======================
-#  Firebase (con RTDB garantizada)
+#  Firebase
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
-# URL por defecto de tu RTDB (ajústala si tu proyecto cambia)
-DEFAULT_DB_URL = "https://inhouston-209c0-default-rtdb.firebaseio.com/"
-firebase_db_url = os.getenv("FIREBASE_DB_URL", DEFAULT_DB_URL).strip()
-
+firebase_db_url = os.getenv("FIREBASE_DB_URL", "")
 if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_key_path)
-    if firebase_db_url:
-        firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url})
-        print(f"[BOOT] Firebase inicializado con RTDB: {firebase_db_url}")
-    else:
-        firebase_admin.initialize_app(cred)
-        print("[BOOT] Firebase inicializado SIN databaseURL (no recomendado)")
+    firebase_admin.initialize_app(cred, {'databaseURL': firebase_db_url} if firebase_db_url else None)
 
 # =======================
 #  Bots desde carpeta bots/
@@ -163,8 +155,6 @@ def guardar_lead(bot_nombre, numero, mensaje):
         fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
-    else:
-        print(f"✅ Lead guardado: bot={bot_nombre} numero={numero} texto='{(mensaje or '')[:80]}'")
 
 # =======================
 #  Utilidades
@@ -189,6 +179,7 @@ def _dump_bot_context(bot_cfg: dict) -> str:
     Pasa variables del bot al modelo como contexto, para que TODO se controle por JSON.
     No decide lógica: solo expone datos.
     """
+    # Exporta campos comunes si existen.
     ctx = {
         "name": bot_cfg.get("name"),
         "business_name": bot_cfg.get("business_name"),
@@ -201,12 +192,14 @@ def _dump_bot_context(bot_cfg: dict) -> str:
         "policies": bot_cfg.get("policies"),
         "preamble": bot_cfg.get("preamble"),
     }
+    # Quita None para que no “ensucie” el prompt
     ctx = {k: v for k, v in ctx.items() if v is not None}
     return "BOT_CONTEXT_JSON = " + json.dumps(ctx, ensure_ascii=False)
 
 def _build_system(bot_cfg: dict) -> str:
     base = (bot_cfg or {}).get("system_prompt", "") or ""
     ctx = _dump_bot_context(bot_cfg)
+    # El modelo recibe tu prompt + el contexto serializado para que obedezca 100% al JSON
     return (base + "\n\n" + ctx).strip()
 
 # =======================
@@ -411,48 +404,36 @@ def whatsapp_bot():
     msg = response.message()
 
     if not bot:
-        print(f"⚠️ To={bot_number} no está mapeado en bots/*.json")
         msg.body("Lo siento, este número no está asignado a ningún bot.")
         return str(response)
 
-    # ===== Persistencia lead
+    # 1) SIEMPRE crear/actualizar lead con el mensaje del usuario
     guardar_lead(bot.get("name", "bot"), sender_number, incoming_msg)
 
-    # ===== Historial + System (100% desde JSON)
+    # 2) System + historial (si usas system_prompt del JSON)
     if clave_sesion not in session_history:
-        sysmsg = _build_system(bot)
+        sysmsg = _make_system_message(bot)  # o _build_system(bot) si usas el core minimal
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
 
-    # Detecta nombre de pasada
-    nombre_detectado = _extract_name(incoming_msg)
-    if nombre_detectado:
-        contact_name[clave_sesion] = nombre_detectado
-
+    # 3) Añadir user al historial
     session_history[clave_sesion].append({"role": "user", "content": incoming_msg})
 
-    # ===== Llamada al modelo configurado por bot
-    model_name = (bot.get("model") or "gpt-4o")
-    temperature = float(bot.get("temperature", 0.6))
+    # 4) Llamar a OpenAI y responder
+    completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=session_history[clave_sesion]
+    )
+    respuesta = (completion.choices[0].message.content or "").strip()
+    session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
+    msg.body(respuesta)
+
+    # 5) GUARDAR RESPUESTA DEL BOT (clave para que el panel muestre el hilo)
     try:
-        completion = client.chat.completions.create(
-            model=model_name,
-            temperature=temperature,
-            messages=session_history[clave_sesion]
-        )
-        respuesta = (completion.choices[0].message.content or "").strip()
-        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
-        msg.body(respuesta)
-
-        # Guardar respuesta del bot en Firebase
-        try:
-            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot.get("name", "bot"), sender_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
-        except Exception as e:
-            print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
-
+        ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fb_append_historial(bot.get("name", "bot"), sender_number,
+                            {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
     except Exception as e:
-        print(f"❌ Error con GPT: {e}")
-        msg.body("Lo siento, hubo un error generando la respuesta.")
+        print(f"⚠️ No se pudo guardar respuesta del bot: {e}")
 
     return str(response)
 
