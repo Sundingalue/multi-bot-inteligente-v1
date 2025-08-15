@@ -94,6 +94,12 @@ if not bots_config:
     print("⚠️ No se encontraron bots en ./bots/*.json")
 
 # =======================
+#  💡 Registrar la API de facturación (Blueprint)
+# =======================
+from billing_api import billing_bp          # ← LÍNEA 1 AGREGADA
+app.register_blueprint(billing_bp, url_prefix="/api/billing")  # ← LÍNEA 2 AGREGADA
+
+# =======================
 #  Memorias por sesión (runtime)
 # =======================
 session_history = {}       # clave_sesion -> mensajes para OpenAI
