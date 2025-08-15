@@ -300,6 +300,8 @@ def list_clients():
         consumo_cents = int((val or {}).get("cents", 0) if isinstance(val, dict) else (val or 0))
 
         status = _get_status(bot_name)
+        # ⬇️ Añadido: incluir service_item en /clients
+        svc = _get_service_item(bot_name)
 
         items.append({
             "id": bot_name,
@@ -309,6 +311,7 @@ def list_clients():
             "consumo_cents": consumo_cents,
             "consumo_period": period,
             "bot_status": status,
+            "service_item": svc,  # ⬅️ nuevo campo
         })
 
     return jsonify({"success": True, "data": items})
@@ -490,7 +493,7 @@ def billing_panel():
     .row-empty td{opacity:.6}
     .row-actions{display:flex; gap:8px; align-items:center}
     .datebox{display:flex; gap:8px; align-items:center; margin:8px 0 16px; flex-wrap:wrap}
-    input[type=date], select{background:#111; color:#eee; border:1px solid #333; border-radius:8px; padding:8px}
+    input[type=date], select, input[type=number], input[type=text]{background:#111; color:#eee; border:1px solid #333; border-radius:8px; padding:8px}
     .charts{margin-top:28px}
     .card{background:#0f0f0f; border:1px solid #222; border-radius:14px; padding:14px; margin-bottom:16px}
     .flex{display:flex; gap:16px; align-items:center; flex-wrap:wrap}
@@ -513,7 +516,8 @@ def billing_panel():
 
     <table id="tbl">
       <thead>
-        <tr><th>Cliente</th><th>Email</th><th>Teléfono</th><th>Consumo</th><th>Bot</th><th>Acciones</th></tr>
+        <!-- ⬇️ añadimos columna Servicio entre Teléfono y Consumo -->
+        <tr><th>Cliente</th><th>Email</th><th>Teléfono</th><th>Servicio</th><th>Consumo</th><th>Bot</th><th>Acciones</th></tr>
       </thead>
       <tbody id="tbody"></tbody>
     </table>
@@ -577,24 +581,74 @@ function periodDefaults(inpStart, inpEnd){
 periodDefaults(dStart, dEnd);
 periodDefaults(cStart, cEnd);
 
+async function saveService(bot, rowEl){
+  const wrap = rowEl.querySelector('.svc-wrap');
+  const enabled = wrap.querySelector('.svc-enabled').checked;
+  const amount  = parseFloat(wrap.querySelector('.svc-amount').value || '0');
+  const label   = (wrap.querySelector('.svc-label').value || '').trim();
+  const btn     = wrap.querySelector('.svc-save');
+
+  btn.disabled = true;
+  try{
+    const res = await fetch(`/billing/service-item/${encodeURIComponent(bot)}`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ enabled, amount, label })
+    });
+    const js = await res.json();
+    if(!js.success){ alert('No se pudo guardar: ' + (js.message||'error')); }
+    else { btn.textContent = 'Guardado ✓'; setTimeout(()=>btn.textContent='Guardar', 1200); }
+  }catch(e){
+    alert('Error de red guardando servicio');
+  }finally{
+    btn.disabled = false;
+  }
+}
+
 async function loadClients(){
-  tbody.innerHTML = '<tr class="row-empty"><td colspan="6">Cargando...</td></tr>';
+  tbody.innerHTML = '<tr class="row-empty"><td colspan="7">Cargando...</td></tr>';
   const res = await fetch('/billing/clients');
   const js = await res.json();
-  if(!js.success){ tbody.innerHTML = '<tr class="row-empty"><td colspan="6">Error cargando clientes</td></tr>'; return; }
+  if(!js.success){ tbody.innerHTML = '<tr class="row-empty"><td colspan="7">Error cargando clientes</td></tr>'; return; }
   const rows = js.data.map(row => {
     const consumo = (row.consumo_cents||0)/100;
+    const svc = row.service_item || {enabled:true, amount:0, label:'Servicio'};
     return `
-      <tr>
+      <tr data-bot="${row.id}">
         <td><div class="name">${row.name||row.id}</div><div class="sub">ID: ${row.id}</div></td>
         <td>${row.email||'-'}</td>
         <td>${row.phone||'-'}</td>
+
+        <!-- Columna Servicio (editable) -->
+        <td>
+          <div class="svc-wrap" style="display:flex;flex-direction:column;gap:6px;max-width:260px">
+            <label style="display:flex;align-items:center;gap:8px">
+              <input type="checkbox" class="svc-enabled" ${svc.enabled?'checked':''}>
+              <span>Cobrar servicio</span>
+            </label>
+            <input type="number" min="0" step="0.01" class="svc-amount" value="${Number(svc.amount||0)}" placeholder="Monto USD">
+            <input type="text" class="svc-label" value="${svc.label?String(svc.label).replace(/"/g,'&quot;'):'Servicio'}" placeholder="Descripción en factura">
+            <button class="btn svc-save">Guardar</button>
+          </div>
+        </td>
+
         <td class="consumo"><a href="#" data-bot="${row.id}" onclick="openDetail(event)">${fmtUSD(consumo)}</a><div class="sub">${row.consumo_period||''}</div></td>
         <td><span class="dot ${row.bot_status==='on'?'':'off'}"></span> ${row.bot_status==='on'?'ON':'OFF'}</td>
-        <td><button class="btn btn-primary" onclick="openDetail(event)" data-bot="${row.id}">Ver detalle</button></td>
+        <td>
+          <div class="row-actions">
+            <button class="btn btn-primary" onclick="openDetail(event)" data-bot="${row.id}">Ver detalle</button>
+          </div>
+        </td>
       </tr>`;
   }).join('');
-  tbody.innerHTML = rows || '<tr class="row-empty"><td colspan="6">Sin clientes</td></tr>';
+  tbody.innerHTML = rows || '<tr class="row-empty"><td colspan="7">Sin clientes</td></tr>';
+
+  // wire guardar servicio
+  tbody.querySelectorAll('tr[data-bot]').forEach(tr=>{
+    const bot = tr.getAttribute('data-bot');
+    const btn = tr.querySelector('.svc-save');
+    btn.addEventListener('click', ()=>saveService(bot, tr));
+  });
 
   // llenar selector de bot si está vacío
   if(!selBot.options.length){
