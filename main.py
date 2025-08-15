@@ -42,9 +42,6 @@ if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 
-from billing_api import billing_bp
-app.register_blueprint(billing_bp, url_prefix="/billing")
-
 app.secret_key = "supersecreto_sundin_panel_2025"
 
 # =======================
@@ -101,7 +98,7 @@ if not bots_config:
 #  💡 Registrar la API de facturación (Blueprint)
 # =======================
 from billing_api import billing_bp          # ← LÍNEA 1 AGREGADA
-app.register_blueprint(billing_bp, url_prefix="/api/billing")  # ← LÍNEA 2 AGREGADA
+app.register_blueprint(billing_bp, url_prefix="/billing")  # ← LÍNEA 2 AGREGADA
 
 # =======================
 #  Memorias por sesión (runtime)
