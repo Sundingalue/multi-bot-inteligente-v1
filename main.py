@@ -97,7 +97,7 @@ if not bots_config:
 # =======================
 #  💡 Registrar la API de facturación (Blueprint)
 # =======================
-from billing_api import billing_bp
+from billing_api import billing_bp, record_openai_usage   # 🔹 añadido record_openai_usage
 app.register_blueprint(billing_bp, url_prefix="/billing")
 
 # =======================
@@ -896,6 +896,23 @@ def whatsapp_bot():
             temperature=temperature,
             messages=session_history[clave_sesion]
         )
+
+        # ===== Billing: registrar uso de OpenAI por bot (tokens/día) =====
+        try:
+            u = getattr(completion, "usage", None)
+            in_tok  = int(getattr(u, "prompt_tokens", 0) if u else 0)
+            out_tok = int(getattr(u, "completion_tokens", 0) if u else 0)
+            safe_bot_name = (bot.get("name") or "").strip()
+            if safe_bot_name:
+                record_openai_usage(
+                    bot=safe_bot_name,
+                    model=model_name,
+                    input_tokens=in_tok,
+                    output_tokens=out_tok
+                )
+        except Exception as e:
+            print(f"[BILLING] No se pudo registrar uso OpenAI: {e}")
+
         respuesta = (completion.choices[0].message.content or "").strip()
 
         respuesta = _apply_style(bot, respuesta)
@@ -1053,7 +1070,7 @@ def follow_up_task(clave_sesion, bot_number):
 
     to_num = bot_number
     bot_cfg = bots_config.get(to_num) or {}
-    fu = bot_cfg.get("follow_up", {}) if isinstance(bot_cfg, dict) else {}
+    fu = bot_cfg.get("follow_up", {}) if isinstance(fu := bot_cfg.get("follow_up", {}), dict) else {}
 
     after_5 = fu.get("after_5min", "").strip() if isinstance(fu, dict) else ""
     after_60 = fu.get("after_60min", "").strip() if isinstance(fu, dict) else ""
