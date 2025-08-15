@@ -97,8 +97,8 @@ if not bots_config:
 # =======================
 #  💡 Registrar la API de facturación (Blueprint)
 # =======================
-from billing_api import billing_bp          # ← LÍNEA 1 AGREGADA
-app.register_blueprint(billing_bp, url_prefix="/billing")  # ← LÍNEA 2 AGREGADA
+from billing_api import billing_bp
+app.register_blueprint(billing_bp, url_prefix="/billing")
 
 # =======================
 #  Memorias por sesión (runtime)
@@ -407,6 +407,21 @@ def fb_list_leads_by_bot(bot_nombre):
     return leads
 
 # =======================
+#  ✅ Kill-Switch: estado ON/OFF desde Firebase
+# =======================
+def fb_is_bot_on(bot_name: str) -> bool:
+    """Lee billing/status/<bot_name> en RTDB. Por defecto: ON."""
+    try:
+        val = db.reference(f"billing/status/{bot_name}").get()
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() == "on"
+    except Exception as e:
+        print(f"⚠️ Error leyendo status del bot '{bot_name}': {e}")
+    return True  # si no hay dato, asumimos ON
+
+# =======================
 #  🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
 # =======================
 def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_number: str):
@@ -708,25 +723,36 @@ def _compose_with_link(prefix: str, link: str) -> str:
 
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
-    incoming_msg = (request.values.get("Body", "") or "").strip()
+    incoming_msg  = (request.values.get("Body", "") or "").strip()
     sender_number = request.values.get("From", "")
-    bot_number = request.values.get("To", "")
+    bot_number    = request.values.get("To", "")
 
     clave_sesion = f"{bot_number}|{sender_number}"
     bot = _get_bot_cfg_by_number(bot_number)
 
-    response = MessagingResponse()
-    msg = response.message()
-
     if not bot:
-        msg.body("Este número no está asignado a ningún bot.")
-        return str(response)
+        resp = MessagingResponse()
+        resp.message("Este número no está asignado a ningún bot.")
+        return str(resp)
 
-    # 🔄 NUEVO: reconstruir contexto desde Firebase si no hay memoria en RAM
+    # Reconstruir contexto (por si el proceso se reinició)
     _hydrate_session_from_firebase(clave_sesion, bot, sender_number)
 
-    # Guarda el mensaje del usuario
-    guardar_lead(bot["name"], sender_number, incoming_msg)
+    # Guardar SIEMPRE el mensaje del usuario (trazabilidad)
+    try:
+        guardar_lead(bot["name"], sender_number, incoming_msg)
+    except Exception as e:
+        print(f"❌ Error guardando lead: {e}")
+
+    # 🔒 KILL-SWITCH: si el bot está OFF, no respondemos
+    bot_name = bot.get("name", "")
+    if bot_name and not fb_is_bot_on(bot_name):
+        # Twilio no enviará nada: <Response/> vacío
+        return str(MessagingResponse())
+
+    # A partir de aquí SÍ respondemos
+    response = MessagingResponse()
+    msg = response.message()
 
     # ================== Atajos neutrales ==================
     # APP: si piden descarga, responde con link si existe y cierra
@@ -762,12 +788,12 @@ def whatsapp_bot():
 
     # Cierre cortés (gracias/bye/etc.) sin insistir
     if _is_polite_closure(incoming_msg):
-    # Obtener el mensaje de cierre del JSON, si no existe, usar un fallback genérico.
-      cierre = bot.get("policies", {}).get("polite_closure_message", "Gracias por contactarnos. ¡Hasta pronto!")
-      msg.body(cierre)
-      agenda_state.setdefault(clave_sesion, {})["closed"] = True
-      last_message_time[clave_sesion] = time.time()
-      return str(response)
+        # Obtener el mensaje de cierre del JSON, si no existe, usar un fallback genérico.
+        cierre = bot.get("policies", {}).get("polite_closure_message", "Gracias por contactarnos. ¡Hasta pronto!")
+        msg.body(cierre)
+        agenda_state.setdefault(clave_sesion, {})["closed"] = True
+        last_message_time[clave_sesion] = time.time()
+        return str(response)
 
     # ====== FLUJO AGENDA controlado por JSON del bot ======
     st = _get_agenda(clave_sesion)
