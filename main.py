@@ -41,6 +41,9 @@ if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
+from billing_api import billing_bp
+app.register_blueprint(billing_bp, url_prefix="/billing")
+
 app.secret_key = "supersecreto_sundin_panel_2025"
 
 # =======================
