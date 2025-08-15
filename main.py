@@ -41,18 +41,14 @@ if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
-
 app.secret_key = "supersecreto_sundin_panel_2025"
 
 # =======================
 #  Inicializar Firebase
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
-
-# 1) Intentar como variable de entorno
 firebase_db_url = (os.getenv("FIREBASE_DB_URL") or "").strip()
 
-# 2) Si no existe como env var, leerlo como Secret File en Render: /etc/secrets/FIREBASE_DB_URL
 if not firebase_db_url:
     try:
         with open("/etc/secrets/FIREBASE_DB_URL", "r", encoding="utf-8") as f:
@@ -97,7 +93,7 @@ if not bots_config:
 # =======================
 #  💡 Registrar la API de facturación (Blueprint)
 # =======================
-from billing_api import billing_bp
+from billing_api import billing_bp, record_openai_usage
 app.register_blueprint(billing_bp, url_prefix="/billing")
 
 # =======================
@@ -108,9 +104,6 @@ last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": str, "closed": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
-
-# Datos por contacto (detectados en runtime, neutrales)
-contact_name = {}          # clave_sesion -> "Carlos"
 
 # =======================
 #  Helpers generales (neutros)
@@ -146,7 +139,6 @@ def _split_sentences(text: str):
     return [p for p in parts if p]
 
 def _apply_style(bot_cfg: dict, text: str) -> str:
-    """Aplica solo recortes de longitud si el bot lo indica. No impone tono/personalidad."""
     style = (bot_cfg or {}).get("style", {}) or {}
     short = bool(style.get("short_replies", True))
     max_sents = int(style.get("max_sentences", 2)) if style.get("max_sentences") is not None else 2
@@ -158,7 +150,6 @@ def _apply_style(bot_cfg: dict, text: str) -> str:
     return text
 
 def _next_probe_from_bot(bot_cfg: dict) -> str:
-    """Devuelve una 'probe' solo si el JSON del bot la provee; si no, no agrega nada."""
     style = (bot_cfg or {}).get("style", {}) or {}
     probes = style.get("probes") or []
     probes = [p.strip() for p in probes if isinstance(p, str) and p.strip()]
@@ -167,9 +158,6 @@ def _next_probe_from_bot(bot_cfg: dict) -> str:
     return random.choice(probes)
 
 def _ensure_question(bot_cfg: dict, text: str, force_question: bool) -> str:
-    """
-    Solo agrega pregunta si el JSON del bot lo pide (style.always_question) y no está cerrada la conversación.
-    """
     txt = re.sub(r"\s+", " ", (text or "")).strip()
     if not force_question:
         return txt
@@ -181,11 +169,10 @@ def _ensure_question(bot_cfg: dict, text: str, force_question: bool) -> str:
     return f"{txt} {probe}".strip() if probe else txt
 
 def _make_system_message(bot_cfg: dict) -> str:
-    """Deja el 'system_prompt' tal cual viene del JSON del bot, sin aditivos."""
     return (bot_cfg or {}).get("system_prompt", "") or ""
 
 # =======================
-#  Helpers de links por BOT (JSON primero, env fallback)
+#  Helpers de links por BOT
 # =======================
 def _drill_get(d: dict, path: str):
     cur = d
@@ -227,15 +214,9 @@ def _effective_app_url(bot_cfg: dict) -> str:
             return val
     return APP_DOWNLOAD_URL_FALLBACK if _valid_url(APP_DOWNLOAD_URL_FALLBACK) else ""
 
-# Reemplazo de placeholders viejos con el URL EFECTIVO del bot
-PLACEHOLDER_PAT = re.compile(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", re.IGNORECASE)
-def _sanitize_link_placeholders_for_bot(text: str, bot_cfg: dict) -> str:
-    if not isinstance(text, str):
-        return text
-    link = _effective_booking_url(bot_cfg)
-    return PLACEHOLDER_PAT.sub(link if link else "", text)
-
-# Detecciones de intención (neutras)
+# =======================
+#  Intenciones
+# =======================
 SCHEDULE_OFFER_PAT = re.compile(
     r"\b(enlace|link|calendar|calendario|agendar|agenda|reservar|reserva|cita|schedule|book|appointment|meeting|call)\b",
     re.IGNORECASE
@@ -243,76 +224,37 @@ SCHEDULE_OFFER_PAT = re.compile(
 def _wants_link(text: str) -> bool:
     return bool(SCHEDULE_OFFER_PAT.search(text or ""))
 
-def _assistant_recently_offered_link(clave: str, lookback: int = 3) -> bool:
-    msgs = session_history.get(clave, [])
-    cnt = 0
-    for m in reversed(msgs):
-        if m.get("role") != "assistant":
-            continue
-        cnt += 1
-        content = (m.get("content") or "")
-        if SCHEDULE_OFFER_PAT.search(content):
-            return True
-        if cnt >= lookback:
-            break
-    return False
-
 def _wants_app_download(text: str) -> bool:
     t = (text or "").lower()
     has_app_word = any(w in t for w in ["app", "aplicación", "aplicacion", "ios", "android", "play store", "app store"])
     has_download_intent = any(w in t for w in ["descargar", "download", "bajar", "instalar", "link", "enlace"])
     return ("descargar app" in t) or ("download app" in t) or (has_app_word and has_download_intent)
 
-# ===== Intención de agenda (keywords del JSON del bot) =====
-def _bot_agenda_keywords(bot_cfg):
-    agenda = (bot_cfg or {}).get("agenda", {}) or {}
-    kws = agenda.get("keywords") or []
-    return [k.lower() for k in kws if isinstance(k, str) and k.strip()]
-
-def _wants_to_schedule(texto: str, bot_cfg: dict) -> bool:
-    if not texto:
-        return False
-    t = texto.lower()
-    kws = _bot_agenda_keywords(bot_cfg)
-    return any(k in t for k in kws)
-
 def _is_affirmative(texto: str) -> bool:
-    if not texto:
-        return False
+    if not texto: return False
     t = texto.strip().lower()
     afirm = {"si","sí","ok","okay","dale","va","claro","por favor","hagamoslo","hagámoslo","perfecto","de una","yes","yep","yeah","sure","please"}
     return any(t == a or t.startswith(a + " ") for a in afirm)
 
 def _is_negative(texto: str) -> bool:
-    if not texto:
-        return False
-    t = texto.strip().lower()
-    t = re.sub(r'[.,;:!?]+$', '', t)
+    if not texto: return False
+    t = re.sub(r'[.,;:!?]+$', '', texto.strip().lower())
     t = re.sub(r'\s+', ' ', t)
     negatives = {"no", "nop", "no gracias", "ahora no", "luego", "después", "despues", "not now"}
     return t in negatives
 
 def _is_scheduled_confirmation(texto: str) -> bool:
-    if not texto:
-        return False
+    if not texto: return False
     t = texto.lower()
     kws = ["ya agende","ya agendé","agende","agendé","ya programe","ya programé","ya agendado","agendado","confirmé","confirmado","listo","done","booked","i booked","i scheduled","scheduled"]
     return any(k in t for k in kws)
 
 def _is_polite_closure(texto: str) -> bool:
-    if not texto:
-        return False
+    if not texto: return False
     t = texto.strip().lower()
-    cierres = {
-        "gracias", "muchas gracias", "ok gracias", "listo gracias",
-        "perfecto gracias", "estamos en contacto", "por ahora está bien",
-        "por ahora esta bien", "luego te escribo", "luego hablamos",
-        "hasta luego", "buen día", "buen dia", "buenas noches",
-        "nos vemos", "chao", "bye", "eso es todo", "todo bien gracias"
-    }
+    cierres = {"gracias","muchas gracias","ok gracias","listo gracias","perfecto gracias","estamos en contacto","por ahora está bien","por ahora esta bien","luego te escribo","luego hablamos","hasta luego","buen día","buen dia","buenas noches","nos vemos","chao","bye","eso es todo","todo bien gracias"}
     return any(t == c or t.startswith(c + " ") for c in cierres)
 
-# ===== Estado de agenda por sesión =====
 def _now(): return int(time.time())
 def _minutes_since(ts): return (_now() - int(ts or 0)) / 60.0
 def _hash_text(s: str) -> str: return hashlib.md5((s or "").strip().lower().encode("utf-8")).hexdigest()
@@ -332,10 +274,6 @@ def _can_send_link(clave, cooldown_min=10):
     if st.get("status") in ("link_sent", "confirmed") and _minutes_since(st.get("last_link_time")) < cooldown_min:
         return False
     return True
-
-def _already_confirmed_recently(clave, window_days=14):
-    st = _get_agenda(clave)
-    return st.get("status") == "confirmed" and _minutes_since(st.get("last_update")) < (window_days*24*60)
 
 # =======================
 #  Firebase: helpers de leads
@@ -410,7 +348,6 @@ def fb_list_leads_by_bot(bot_nombre):
 #  ✅ Kill-Switch: estado ON/OFF desde Firebase
 # =======================
 def fb_is_bot_on(bot_name: str) -> bool:
-    """Lee billing/status/<bot_name> en RTDB. Por defecto: ON."""
     try:
         val = db.reference(f"billing/status/{bot_name}").get()
         if isinstance(val, bool):
@@ -425,7 +362,6 @@ def fb_is_bot_on(bot_name: str) -> bool:
 #  🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
 # =======================
 def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_number: str):
-    """Rellena session_history desde Firebase si el proceso se reinició."""
     if clave_sesion in session_history:
         return
     bot_name = (bot_cfg or {}).get("name", "")
@@ -452,35 +388,6 @@ def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_numb
         session_history[clave_sesion] = msgs
         greeted_state[clave_sesion] = True
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
-
-# =======================
-#  Leads y WhatsApp
-# =======================
-def guardar_lead(bot_nombre, numero, mensaje):
-    try:
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        lead = fb_get_lead(bot_nombre, numero)
-        if not lead:
-            lead = {
-                "bot": bot_nombre,
-                "numero": numero,
-                "first_seen": ahora,
-                "last_message": mensaje,
-                "last_seen": ahora,
-                "messages": 0,
-                "status": "nuevo",
-                "notes": "",
-                "historial": []
-            }
-            _lead_ref(bot_nombre, numero).set(lead)
-        fb_append_historial(bot_nombre, numero, {"tipo": "user", "texto": mensaje, "hora": ahora})
-    except Exception as e:
-        print(f"❌ Error guardando lead: {e}")
-
-@app.after_request
-def permitir_iframe(response):
-    response.headers["X-Frame-Options"] = "ALLOWALL"
-    return response
 
 # =======================
 #  Rutas UI: Paneles
@@ -682,26 +589,6 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 # =======================
-#  Utilidad: detectar nombre (neutro)
-# =======================
-def _extract_name(text: str) -> str:
-    if not text:
-        return ""
-    t = text.strip()
-    m = re.search(r"(?:me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", t, re.IGNORECASE)
-    if m:
-        return m.group(1).strip().capitalize()
-    m = re.search(r"^soy\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)", t, re.IGNORECASE)
-    if m:
-        return m.group(1).strip().capitalize()
-    m = re.search(r"^(?:hola[,!\s]+)?([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,})\b", t, re.IGNORECASE)
-    if m:
-        posible = m.group(1).strip().capitalize()
-        if posible.lower() not in {"hola","buenas","buenos","dias","días","tardes","noches"}:
-            return posible
-    return ""
-
-# =======================
 #  Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
@@ -716,7 +603,6 @@ def verify_whatsapp():
         return "Token inválido", 403
 
 def _compose_with_link(prefix: str, link: str) -> str:
-    """Concatena un texto con un link solo si el link es válido (sin tono/actitud)."""
     if _valid_url(link):
         return f"{prefix.strip()} {link}".strip()
     return prefix.strip()
@@ -740,36 +626,29 @@ def whatsapp_bot():
 
     # Guardar SIEMPRE el mensaje del usuario (trazabilidad)
     try:
-        guardar_lead(bot["name"], sender_number, incoming_msg)
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fb_append_historial(bot["name"], sender_number, {"tipo": "user", "texto": incoming_msg, "hora": ahora})
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
 
     # 🔒 KILL-SWITCH: si el bot está OFF, no respondemos
     bot_name = bot.get("name", "")
     if bot_name and not fb_is_bot_on(bot_name):
-        # Twilio no enviará nada: <Response/> vacío
-        return str(MessagingResponse())
+        return str(MessagingResponse())  # Twilio <Response/> vacío
 
-    # A partir de aquí SÍ respondemos
     response = MessagingResponse()
     msg = response.message()
 
-    # ================== Atajos neutrales ==================
-    # APP: si piden descarga, responde con link si existe y cierra
+    # Atajos neutrales
     if _wants_app_download(incoming_msg):
         url_app = _effective_app_url(bot)
         if url_app:
-            # 🔸 Mensaje personalizable desde JSON -> links.app_message
             links_cfg = bot.get("links") or {}
             app_msg = (links_cfg.get("app_message") or "").strip() if isinstance(links_cfg, dict) else ""
             if app_msg:
-                if ("http://" in app_msg) or ("https://" in app_msg):
-                    texto = app_msg
-                else:
-                    texto = _compose_with_link(app_msg, url_app)
+                texto = app_msg if ("http://" in app_msg or "https://" in app_msg) else _compose_with_link(app_msg, url_app)
             else:
                 texto = _compose_with_link("Aquí tienes:", url_app)
-
             msg.body(texto)
             _set_agenda(clave_sesion, status="app_link_sent")
             agenda_state[clave_sesion]["closed"] = True
@@ -778,7 +657,6 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # STOP conversacional si el usuario dice "no" o declina
     if _is_negative(incoming_msg):
         cierre = _compose_with_link("Entendido.", _effective_booking_url(bot))
         msg.body(cierre)
@@ -786,24 +664,21 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # Cierre cortés (gracias/bye/etc.) sin insistir
     if _is_polite_closure(incoming_msg):
-        # Obtener el mensaje de cierre del JSON, si no existe, usar un fallback genérico.
         cierre = bot.get("policies", {}).get("polite_closure_message", "Gracias por contactarnos. ¡Hasta pronto!")
         msg.body(cierre)
         agenda_state.setdefault(clave_sesion, {})["closed"] = True
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ====== FLUJO AGENDA controlado por JSON del bot ======
+    # ====== FLUJO AGENDA ======
     st = _get_agenda(clave_sesion)
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
 
-    confirm_q = _sanitize_link_placeholders_for_bot(agenda_cfg.get("confirm_question") or "", bot)
-    decline_msg = _sanitize_link_placeholders_for_bot(agenda_cfg.get("decline_message") or "", bot)
-    closing_default = _sanitize_link_placeholders_for_bot(agenda_cfg.get("closing_message") or "", bot)
+    confirm_q = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("confirm_question") or ""), flags=re.IGNORECASE)
+    decline_msg = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("decline_message") or ""), flags=re.IGNORECASE)
+    closing_default = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("closing_message") or ""), flags=re.IGNORECASE)
 
-    # Confirmación explícita "ya agendé/booked"
     if _is_scheduled_confirmation(incoming_msg):
         texto = closing_default or "Agendado."
         msg.body(texto)
@@ -812,25 +687,15 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # Si está esperando confirmación del usuario para enviar link
     if st.get("awaiting_confirm"):
         if _is_affirmative(incoming_msg):
             if _can_send_link(clave_sesion, cooldown_min=10):
                 link = _effective_booking_url(bot)
-
-                # 🔸 Mensaje personalizable desde JSON -> agenda.link_message
                 link_message = (agenda_cfg.get("link_message") or "").strip()
-                link_message = _sanitize_link_placeholders_for_bot(link_message, bot)
-                if link_message:
-                    if ("http://" in link_message) or ("https://" in link_message):
-                        texto = link_message
-                    else:
-                        texto = _compose_with_link(link_message, link)
-                else:
-                    texto = _compose_with_link("Enlace:", link) if link else "Sin enlace disponible."
-
+                link_message = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (link or ""), link_message, flags=re.IGNORECASE)
+                texto = link_message if link_message else (_compose_with_link("Enlace:", link) if link else "Sin enlace disponible.")
                 msg.body(texto)
-                _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent", last_link_time=_now(), last_bot_hash=_hash_text(texto))
+                _set_agenda(clave_sesion, awaiting_confirm=False, status="link_sent", last_link_time=int(time.time()), last_bot_hash=_hash_text(texto))
                 agenda_state[clave_sesion]["closed"] = True
                 try:
                     ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -855,15 +720,14 @@ def whatsapp_bot():
             last_message_time[clave_sesion] = time.time()
             return str(response)
 
-    # Usuario pide agendar (por keywords del bot)
-    if _wants_to_schedule(incoming_msg, bot):
+    if any(k in (incoming_msg or "").lower() for k in (bot.get("agenda", {}).get("keywords", []) or [])):
         if confirm_q:
             msg.body(confirm_q)
         _set_agenda(clave_sesion, awaiting_confirm=True)
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ====== Sesión / saludo (solo si JSON lo define) ======
+    # ====== Sesión / saludo ======
     if clave_sesion not in session_history:
         sysmsg = _make_system_message(bot)
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
@@ -874,16 +738,12 @@ def whatsapp_bot():
     intro_keywords = (bot.get("intro_keywords") or [])
 
     if (not greeted_state.get(clave_sesion)) and greeting_text and any(w in incoming_msg.lower() for w in intro_keywords):
-        txt = greeting_text
-        msg.body(txt)
+        msg.body(greeting_text)
         greeted_state[clave_sesion] = True
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
     # ====== Continuación normal (GPT) ======
-    if "system" not in [m.get("role") for m in session_history.get(clave_sesion, [])]:
-        pass
-
     session_history.setdefault(clave_sesion, []).append({"role": "user", "content": incoming_msg})
     last_message_time[clave_sesion] = time.time()
 
@@ -896,15 +756,16 @@ def whatsapp_bot():
             temperature=temperature,
             messages=session_history[clave_sesion]
         )
-        respuesta = (completion.choices[0].message.content or "").strip()
 
+        # Contenido
+        respuesta = (completion.choices[0].message.content or "").strip()
         respuesta = _apply_style(bot, respuesta)
 
         style = (bot.get("style") or {})
         must_ask = bool(style.get("always_question", False))
         respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
 
-        st_prev = _get_agenda(clave_sesion)
+        st_prev = agenda_state.get(clave_sesion, {})
         if _hash_text(respuesta) == st_prev.get("last_bot_hash"):
             probe = _next_probe_from_bot(bot)
             if probe and probe not in respuesta:
@@ -914,7 +775,23 @@ def whatsapp_bot():
 
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
         msg.body(respuesta)
-        _set_agenda(clave_sesion, last_bot_hash=_hash_text(respuesta))
+        agenda_state.setdefault(clave_sesion, {})
+        agenda_state[clave_sesion]["last_bot_hash"] = _hash_text(respuesta)
+
+        # 🔹 REGISTRO DE TOKENS POR BOT (para facturación):
+        try:
+            usage = getattr(completion, "usage", None)
+            if usage:
+                input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            else:
+                # SDKs a veces traen usage como dict
+                usage_dict = getattr(completion, "to_dict", lambda: {})()
+                input_tokens = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
+                output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
+            record_openai_usage(bot.get("name", ""), model_name, input_tokens, output_tokens)
+        except Exception as e:
+            print(f"⚠️ No se pudo registrar tokens en billing: {e}")
 
         try:
             ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -974,7 +851,7 @@ def chat_bot(bot, numero):
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 # =======================
-#  API de polling (lee Firebase)
+#  API de polling (leen Firebase)
 # =======================
 @app.route("/api/chat/<bot>/<numero>", methods=["GET"])
 def api_chat(bot, numero):
@@ -1014,78 +891,6 @@ def api_chat(bot, numero):
         nuevos = [{"texto": reg.get("texto", ""), "hora": reg.get("hora", ""), "tipo": reg.get("tipo", "user"), "ts": _hora_to_epoch_ms(reg.get("hora", ""))} for reg in historial]
 
     return jsonify({"mensajes": nuevos, "last_ts": last_ts})
-
-# =======================
-#  🔺 Borrar conversación (Firebase)
-# =======================
-@app.route("/api/delete_chat", methods=["POST"])
-def api_delete_chat():
-    if not session.get("autenticado"):
-        return jsonify({"error": "No autenticado"}), 401
-    data = request.get_json(silent=True) or {}
-    bot_nombre = (data.get("bot") or "").strip()
-    numero = (data.get("numero") or "").strip()
-    if not bot_nombre or not numero:
-        return jsonify({"error": "Faltan parámetros 'bot' y/o 'numero'"}), 400
-
-    bot_normalizado = _normalize_bot_name(bot_nombre)
-    if not bot_normalizado:
-        return jsonify({"error": "Bot no encontrado"}), 404
-    if not _user_can_access_bot(bot_normalizado):
-        return jsonify({"error": "No autorizado"}), 403
-
-    try:
-        ref = _lead_ref(bot_normalizado, numero)
-        ref.delete()
-    except Exception as e:
-        print(f"⚠️ No se pudo eliminar en Firebase: {e}")
-
-    return jsonify({"ok": True})
-
-
-# =======================
-#  Follow-up (WhatsApp vía Twilio)
-#  Ahora solo envía follow-ups si el JSON del bot define los mensajes.
-# =======================
-def follow_up_task(clave_sesion, bot_number):
-    if agenda_state.get(clave_sesion, {}).get("closed"):
-        return
-
-    to_num = bot_number
-    bot_cfg = bots_config.get(to_num) or {}
-    fu = bot_cfg.get("follow_up", {}) if isinstance(bot_cfg, dict) else {}
-
-    after_5 = fu.get("after_5min", "").strip() if isinstance(fu, dict) else ""
-    after_60 = fu.get("after_60min", "").strip() if isinstance(fu, dict) else ""
-
-    if not after_5 and not after_60:
-        return
-
-    time.sleep(300)
-    if (not agenda_state.get(clave_sesion, {}).get("closed") and
-        clave_sesion in last_message_time and
-        time.time() - last_message_time[clave_sesion] >= 300 and
-        not follow_up_flags[clave_sesion]["5min"] and
-        after_5):
-        send_whatsapp_message(clave_sesion.split("|")[1], after_5, bot_number)
-        follow_up_flags[clave_sesion]["5min"] = True
-
-    time.sleep(3300)
-    if (not agenda_state.get(clave_sesion, {}).get("closed") and
-        clave_sesion in last_message_time and
-        time.time() - last_message_time[clave_sesion] >= 3600 and
-        not follow_up_flags[clave_sesion]["60min"] and
-        after_60):
-        send_whatsapp_message(clave_sesion.split("|")[1], after_60, bot_number)
-        follow_up_flags[clave_sesion]["60min"] = True
-
-def send_whatsapp_message(to_number, message, bot_number=None):
-    from twilio.rest import Client
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number = bot_number if bot_number else os.environ.get("TWILIO_WHATSAPP_NUMBER")
-    client_twilio = Client(account_sid, auth_token)
-    client_twilio.messages.create(body=message, from_=from_number, to=to_number)
 
 # =======================
 #  Run
