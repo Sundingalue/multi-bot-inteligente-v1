@@ -7,7 +7,7 @@ import os
 import json
 import time
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timedelta  # ✅ REMEMBER ME: agregado timedelta
 import csv
 from io import StringIO
 import re
@@ -42,6 +42,7 @@ if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
+app.permanent_session_lifetime = timedelta(days=30)  # ✅ REMEMBER ME: duración de sesión al marcar "Recordarme"
 
 # =======================
 #  Inicializar Firebase
@@ -599,6 +600,9 @@ def panel():
         if request.method == "POST":
             usuario = request.form.get("usuario", "").strip()
             clave = request.form.get("clave", "").strip()
+            recordarme_val = (request.form.get("recordarme") or "").strip().lower()  # ✅ REMEMBER ME: leer checkbox
+            session.permanent = recordarme_val in {"on", "true", "1", "yes", "si", "sí", "y"}  # ✅ REMEMBER ME: persistir sesión según checkbox
+
             auth = _auth_user(usuario, clave)
             if auth:
                 session["autenticado"] = True
