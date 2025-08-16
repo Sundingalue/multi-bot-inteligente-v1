@@ -5,6 +5,12 @@
     "model": "gpt-4o",
     "temperature": 0.6,
 
+    "auth": {
+      "username": "inhouston_admin",
+      "password": "inhouston2025",
+      "panel": "panel"
+    },
+
     "email": "info@inhoustontexas.us",
     "phone": "+1 346-988-2323",
     "billing": {
