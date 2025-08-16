@@ -248,6 +248,9 @@
           </button>
         </div>
 
+        <!-- ✅ REMEMBER ME: campo oculto que tu backend espera (recordarme) -->
+        <input type="hidden" name="recordarme" id="recordarmeHidden" />
+
         <div class="action">
           <button type="submit" id="submitBtn">Entrar</button>
         </div>
@@ -280,6 +283,53 @@
       // ✅ Foco directo al usuario al abrir
       const user = document.getElementById('usuario');
       if (user) setTimeout(()=>user.focus(), 200);
+
+      // =========================
+      // ✅ REMEMBER ME (frontend)
+      // - Sin borrar nada del HTML original.
+      // - Mapeo checkbox -> campo oculto "recordarme" que usa tu main.py
+      // - Guardado local (localStorage) de usuario/contraseña si se marca
+      // =========================
+      const rememberChk = document.getElementById('remember');
+      const recordarmeHidden = document.getElementById('recordarmeHidden');
+
+      // Al cargar: si había guardado, rellenamos
+      try {
+        const savedRemember = localStorage.getItem('login_remember') === '1';
+        const savedUser = localStorage.getItem('login_user') || '';
+        const savedPass = localStorage.getItem('login_pass') || '';
+        if (savedRemember) {
+          if (user && !user.value) user.value = savedUser;
+          if (pwd && !pwd.value) pwd.value = savedPass;
+          if (rememberChk) rememberChk.checked = true;
+          if (recordarmeHidden) recordarmeHidden.value = 'on';
+        }
+      } catch(e){ /* silencioso */ }
+
+      // Antes de enviar: sincronizamos campo oculto y guardamos localmente si aplica
+      form.addEventListener('submit', function(){
+        if (recordarmeHidden) {
+          recordarmeHidden.value = rememberChk && rememberChk.checked ? 'on' : '';
+        }
+        try {
+          if (rememberChk && rememberChk.checked) {
+            localStorage.setItem('login_remember', '1');
+            localStorage.setItem('login_user', user ? user.value : '');
+            localStorage.setItem('login_pass', pwd ? pwd.value : '');
+          } else {
+            localStorage.removeItem('login_remember');
+            localStorage.removeItem('login_user');
+            localStorage.removeItem('login_pass');
+          }
+        } catch(e){ /* silencioso */ }
+      });
+
+      // Si el usuario desmarca/marca, reflejamos al campo oculto
+      rememberChk && rememberChk.addEventListener('change', function(){
+        if (recordarmeHidden) {
+          recordarmeHidden.value = rememberChk.checked ? 'on' : '';
+        }
+      });
     })();
   </script>
 </body>
