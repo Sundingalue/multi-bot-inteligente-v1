@@ -55,14 +55,14 @@
         <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
       {% endif %}
 
-      <!-- list="savedUsers": sugerencias locales (multi-usuario) -->
+      <!-- IMPORTANTE: el campo VISIBLE ahora se llama name="username" -->
       <form id="loginForm" class="form" method="POST" action="/panel" autocomplete="on">
         <div class="field">
           <label for="usuario">Usuario</label>
           <input
             id="usuario"
             type="text"
-            name="usuario"
+            name="username"
             placeholder="Escribe tu usuario"
             required
             inputmode="text"
@@ -71,9 +71,8 @@
             spellcheck="false"
             autocomplete="username"
             list="savedUsers"
+            enterkeyhint="done"
           />
-          <!-- Campo estándar adicional: ayuda al gestor del navegador -->
-          <input type="hidden" id="usernameHidden" name="username" autocomplete="username" />
           <datalist id="savedUsers"></datalist>
           <div class="helper">Puedes elegir un usuario guardado.</div>
         </div>
@@ -144,11 +143,10 @@
       saveAccounts(acc);
     }
 
-    // ===== Credential Management API (pide al navegador guardar/llenar) =====
+    // ===== Credential Management API (opcional; Safari puede ignorarlo) =====
     async function cmGet() {
       if (!('credentials' in navigator)) return null;
       try {
-        // Intento discreto de autofill (permite FaceID/Keychain/Google PM si el usuario quiere)
         return await navigator.credentials.get({ password: true, mediation: 'optional' });
       } catch(e){ return null; }
     }
@@ -166,7 +164,6 @@
       const toggle = document.getElementById('togglePwd');
       const pwd = document.getElementById('clave');
       const user = document.getElementById('usuario');
-      const usernameHidden = document.getElementById('usernameHidden');
       const rememberChk = document.getElementById('remember');
       const recordarmeHidden = document.getElementById('recordarmeHidden');
       const listEl = document.getElementById('savedUsers');
@@ -184,21 +181,13 @@
         toggle.textContent = visible ? 'Ver' : 'Ocultar';
       });
 
-      // Mantener campo estándar username sincronizado
-      function syncUsernameHidden(){
-        if (usernameHidden) usernameHidden.value = (user.value || '').trim();
-      }
-      user.addEventListener('input', syncUsernameHidden);
-      user.addEventListener('change', syncUsernameHidden);
-      syncUsernameHidden();
-
       // Foco
       setTimeout(()=>user && user.focus(), 200);
 
       // 1) Precargar último usuario por cookie
       try{
         const lastUser = getCookie('last_username');
-        if (lastUser && user && !user.value) { user.value = lastUser; syncUsernameHidden(); }
+        if (lastUser && user && !user.value) { user.value = lastUser; }
       }catch(e){}
 
       // 2) Reconstruir datalist local
@@ -230,7 +219,6 @@
         if (cred && cred.type === 'password') {
           if (!user.value) user.value = cred.id || cred.name || '';
           if (!pwd.value) pwd.value = cred.password || '';
-          syncUsernameHidden();
         }
       })();
 
