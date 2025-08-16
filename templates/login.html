@@ -230,7 +230,7 @@
           <input
             id="clave"
             type="password"
-            name="clave"
+            name="password"  <!-- 🔁 Antes: name="clave" -->
             placeholder="Escribe tu contraseña"
             required
             autocomplete="current-password" />
@@ -248,7 +248,7 @@
           </button>
         </div>
 
-        <!-- ✅ REMEMBER ME: campo oculto que tu backend espera (recordarme) -->
+        <!-- ✅ REMEMBER ME: campo oculto que tu backend puede leer -->
         <input type="hidden" name="recordarme" id="recordarmeHidden" />
 
         <div class="action">
@@ -261,10 +261,25 @@
   </div>
 
   <script>
+    // ✅ Utilidades de cookie simples
+    function setCookie(name, value, days){
+      try{
+        const max = days ? ';max-age='+(days*24*60*60) : '';
+        document.cookie = name + '=' + encodeURIComponent(value) + ';path=/' + max + ';SameSite=Lax';
+      }catch(e){}
+    }
+    function getCookie(name){
+      try{
+        const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return m ? decodeURIComponent(m[2]) : '';
+      }catch(e){ return ''; }
+    }
+
     // ✅ Evita doble envío accidental en móvil
     (function(){
       const form = document.querySelector('form');
       const submit = document.getElementById('submitBtn');
+
       form.addEventListener('submit', function(){
         submit.disabled = true;
         submit.textContent = 'Ingresando…';
@@ -286,14 +301,20 @@
 
       // =========================
       // ✅ REMEMBER ME (frontend)
-      // - Sin borrar nada del HTML original.
-      // - Mapeo checkbox -> campo oculto "recordarme" que usa tu main.py
+      // - Mapeo checkbox -> campo oculto "recordarme"
       // - Guardado local (localStorage) de usuario/contraseña si se marca
+      // - Cookie "last_username" para sugerir usuario reciente
       // =========================
       const rememberChk = document.getElementById('remember');
       const recordarmeHidden = document.getElementById('recordarmeHidden');
 
-      // Al cargar: si había guardado, rellenamos
+      // Al cargar: 1) prefilla por cookie de último usuario
+      try{
+        const lastUser = getCookie('last_username');
+        if (lastUser && user && !user.value) user.value = lastUser;
+      }catch(e){}
+
+      // Al cargar: 2) si había guardado localmente y marcó "recordarme", rellenamos
       try {
         const savedRemember = localStorage.getItem('login_remember') === '1';
         const savedUser = localStorage.getItem('login_user') || '';
@@ -306,12 +327,15 @@
         }
       } catch(e){ /* silencioso */ }
 
-      // Antes de enviar: sincronizamos campo oculto y guardamos localmente si aplica
+      // Antes de enviar: sincronizamos campo oculto, guardamos cookie y localStorage si aplica
       form.addEventListener('submit', function(){
         if (recordarmeHidden) {
-          recordarmeHidden.value = rememberChk && rememberChk.checked ? 'on' : '';
+          recordarmeHidden.value = (rememberChk && rememberChk.checked) ? 'on' : '';
         }
         try {
+          // Cookie con el último usuario (1 año)
+          if (user && user.value) setCookie('last_username', user.value, 365);
+
           if (rememberChk && rememberChk.checked) {
             localStorage.setItem('login_remember', '1');
             localStorage.setItem('login_user', user ? user.value : '');
