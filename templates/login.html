@@ -9,7 +9,7 @@
   <style>
     :root{ --brand:#F7BD02; --bg:#000; --card:#fff; --text:#000; --muted:#888; --radius:16px; --focus:#2b90ff; }
     *{ box-sizing: border-box; }
-    html, body { margin:0; padding:0; height:100%; background:var(--bg); color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; font-size:17px; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+    html, body { margin:0; padding:0; height:100%; background:var(--bg); color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; font-size:17px; -webkit-font-smoothing:antialiased; -moz-osx-fon t-smoothing:grayscale; }
     .login-wrap{ min-height:100vh; display:grid; place-items:center; background:
       radial-gradient(1200px 600px at 100% 0%, rgba(247,189,2,0.15), transparent 60%),
       radial-gradient(1200px 600px at 0% 100%, rgba(247,189,2,0.12), transparent 60%),
@@ -55,14 +55,13 @@
         <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
       {% endif %}
 
-      <!-- IMPORTANTE: el campo VISIBLE ahora se llama name="username" -->
-      <form id="loginForm" class="form" method="POST" action="/panel" autocomplete="on">
+      <form id="loginForm" class="form" method="POST" action="/panel" autocomplete="on" name="login">
         <div class="field">
           <label for="usuario">Usuario</label>
           <input
-            id="usuario"
+            id="usuario"               <!-- id amigable para ti -->
             type="text"
-            name="username"
+            name="username"            <!-- nombre estándar que Safari espera -->
             placeholder="Escribe tu usuario"
             required
             inputmode="text"
@@ -82,7 +81,7 @@
           <input
             id="clave"
             type="password"
-            name="password"
+            name="password"            <!-- nombre estándar que Safari espera -->
             placeholder="Escribe tu contraseña"
             required
             autocomplete="current-password"
@@ -128,7 +127,7 @@
       }catch(e){ return ''; }
     }
 
-    // ===== Gestor local multi-cuentas (AVISO: guarda en texto plano en este dispositivo) =====
+    // ===== Gestor local multi-cuentas (texto plano en este dispositivo) =====
     const STORAGE_KEY = 'mbi_login_accounts'; // { "<usuario>": "<password>", ... }
     function loadAccounts(){
       try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e){ return {}; }
@@ -143,7 +142,7 @@
       saveAccounts(acc);
     }
 
-    // ===== Credential Management API (opcional; Safari puede ignorarlo) =====
+    // ===== Credential Management API (no soportado por Safari, pero útil en Chrome) =====
     async function cmGet() {
       if (!('credentials' in navigator)) return null;
       try {
@@ -168,29 +167,21 @@
       const recordarmeHidden = document.getElementById('recordarmeHidden');
       const listEl = document.getElementById('savedUsers');
 
-      // Helper UI
+      // UI: estado del botón
       form.addEventListener('submit', function(){
         submit.disabled = true;
         submit.textContent = 'Ingresando…';
         setTimeout(()=>{ submit.disabled = false; submit.textContent = 'Entrar'; }, 6000);
       });
 
+      // Ver/ocultar contraseña
       toggle.addEventListener('click', function(){
         const visible = pwd.type === 'text';
         pwd.type = visible ? 'password' : 'text';
         toggle.textContent = visible ? 'Ver' : 'Ocultar';
       });
 
-      // Foco
-      setTimeout(()=>user && user.focus(), 200);
-
-      // 1) Precargar último usuario por cookie
-      try{
-        const lastUser = getCookie('last_username');
-        if (lastUser && user && !user.value) { user.value = lastUser; }
-      }catch(e){}
-
-      // 2) Reconstruir datalist local
+      // Reconstruir datalist con usuarios locales
       function rebuildDatalist(){
         const acc = loadAccounts();
         listEl.innerHTML = '';
@@ -200,9 +191,8 @@
           listEl.appendChild(opt);
         });
       }
-      rebuildDatalist();
 
-      // 3) Autocompletar password si el usuario existe en almacenamiento local
+      // Autocompletar password si el usuario existe en almacenamiento local
       function maybeFillPassword(){
         const acc = loadAccounts();
         const u = (user.value || '').trim();
@@ -210,10 +200,27 @@
           pwd.value = acc[u] || '';
         }
       }
+
+      // Foco inicial
+      setTimeout(()=>user && user.focus(), 200);
+
+      // 1) Precargar último usuario por cookie y rellenar pass si existe
+      try{
+        const lastUser = getCookie('last_username');
+        if (lastUser && user && !user.value) {
+          user.value = lastUser;
+        }
+      }catch(e){}
+      rebuildDatalist();
+      // 👇 Relleno inmediato por si el usuario ya está en localStorage
+      maybeFillPassword();
+
+      // Rellenar también cuando el usuario cambia/tipea
       user.addEventListener('change', maybeFillPassword);
       user.addEventListener('blur', maybeFillPassword);
+      user.addEventListener('input', maybeFillPassword);
 
-      // 4) Intento de autofill con el gestor del navegador (iCloud/FaceID/Google PM)
+      // Credential Manager (no Safari) — best-effort
       (async () => {
         const cred = await cmGet();
         if (cred && cred.type === 'password') {
@@ -222,31 +229,27 @@
         }
       })();
 
-      // 5) Sincronizar hidden remember
+      // Sincronizar hidden remember
       rememberChk && rememberChk.addEventListener('change', function(){
         if (recordarmeHidden) recordarmeHidden.value = rememberChk.checked ? 'on' : '';
       });
 
-      // 6) Al enviar: guardar en cookie + localStorage (si marcado) + pedir guardado al navegador
+      // Guardado local + cookie + (si hay) gestor del navegador
       form.addEventListener('submit', async function(){
         const u = (user ? user.value.trim() : '');
         const p = (pwd ? pwd.value : '');
-
-        // cookie con último usuario (comodidad)
         if (u) setCookie('last_username', u, 365);
 
-        // Guardado local multi-cuenta (si el usuario lo pidió)
         if (rememberChk && rememberChk.checked) {
           upsertAccount(u, p);
           if (recordarmeHidden) recordarmeHidden.value = 'on';
-          // Pedir al navegador que lo guarde en su llavero/gestor
-          await cmStore(u, p);
+          await cmStore(u, p); // inofensivo en navegadores que sí lo soporten
         } else {
           if (recordarmeHidden) recordarmeHidden.value = '';
         }
       });
 
-      // 7) Si backend dejó cookie remember_login=1, marcar “Recuérdame”
+      // Si backend dejó cookie remember_login=1, marcar “Recuérdame”
       try{
         if (document.cookie.includes('remember_login=1')) {
           rememberChk.checked = true;
