@@ -638,7 +638,6 @@ def borrar_conversacion_get(bot, numero):
         return redirect(url_for("panel"))
     bot_normalizado = _normalize_bot_name(bot) or bot
     ok = fb_delete_lead(bot_normalizado, numero)
-    # Regreso siempre al panel filtrado por el bot para mejor UX
     return redirect(url_for("panel", bot=bot_normalizado))
 
 @app.route("/vaciar-historial", methods=["POST"])
