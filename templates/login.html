@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#000000" />
   <style>
     :root{ --brand:#F7BD02; --bg:#000; --card:#fff; --text:#000; --muted:#888; --radius:16px; --focus:#2b90ff; }
-    *{ box-sizing:border-box; }
-    html,body{ margin:0; padding:0; height:100%; background:var(--bg); color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; font-size:17px; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+    *{ box-sizing: border-box; }
+    html, body { margin:0; padding:0; height:100%; background:var(--bg); color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; font-size:17px; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
     .login-wrap{ min-height:100vh; display:grid; place-items:center; background:
       radial-gradient(1200px 600px at 100% 0%, rgba(247,189,2,0.15), transparent 60%),
       radial-gradient(1200px 600px at 0% 100%, rgba(247,189,2,0.12), transparent 60%),
@@ -52,26 +52,24 @@
         <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
       {% endif %}
 
-      <!-- IMPORTANTE:
-           - method="POST" action="/panel" (login real)
-           - autocomplete="on" para que Safari pueda detectar y sugerir guardar -->
-      <form class="form" method="POST" action="/panel" autocomplete="on" novalidate>
+      <!-- Importante: Safari espera name="username" (visible) y name="password" -->
+      <form class="form" method="POST" action="/panel" autocomplete="on">
         <div class="field">
           <label for="usuario">Usuario</label>
-          <!-- Tu campo visible -->
-          <input id="usuario" type="text" name="usuario"
+          <!-- CAMBIO CLAVE: este input visible ahora se llama username -->
+          <input id="usuario" type="text" name="username"
                  placeholder="Escribe tu usuario" required inputmode="text"
                  autocapitalize="none" autocorrect="off" spellcheck="false"
                  autocomplete="username" />
-          <!-- Campo oculto estándar que Safari busca: name="username" -->
-          <input type="hidden" id="usernameHidden" name="username" autocomplete="username" />
+          <!-- Compat con tu backend: le seguimos mandando 'usuario' en oculto -->
+          <input type="hidden" id="usuarioHidden" name="usuario" />
         </div>
 
         <div class="field">
           <label for="clave">Contraseña</label>
-          <!-- name="password" para que los gestores lo detecten -->
           <input id="clave" type="password" name="password"
-                 placeholder="Escribe tu contraseña" required autocomplete="current-password" />
+                 placeholder="Escribe tu contraseña" required
+                 autocomplete="current-password" />
         </div>
 
         <div class="row">
@@ -86,7 +84,6 @@
           </button>
         </div>
 
-        <!-- Para que tu backend pueda leer "recordarme" también -->
         <input type="hidden" name="recordarme" id="recordarmeHidden" />
 
         <div class="action">
@@ -99,7 +96,7 @@
   </div>
 
   <script>
-    // Helpers de cookie para recordar último usuario (opcional)
+    // Cookies simples para recordar último usuario (opcional)
     function setCookie(name, value, days){
       try{
         const max = days ? ';max-age='+(days*24*60*60) : '';
@@ -118,12 +115,12 @@
       const submit = document.getElementById('submitBtn');
       const toggle = document.getElementById('togglePwd');
       const pwd = document.getElementById('clave');
-      const user = document.getElementById('usuario');
-      const usernameHidden = document.getElementById('usernameHidden');
+      const user = document.getElementById('usuario');           // visible (name="username")
+      const usuarioHidden = document.getElementById('usuarioHidden'); // para backend
       const rememberChk = document.getElementById('remember');
       const recordarmeHidden = document.getElementById('recordarmeHidden');
 
-      // Desactivar doble clic
+      // Evitar doble envío
       form.addEventListener('submit', function(){
         submit.disabled = true;
         submit.textContent = 'Ingresando…';
@@ -137,43 +134,37 @@
         toggle.textContent = visible ? 'Ver' : 'Ocultar';
       });
 
-      // Foco inicial
-      if (user) setTimeout(()=>user.focus(), 200);
-
-      // Sincroniza el campo oculto "username" con tu "usuario" (Safari mira name="username")
-      function syncUsername(){
-        if (usernameHidden) usernameHidden.value = user ? (user.value || '') : '';
+      // Sincroniza el oculto 'usuario' con el visible 'username'
+      function syncUsuario(){
+        if (usuarioHidden) usuarioHidden.value = user ? (user.value || '') : '';
       }
-      user.addEventListener('input', syncUsername);
-      user.addEventListener('change', syncUsername);
-      // Carga inicial
-      syncUsername();
+      user.addEventListener('input', syncUsuario);
+      user.addEventListener('change', syncUsuario);
 
-      // Relleno desde cookie/local
+      // Foco y precarga
+      if (user) setTimeout(()=>user.focus(), 200);
       try{
         const lastUser = getCookie('last_username');
-        if (lastUser && user && !user.value){
-          user.value = lastUser;
-          syncUsername();
-        }
+        if (lastUser && user && !user.value){ user.value = lastUser; syncUsuario(); }
       }catch(e){}
 
+      // LocalStorage “Recuérdame”
       try{
         const savedRemember = localStorage.getItem('login_remember') === '1';
         const savedUser = localStorage.getItem('login_user') || '';
         const savedPass = localStorage.getItem('login_pass') || '';
         if (savedRemember) {
-          if (user && !user.value){ user.value = savedUser; syncUsername(); }
+          if (user && !user.value){ user.value = savedUser; syncUsuario(); }
           if (pwd && !pwd.value) pwd.value = savedPass;
           if (rememberChk) rememberChk.checked = true;
           if (recordarmeHidden) recordarmeHidden.value = 'on';
         }
       }catch(e){}
 
-      // Antes de enviar: marca flags y guarda local si aplica
+      // Antes de enviar: flags y guardado local
       form.addEventListener('submit', function(){
         if (recordarmeHidden) recordarmeHidden.value = (rememberChk && rememberChk.checked) ? 'on' : '';
-        syncUsername();
+        syncUsuario();
         try{
           if (user && user.value) setCookie('last_username', user.value, 365);
           if (rememberChk && rememberChk.checked){
@@ -191,6 +182,9 @@
       rememberChk && rememberChk.addEventListener('change', function(){
         if (recordarmeHidden) recordarmeHidden.value = rememberChk.checked ? 'on' : '';
       });
+
+      // Inicializa el oculto por si ya había valor.
+      syncUsuario();
     })();
   </script>
 </body>
