@@ -37,6 +37,9 @@
     .footer{ margin-top:16px; font-size:13px; color:var(--muted); text-align:center; }
     @media (max-width:480px){ .card{ padding:24px; } h1{ font-size:22px; } }
     .helper { font-size:12px; color:#666; margin-top:6px; }
+    .status { margin-top:8px; font-size:12px; color:#666; text-align:center; }
+    .ok { color:#138000; }
+    .err { color:#9b1c1c; }
     datalist option { font-size:14px; }
   </style>
 </head>
@@ -55,7 +58,6 @@
         <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
       {% endif %}
 
-      <!-- list="savedUsers": sugerencias locales (multi-usuario) -->
       <form id="loginForm" class="form" method="POST" action="/panel" autocomplete="on">
         <div class="field">
           <label for="usuario">Usuario</label>
@@ -72,10 +74,10 @@
             autocomplete="username"
             list="savedUsers"
           />
-          <!-- Campo estándar adicional: ayuda al gestor del navegador -->
+          <!-- Campo estándar adicional para gestores -->
           <input type="hidden" id="usernameHidden" name="username" autocomplete="username" />
           <datalist id="savedUsers"></datalist>
-          <div class="helper">Puedes elegir un usuario guardado.</div>
+          <div class="helper">Sugerencias locales aparecerán aquí si marcaste “Recuérdame”.</div>
         </div>
 
         <div class="field">
@@ -102,12 +104,14 @@
           </button>
         </div>
 
-        <!-- Campo que lee el backend para sesión persistente -->
+        <!-- el backend la lee para sesión persistente -->
         <input type="hidden" name="recordarme" id="recordarmeHidden" />
 
         <div class="action">
           <button type="submit" id="submitBtn">Entrar</button>
         </div>
+
+        <div id="saveStatus" class="status"></div>
       </form>
 
       <div class="footer">In Houston Texas - Sistema de Leads © 2025</div>
@@ -115,7 +119,7 @@
   </div>
 
   <script>
-    // ===== Cookies simples (solo para recordar último usuario) =====
+    // ===== Utils cookies =====
     function setCookie(name, value, days){
       try{
         const max = days ? ';max-age='+(days*24*60*60) : '';
@@ -129,35 +133,32 @@
       }catch(e){ return ''; }
     }
 
-    // ===== Gestor local multi-cuentas (AVISO: guarda en texto plano en este dispositivo) =====
-    const STORAGE_KEY = 'mbi_login_accounts'; // { "<usuario>": "<password>", ... }
-    function loadAccounts(){
-      try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e){ return {}; }
-    }
-    function saveAccounts(obj){
-      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }catch(e){}
-    }
+    // ===== Local multi-cuentas =====
+    const STORAGE_KEY = 'mbi_login_accounts'; // { "<usuario>": "<password>" }
+    function loadAccounts(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }catch(e){ return {}; } }
+    function saveAccounts(obj){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }catch(e){} }
     function upsertAccount(user, pass){
-      if(!user) return;
+      if(!user) return false;
       const acc = loadAccounts();
       acc[user] = pass || '';
       saveAccounts(acc);
+      return true;
     }
 
-    // ===== Credential Management API (pide al navegador guardar/llenar) =====
+    // ===== Credential Management API =====
     async function cmGet() {
       if (!('credentials' in navigator)) return null;
       try {
-        // Intento discreto de autofill (permite FaceID/Keychain/Google PM si el usuario quiere)
         return await navigator.credentials.get({ password: true, mediation: 'optional' });
       } catch(e){ return null; }
     }
     async function cmStore(username, password) {
-      if (!('credentials' in navigator) || !window.PasswordCredential) return;
+      if (!('credentials' in navigator) || !window.PasswordCredential) return false;
       try {
         const cred = new PasswordCredential({ id: username, name: username, password });
         await navigator.credentials.store(cred);
-      } catch(e){}
+        return true;
+      } catch(e){ return false; }
     }
 
     (function(){
@@ -170,21 +171,28 @@
       const rememberChk = document.getElementById('remember');
       const recordarmeHidden = document.getElementById('recordarmeHidden');
       const listEl = document.getElementById('savedUsers');
+      const statusEl = document.getElementById('saveStatus');
 
-      // Helper UI
+      function setStatus(txt, ok){
+        statusEl.textContent = txt || '';
+        statusEl.className = 'status ' + (ok ? 'ok' : 'err');
+      }
+
+      // Botón
       form.addEventListener('submit', function(){
         submit.disabled = true;
         submit.textContent = 'Ingresando…';
         setTimeout(()=>{ submit.disabled = false; submit.textContent = 'Entrar'; }, 6000);
       });
 
+      // Mostrar/ocultar
       toggle.addEventListener('click', function(){
         const visible = pwd.type === 'text';
         pwd.type = visible ? 'password' : 'text';
         toggle.textContent = visible ? 'Ver' : 'Ocultar';
       });
 
-      // Mantener campo estándar username sincronizado
+      // Sync usernameHidden
       function syncUsernameHidden(){
         if (usernameHidden) usernameHidden.value = (user.value || '').trim();
       }
@@ -195,13 +203,13 @@
       // Foco
       setTimeout(()=>user && user.focus(), 200);
 
-      // 1) Precargar último usuario por cookie
+      // Último usuario por cookie
       try{
         const lastUser = getCookie('last_username');
         if (lastUser && user && !user.value) { user.value = lastUser; syncUsernameHidden(); }
       }catch(e){}
 
-      // 2) Reconstruir datalist local
+      // Datalist local
       function rebuildDatalist(){
         const acc = loadAccounts();
         listEl.innerHTML = '';
@@ -213,7 +221,7 @@
       }
       rebuildDatalist();
 
-      // 3) Autocompletar password si el usuario existe en almacenamiento local
+      // Autocompletar password si está guardado localmente
       function maybeFillPassword(){
         const acc = loadAccounts();
         const u = (user.value || '').trim();
@@ -224,7 +232,7 @@
       user.addEventListener('change', maybeFillPassword);
       user.addEventListener('blur', maybeFillPassword);
 
-      // 4) Intento de autofill con el gestor del navegador (iCloud/FaceID/Google PM)
+      // Autofill con llavero/gestor (si el navegador lo permite)
       (async () => {
         const cred = await cmGet();
         if (cred && cred.type === 'password') {
@@ -234,31 +242,48 @@
         }
       })();
 
-      // 5) Sincronizar hidden remember
+      // Sincroniza hidden remember
       rememberChk && rememberChk.addEventListener('change', function(){
         if (recordarmeHidden) recordarmeHidden.value = rememberChk.checked ? 'on' : '';
       });
 
-      // 6) Al enviar: guardar en cookie + localStorage (si marcado) + pedir guardado al navegador
-      form.addEventListener('submit', async function(){
+      // *** ENVÍO CONTROLADO: guardamos primero, luego enviamos ***
+      form.addEventListener('submit', async function(ev){
+        // Detener navegación hasta terminar guardados
+        ev.preventDefault();
+
         const u = (user ? user.value.trim() : '');
         const p = (pwd ? pwd.value : '');
+        let okLocal = true, okCMA = true;
 
-        // cookie con último usuario (comodidad)
         if (u) setCookie('last_username', u, 365);
 
-        // Guardado local multi-cuenta (si el usuario lo pidió)
+        // Guardado local multi-cuenta
         if (rememberChk && rememberChk.checked) {
-          upsertAccount(u, p);
+          okLocal = upsertAccount(u, p);
           if (recordarmeHidden) recordarmeHidden.value = 'on';
-          // Pedir al navegador que lo guarde en su llavero/gestor
-          await cmStore(u, p);
+          // Pedir guardar al gestor/llavero del navegador
+          okCMA = await cmStore(u, p);
         } else {
           if (recordarmeHidden) recordarmeHidden.value = '';
         }
+
+        // Feedback (no bloquea el envío)
+        if (rememberChk && rememberChk.checked) {
+          setStatus(
+            (okLocal ? 'Guardado local ✅. ' : 'Guardado local ❌. ') +
+            (okCMA ? 'Llavero/gestor solicitado ✅' : 'Llavero no disponible/denegado ❌'),
+            okLocal
+          );
+        } else {
+          setStatus('', true);
+        }
+
+        // Pequeño delay para asegurar persistencia visual y que el gestor procese
+        setTimeout(()=> form.submit(), 60);
       });
 
-      // 7) Si backend dejó cookie remember_login=1, marcar “Recuérdame”
+      // Si backend dejó cookie remember_login=1, marcar “Recuérdame”
       try{
         if (document.cookie.includes('remember_login=1')) {
           rememberChk.checked = true;
