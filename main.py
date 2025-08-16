@@ -605,8 +605,10 @@ def login_html_redirect():
 def panel():
     if not session.get("autenticado"):
         if request.method == "POST":
-            # ✅ Acepta 'usuario' y 'clave' o 'password' (para mejores prompts del navegador)
-            usuario = (request.form.get("usuario") or "").strip()
+            # ✅ Acepta 'usuario' y también 'username' o 'email' (compatibilidad con gestores iOS/Android)
+            usuario = (request.form.get("usuario") or request.form.get("username") or request.form.get("email") or "").strip()
+
+            # ✅ Acepta 'clave' o 'password' (para mejores prompts del navegador)
             clave = request.form.get("clave")
             if clave is None or clave == "":
                 clave = request.form.get("password")  # por si el input se llama 'password'
