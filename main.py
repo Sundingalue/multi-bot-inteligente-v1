@@ -1,5 +1,5 @@
 # main.py — core genérico (sin conocimiento de marca en el core)
-from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template
+from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -7,7 +7,7 @@ import os
 import json
 import time
 from threading import Thread
-from datetime import datetime, timedelta  # ✅ REMEMBER ME: agregado timedelta
+from datetime import datetime, timedelta
 import csv
 from io import StringIO
 import re
@@ -42,7 +42,14 @@ if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
-app.permanent_session_lifetime = timedelta(days=30)  # ✅ REMEMBER ME: duración de sesión al marcar "Recordarme"
+
+# ✅ Sesión persistente (remember me)
+app.permanent_session_lifetime = timedelta(days=60)
+app.config.update({
+    "SESSION_COOKIE_SAMESITE": "Lax",
+    # Pon en True si sirves por HTTPS (recomendado en producción)
+    "SESSION_COOKIE_SECURE": False if os.getenv("DEV_HTTP", "").lower() == "true" else True
+})
 
 # =======================
 #  Inicializar Firebase
@@ -334,14 +341,14 @@ def fb_list_leads_by_bot(bot_nombre):
     for numero, data in numeros.items():
         clave = f"{bot_nombre}|{numero}"
         leads[clave] = {
-            "bot": bot_nombre,
-            "numero": numero,
-            "first_seen": data.get("first_seen", ""),
-            "last_message": data.get("last_message", ""),
-            "last_seen": data.get("last_seen", ""),
-            "messages": int(data.get("messages", 0)),
-            "status": data.get("status", "nuevo"),
-            "notes": data.get("notes", "")
+                "bot": bot_nombre,
+                "numero": numero,
+                "first_seen": data.get("first_seen", ""),
+                "last_message": data.get("last_message", ""),
+                "last_seen": data.get("last_seen", ""),
+                "messages": int(data.get("messages", 0)),
+                "status": data.get("status", "nuevo"),
+                "notes": data.get("notes", "")
         }
     return leads
 
@@ -598,25 +605,51 @@ def login_html_redirect():
 def panel():
     if not session.get("autenticado"):
         if request.method == "POST":
-            usuario = request.form.get("usuario", "").strip()
-            clave = request.form.get("clave", "").strip()
-            recordarme_val = (request.form.get("recordarme") or "").strip().lower()  # ✅ REMEMBER ME: leer checkbox
-            session.permanent = recordarme_val in {"on", "true", "1", "yes", "si", "sí", "y"}  # ✅ REMEMBER ME: persistir sesión según checkbox
+            # ✅ Acepta 'usuario' y 'clave' o 'password' (para mejores prompts del navegador)
+            usuario = (request.form.get("usuario") or "").strip()
+            clave = request.form.get("clave")
+            if clave is None or clave == "":
+                clave = request.form.get("password")  # por si el input se llama 'password'
+            clave = (clave or "").strip()
+
+            # ✅ Remember me desde HTML: 'recordarme' (hidden) o 'remember' (checkbox)
+            remember_flag = (request.form.get("recordarme") or request.form.get("remember") or "").strip().lower()
+            remember_on = remember_flag in ("on", "1", "true", "yes", "si", "sí")
 
             auth = _auth_user(usuario, clave)
             if auth:
                 session["autenticado"] = True
                 session["usuario"] = auth["username"]
                 session["bots_permitidos"] = auth["bots"]
+
+                # ✅ Sesión persistente si marcaron "Recuérdame"
+                session.permanent = bool(remember_on)
+
+                # Preparamos redirect de destino
                 if "*" in auth["bots"]:
-                    return redirect(url_for("panel"))
-                destino = _first_allowed_bot()
-                if destino:
-                    return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
-                return redirect(url_for("panel"))
+                    destino_resp = redirect(url_for("panel"))
+                else:
+                    destino = _first_allowed_bot()
+                    destino_resp = redirect(url_for("panel_exclusivo_bot", bot_nombre=destino)) if destino else redirect(url_for("panel"))
+
+                # ✅ Cookies útiles para autocompletar desde el front si lo deseas
+                resp = make_response(destino_resp)
+                max_age = 60 * 24 * 60 * 60  # 60 días
+                if remember_on:
+                    resp.set_cookie("remember_login", "1", max_age=max_age, samesite="Lax", secure=app.config["SESSION_COOKIE_SECURE"])
+                    resp.set_cookie("last_username", usuario, max_age=max_age, samesite="Lax", secure=app.config["SESSION_COOKIE_SECURE"])
+                else:
+                    resp.delete_cookie("remember_login")
+                    resp.delete_cookie("last_username")
+                return resp
+
+            # 🔴 Login fallido
             return render_template("login.html", error=True)
+
+        # GET no autenticado -> formulario
         return render_template("login.html")
 
+    # Ya autenticado
     if not _is_admin():
         destino = _first_allowed_bot()
         if destino:
@@ -639,7 +672,12 @@ def panel():
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
     session.clear()
-    return redirect(url_for("panel"))
+    # También limpiamos las cookies de ayuda (el navegador puede conservar credenciales guardadas por su cuenta)
+    resp = make_response(redirect(url_for("panel")))
+    resp.delete_cookie("remember_login")
+    # Nota: si quieres conservar last_username al salir, comenta la línea siguiente
+    resp.delete_cookie("last_username")
+    return resp
 
 # =======================
 #  Guardar/Exportar
@@ -1065,3 +1103,4 @@ if __name__ == "__main__":
     print(f"[BOOT] BOOKING_URL_FALLBACK={BOOKING_URL_FALLBACK}")
     print(f"[BOOT] APP_DOWNLOAD_URL_FALLBACK={APP_DOWNLOAD_URL_FALLBACK}")
     app.run(host="0.0.0.0", port=port)
+pp.run(host="0.0.0.0", port=port)
