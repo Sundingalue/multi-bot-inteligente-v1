@@ -5,6 +5,7 @@
   <title>Acceso - Panel de Leads | In Houston Texas</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#000000" />
+
   <style>
     :root{ --brand:#F7BD02; --bg:#000; --card:#fff; --text:#000; --muted:#888; --radius:16px; --focus:#2b90ff; }
     *{ box-sizing: border-box; }
@@ -35,6 +36,8 @@
     button[type="submit"]:hover{ background:#000; color:var(--brand); box-shadow:0 10px 26px rgba(0,0,0,.25); }
     .footer{ margin-top:16px; font-size:13px; color:var(--muted); text-align:center; }
     @media (max-width:480px){ .card{ padding:24px; } h1{ font-size:22px; } }
+    .helper { font-size:12px; color:#666; margin-top:6px; }
+    datalist option { font-size:14px; }
   </style>
 </head>
 <body>
@@ -52,24 +55,39 @@
         <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
       {% endif %}
 
-      <!-- Importante: Safari espera name="username" (visible) y name="password" -->
-      <form class="form" method="POST" action="/panel" autocomplete="on">
+      <!-- list="savedUsers": sugerencias locales (multi-usuario) -->
+      <form id="loginForm" class="form" method="POST" action="/panel" autocomplete="on">
         <div class="field">
           <label for="usuario">Usuario</label>
-          <!-- CAMBIO CLAVE: este input visible ahora se llama username -->
-          <input id="usuario" type="text" name="username"
-                 placeholder="Escribe tu usuario" required inputmode="text"
-                 autocapitalize="none" autocorrect="off" spellcheck="false"
-                 autocomplete="username" />
-          <!-- Compat con tu backend: le seguimos mandando 'usuario' en oculto -->
-          <input type="hidden" id="usuarioHidden" name="usuario" />
+          <input
+            id="usuario"
+            type="text"
+            name="usuario"
+            placeholder="Escribe tu usuario"
+            required
+            inputmode="text"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            autocomplete="username"
+            list="savedUsers"
+          />
+          <!-- Campo estándar adicional: ayuda al gestor del navegador -->
+          <input type="hidden" id="usernameHidden" name="username" autocomplete="username" />
+          <datalist id="savedUsers"></datalist>
+          <div class="helper">Puedes elegir un usuario guardado.</div>
         </div>
 
         <div class="field">
           <label for="clave">Contraseña</label>
-          <input id="clave" type="password" name="password"
-                 placeholder="Escribe tu contraseña" required
-                 autocomplete="current-password" />
+          <input
+            id="clave"
+            type="password"
+            name="password"
+            placeholder="Escribe tu contraseña"
+            required
+            autocomplete="current-password"
+          />
         </div>
 
         <div class="row">
@@ -84,6 +102,7 @@
           </button>
         </div>
 
+        <!-- Campo que lee el backend para sesión persistente -->
         <input type="hidden" name="recordarme" id="recordarmeHidden" />
 
         <div class="action">
@@ -96,7 +115,7 @@
   </div>
 
   <script>
-    // Cookies simples para recordar último usuario (opcional)
+    // ===== Cookies simples (solo para recordar último usuario) =====
     function setCookie(name, value, days){
       try{
         const max = days ? ';max-age='+(days*24*60*60) : '';
@@ -110,81 +129,142 @@
       }catch(e){ return ''; }
     }
 
+    // ===== Gestor local multi-cuentas (AVISO: guarda en texto plano en este dispositivo) =====
+    const STORAGE_KEY = 'mbi_login_accounts'; // { "<usuario>": "<password>", ... }
+    function loadAccounts(){
+      try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e){ return {}; }
+    }
+    function saveAccounts(obj){
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }catch(e){}
+    }
+    function upsertAccount(user, pass){
+      if(!user) return;
+      const acc = loadAccounts();
+      acc[user] = pass || '';
+      saveAccounts(acc);
+    }
+
+    // ===== Credential Management API (pide al navegador guardar/llenar) =====
+    async function cmGet() {
+      if (!('credentials' in navigator)) return null;
+      try {
+        // Intento discreto de autofill (permite FaceID/Keychain/Google PM si el usuario quiere)
+        return await navigator.credentials.get({ password: true, mediation: 'optional' });
+      } catch(e){ return null; }
+    }
+    async function cmStore(username, password) {
+      if (!('credentials' in navigator) || !window.PasswordCredential) return;
+      try {
+        const cred = new PasswordCredential({ id: username, name: username, password });
+        await navigator.credentials.store(cred);
+      } catch(e){}
+    }
+
     (function(){
-      const form = document.querySelector('form');
+      const form = document.getElementById('loginForm');
       const submit = document.getElementById('submitBtn');
       const toggle = document.getElementById('togglePwd');
       const pwd = document.getElementById('clave');
-      const user = document.getElementById('usuario');           // visible (name="username")
-      const usuarioHidden = document.getElementById('usuarioHidden'); // para backend
+      const user = document.getElementById('usuario');
+      const usernameHidden = document.getElementById('usernameHidden');
       const rememberChk = document.getElementById('remember');
       const recordarmeHidden = document.getElementById('recordarmeHidden');
+      const listEl = document.getElementById('savedUsers');
 
-      // Evitar doble envío
+      // Helper UI
       form.addEventListener('submit', function(){
         submit.disabled = true;
         submit.textContent = 'Ingresando…';
         setTimeout(()=>{ submit.disabled = false; submit.textContent = 'Entrar'; }, 6000);
       });
 
-      // Mostrar/ocultar contraseña
       toggle.addEventListener('click', function(){
         const visible = pwd.type === 'text';
         pwd.type = visible ? 'password' : 'text';
         toggle.textContent = visible ? 'Ver' : 'Ocultar';
       });
 
-      // Sincroniza el oculto 'usuario' con el visible 'username'
-      function syncUsuario(){
-        if (usuarioHidden) usuarioHidden.value = user ? (user.value || '') : '';
+      // Mantener campo estándar username sincronizado
+      function syncUsernameHidden(){
+        if (usernameHidden) usernameHidden.value = (user.value || '').trim();
       }
-      user.addEventListener('input', syncUsuario);
-      user.addEventListener('change', syncUsuario);
+      user.addEventListener('input', syncUsernameHidden);
+      user.addEventListener('change', syncUsernameHidden);
+      syncUsernameHidden();
 
-      // Foco y precarga
-      if (user) setTimeout(()=>user.focus(), 200);
+      // Foco
+      setTimeout(()=>user && user.focus(), 200);
+
+      // 1) Precargar último usuario por cookie
       try{
         const lastUser = getCookie('last_username');
-        if (lastUser && user && !user.value){ user.value = lastUser; syncUsuario(); }
+        if (lastUser && user && !user.value) { user.value = lastUser; syncUsernameHidden(); }
       }catch(e){}
 
-      // LocalStorage “Recuérdame”
-      try{
-        const savedRemember = localStorage.getItem('login_remember') === '1';
-        const savedUser = localStorage.getItem('login_user') || '';
-        const savedPass = localStorage.getItem('login_pass') || '';
-        if (savedRemember) {
-          if (user && !user.value){ user.value = savedUser; syncUsuario(); }
-          if (pwd && !pwd.value) pwd.value = savedPass;
-          if (rememberChk) rememberChk.checked = true;
-          if (recordarmeHidden) recordarmeHidden.value = 'on';
+      // 2) Reconstruir datalist local
+      function rebuildDatalist(){
+        const acc = loadAccounts();
+        listEl.innerHTML = '';
+        Object.keys(acc).forEach(u=>{
+          const opt = document.createElement('option');
+          opt.value = u;
+          listEl.appendChild(opt);
+        });
+      }
+      rebuildDatalist();
+
+      // 3) Autocompletar password si el usuario existe en almacenamiento local
+      function maybeFillPassword(){
+        const acc = loadAccounts();
+        const u = (user.value || '').trim();
+        if (u in acc && !pwd.value){
+          pwd.value = acc[u] || '';
         }
-      }catch(e){}
+      }
+      user.addEventListener('change', maybeFillPassword);
+      user.addEventListener('blur', maybeFillPassword);
 
-      // Antes de enviar: flags y guardado local
-      form.addEventListener('submit', function(){
-        if (recordarmeHidden) recordarmeHidden.value = (rememberChk && rememberChk.checked) ? 'on' : '';
-        syncUsuario();
-        try{
-          if (user && user.value) setCookie('last_username', user.value, 365);
-          if (rememberChk && rememberChk.checked){
-            localStorage.setItem('login_remember', '1');
-            localStorage.setItem('login_user', user ? user.value : '');
-            localStorage.setItem('login_pass', pwd ? pwd.value : '');
-          }else{
-            localStorage.removeItem('login_remember');
-            localStorage.removeItem('login_user');
-            localStorage.removeItem('login_pass');
-          }
-        }catch(e){}
-      });
+      // 4) Intento de autofill con el gestor del navegador (iCloud/FaceID/Google PM)
+      (async () => {
+        const cred = await cmGet();
+        if (cred && cred.type === 'password') {
+          if (!user.value) user.value = cred.id || cred.name || '';
+          if (!pwd.value) pwd.value = cred.password || '';
+          syncUsernameHidden();
+        }
+      })();
 
+      // 5) Sincronizar hidden remember
       rememberChk && rememberChk.addEventListener('change', function(){
         if (recordarmeHidden) recordarmeHidden.value = rememberChk.checked ? 'on' : '';
       });
 
-      // Inicializa el oculto por si ya había valor.
-      syncUsuario();
+      // 6) Al enviar: guardar en cookie + localStorage (si marcado) + pedir guardado al navegador
+      form.addEventListener('submit', async function(){
+        const u = (user ? user.value.trim() : '');
+        const p = (pwd ? pwd.value : '');
+
+        // cookie con último usuario (comodidad)
+        if (u) setCookie('last_username', u, 365);
+
+        // Guardado local multi-cuenta (si el usuario lo pidió)
+        if (rememberChk && rememberChk.checked) {
+          upsertAccount(u, p);
+          if (recordarmeHidden) recordarmeHidden.value = 'on';
+          // Pedir al navegador que lo guarde en su llavero/gestor
+          await cmStore(u, p);
+        } else {
+          if (recordarmeHidden) recordarmeHidden.value = '';
+        }
+      });
+
+      // 7) Si backend dejó cookie remember_login=1, marcar “Recuérdame”
+      try{
+        if (document.cookie.includes('remember_login=1')) {
+          rememberChk.checked = true;
+          recordarmeHidden.value = 'on';
+        }
+      }catch(e){}
     })();
   </script>
 </body>
