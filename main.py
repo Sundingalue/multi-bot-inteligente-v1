@@ -421,46 +421,120 @@ def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_numb
 #  Rutas UI: Paneles
 # =======================
 def _load_users():
+    """
+    Prioridad:
+    1) Logins definidos en bots/*.json (login, logins y/o auth)
+    2) Variables de entorno (LEGACY): USER_*, PASS_*, PANEL_*
+    3) Usuario por defecto (admin total)
+    """
+    # ===== 1) Desde bots/*.json =====
+    users_from_json = {}
+
+    def _normalize_list_scope(scope_val):
+        # Devuelve lista de bots permitidos o ["*"] si es admin global
+        if isinstance(scope_val, str):
+            scope_val = scope_val.strip()
+            if scope_val == "*":
+                return ["*"]
+            norm = _normalize_bot_name(scope_val) or scope_val
+            return [norm]
+        elif isinstance(scope_val, list):
+            allowed = []
+            for s in scope_val:
+                s = (s or "").strip()
+                if not s:
+                    continue
+                if s == "*":
+                    return ["*"]
+                allowed.append(_normalize_bot_name(s) or s)
+            return allowed or []
+        else:
+            return []  # sin scope válido
+
+    for cfg in bots_config.values():
+        if not isinstance(cfg, dict):
+            continue
+        bot_name = (cfg.get("name") or "").strip()
+        if not bot_name:
+            continue
+
+        # Soporta "login": {...}, "logins": [{...}, ...] y "auth": {...} (alias)
+        logins = []
+        if isinstance(cfg.get("login"), dict):
+            logins.append(cfg["login"])
+        if isinstance(cfg.get("logins"), list):
+            logins.extend([x for x in cfg["logins"] if isinstance(x, dict)])
+        if isinstance(cfg.get("auth"), dict):  # 🔹 alias compatible
+            logins.append(cfg["auth"])
+
+        for entry in logins:
+            username = (entry.get("username") or "").strip()
+            password = (entry.get("password") or "").strip()
+
+            # scope explícito o derivado del "panel" (panel/panel-bot/NOMBRE)
+            scope_val = entry.get("scope")
+            panel_hint = (entry.get("panel") or "").strip().lower()
+
+            if not username or not password:
+                continue
+
+            allowed_bots = _normalize_list_scope(scope_val)
+
+            if not allowed_bots and panel_hint:
+                if panel_hint == "panel":
+                    allowed_bots = ["*"]
+                elif panel_hint.startswith("panel-bot/"):
+                    only_bot = panel_hint.split("/", 1)[1].strip()
+                    if only_bot:
+                        allowed_bots = [_normalize_bot_name(only_bot) or only_bot]
+
+            if not allowed_bots:
+                allowed_bots = [bot_name]
+
+            # Merge si el mismo usuario aparece en varios JSON
+            if username in users_from_json:
+                prev_bots = users_from_json[username].get("bots", [])
+                if "*" in prev_bots or "*" in allowed_bots:
+                    users_from_json[username]["bots"] = ["*"]
+                else:
+                    merged = list(dict.fromkeys(prev_bots + allowed_bots))
+                    users_from_json[username]["bots"] = merged
+                if password:
+                    users_from_json[username]["password"] = password
+            else:
+                users_from_json[username] = {"password": password, "bots": allowed_bots}
+
+    if users_from_json:
+        return users_from_json
+
+    # ===== 2) LEGACY: variables de entorno =====
     env_users = {}
     for key, val in os.environ.items():
         if not key.startswith("USER_"):
             continue
         alias = key[len("USER_"):]
-        username = val.strip()
-        password = os.environ.get(f"PASS_{alias}", "").strip()
-        panel = os.environ.get(f"PANEL_{alias}", "").strip()
+        username = (val or "").strip()
+        password = (os.environ.get(f"PASS_{alias}", "") or "").strip()
+        panel = (os.environ.get(f"PANEL_{alias}", "") or "").strip()
         if not username or not password or not panel:
             continue
+
         if panel.lower() == "panel":
             bots_list = ["*"]
         elif panel.lower().startswith("panel-bot/"):
             bot_name = panel.split("/", 1)[1].strip()
-            bots_list = [bot_name] if bot_name else []
+            bots_list = [_normalize_bot_name(bot_name) or bot_name] if bot_name else []
         else:
             bots_list = []
+
         if bots_list:
             env_users[username] = {"password": password, "bots": bots_list}
+
     if env_users:
         return env_users
 
-    default_users = {"sundin": {"password": "inhouston2025", "bots": ["*"]}}
-    raw = os.getenv("PANEL_USERS_JSON")
-    if not raw:
-        return default_users
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return default_users
-        norm = {}
-        for user, rec in data.items():
-            pwd = rec.get("password") if isinstance(rec, dict) else None
-            bots = rec.get("bots") if isinstance(rec, dict) else None
-            if isinstance(pwd, str) and isinstance(bots, list) and bots:
-                norm[user] = {"password": pwd, "bots": bots}
-        return norm or default_users
-    except Exception as e:
-        print(f"⚠️ PANEL_USERS_JSON inválido: {e}")
-        return default_users
+    # ===== 3) Fallback ultra-básico (admin total) =====
+    return {"sundin": {"password": "inhouston2025", "bots": ["*"]}}
 
 def _auth_user(username, password):
     users = _load_users()
