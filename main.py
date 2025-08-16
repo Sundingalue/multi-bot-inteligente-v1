@@ -344,6 +344,34 @@ def fb_list_leads_by_bot(bot_nombre):
         }
     return leads
 
+# ✅ NUEVO: eliminar lead completo
+def fb_delete_lead(bot_nombre, numero):
+    try:
+        _lead_ref(bot_nombre, numero).delete()
+        return True
+    except Exception as e:
+        print(f"❌ Error eliminando lead {bot_nombre}/{numero}: {e}")
+        return False
+
+# ✅ NUEVO: vaciar solo el historial (mantener lead)
+def fb_clear_historial(bot_nombre, numero):
+    try:
+        ref = _lead_ref(bot_nombre, numero)
+        lead = ref.get() or {}
+        lead["historial"] = []
+        lead["messages"] = 0
+        lead["last_message"] = ""
+        lead["last_seen"] = ""
+        lead.setdefault("status", "nuevo")
+        lead.setdefault("notes", "")
+        lead.setdefault("bot", bot_nombre)
+        lead.setdefault("numero", numero)
+        ref.set(lead)
+        return True
+    except Exception as e:
+        print(f"❌ Error vaciando historial {bot_nombre}/{numero}: {e}")
+        return False
+
 # =======================
 #  ✅ Kill-Switch: estado ON/OFF desde Firebase
 # =======================
@@ -587,6 +615,52 @@ def exportar():
         ])
     output.seek(0)
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
+
+# =======================
+#  ✅ NUEVO: Borrar / Vaciar conversaciones (protegido)
+# =======================
+@app.route("/borrar-conversacion", methods=["POST"])
+def borrar_conversacion_post():
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    data = request.json or {}
+    numero_key = (data.get("numero") or "").strip()
+    if "|" not in numero_key:
+        return jsonify({"error": "Parámetro 'numero' inválido (esperado 'Bot|whatsapp:+1...')"}), 400
+    bot_nombre, numero = numero_key.split("|", 1)
+    bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
+    ok = fb_delete_lead(bot_normalizado, numero)
+    return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
+
+@app.route("/borrar-conversacion/<bot>/<numero>", methods=["GET"])
+def borrar_conversacion_get(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot) or bot
+    ok = fb_delete_lead(bot_normalizado, numero)
+    # Regreso siempre al panel filtrado por el bot para mejor UX
+    return redirect(url_for("panel", bot=bot_normalizado))
+
+@app.route("/vaciar-historial", methods=["POST"])
+def vaciar_historial_post():
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    data = request.json or {}
+    numero_key = (data.get("numero") or "").strip()
+    if "|" not in numero_key:
+        return jsonify({"error": "Parámetro 'numero' inválido (esperado 'Bot|whatsapp:+1...')"}), 400
+    bot_nombre, numero = numero_key.split("|", 1)
+    bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
+    ok = fb_clear_historial(bot_normalizado, numero)
+    return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
+
+@app.route("/vaciar-historial/<bot>/<numero>", methods=["GET"])
+def vaciar_historial_get(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot) or bot
+    ok = fb_clear_historial(bot_normalizado, numero)
+    return redirect(url_for("conversacion_general", bot=bot_normalizado, numero=numero))
 
 # =======================
 #  Webhook WhatsApp
