@@ -661,6 +661,20 @@ def vaciar_historial_get(bot, numero):
     ok = fb_clear_historial(bot_normalizado, numero)
     return redirect(url_for("conversacion_general", bot=bot_normalizado, numero=numero))
 
+# ✅ ALIAS DE COMPATIBILIDAD CON TU FRONT ACTUAL (/api/delete_chat)
+@app.route("/api/delete_chat", methods=["POST"])
+def api_delete_chat():
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+    data = request.json or {}
+    bot = (data.get("bot") or "").strip()
+    numero = (data.get("numero") or "").strip()
+    if not bot or not numero:
+        return jsonify({"error": "Parámetros inválidos (requiere bot y numero)"}), 400
+    bot_normalizado = _normalize_bot_name(bot) or bot
+    ok = fb_delete_lead(bot_normalizado, numero)
+    return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
+
 # =======================
 #  Webhook WhatsApp
 # =======================
