@@ -57,7 +57,7 @@
     .brand-ribbon::before{ top:18%; transform: rotate(-18deg); }
     .brand-ribbon::after { bottom:12%; transform: rotate(14deg); }
 
-    /* ===== TOP BAR (compacta) ===== */
+    /* ===== TOP BAR: ahora muestra el NOMBRE DEL BOT y más grande ===== */
     .topbar{
       position:sticky; top:0; z-index:5;
       background:
@@ -65,30 +65,35 @@
         rgba(10,10,10,.82);
       backdrop-filter: blur(6px);
       color:#fff;
-      padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
-      text-align:center; font-weight:900; letter-spacing:.35px; font-size:20px; text-transform:uppercase;
+      padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
+      text-align:center; font-weight:900; letter-spacing:.35px;
+      font-size: clamp(22px, 4.8vw, 28px); /* ← más grande para “Senior Life …” */
+      text-transform: uppercase;
       border-bottom:1px solid rgba(255,255,255,.18);
       box-shadow: 0 8px 24px rgba(0,0,0,.35);
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* ===== ACTIONS (Volver | Nombre | Switch) ===== */
+    /* ===== ACTIONS (Volver | Chip | Switch) — botones más grandes ===== */
     .actions{
-      position:sticky; top: calc(env(safe-area-inset-top) + 44px); z-index:4;
+      position:sticky; top: calc(env(safe-area-inset-top) + 58px); z-index:4;
       display:grid; grid-template-columns: auto 1fr auto; align-items:center; gap:10px;
-      padding: 6px 10px;
+      padding: 8px 12px;
       background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
       border-bottom: 1px solid rgba(255,255,255,.16);
       backdrop-filter: blur(4px);
     }
     .btn-back{
-      display:inline-flex; align-items:center; gap:8px;
+      display:inline-flex; align-items:center; gap:10px;
       background:
         linear-gradient(180deg, #fff, #f1f1f1) padding-box,
         linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      padding: 8px 10px; border-radius: 10px; border: 1px solid transparent;
-      font-weight: 900; font-size: 12px; text-decoration:none; box-shadow: var(--shadow-sm);
+      padding: 12px 14px;            /* ← más grande */
+      border-radius: 12px;
+      border: 1px solid transparent;
+      font-weight: 900; font-size: 14px; /* ← más grande */
+      text-decoration:none; box-shadow: var(--shadow-sm);
       white-space: nowrap;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
@@ -105,9 +110,9 @@
       text-overflow:ellipsis; overflow:hidden; white-space:nowrap; margin: 0 4px;
     }
 
-    .switch-wrap{ display:inline-flex; align-items:center; gap:6px; justify-self:end; }
+    .switch-wrap{ display:inline-flex; align-items:center; gap:8px; justify-self:end; }
     .switch{
-      --w:36px; --h:20px; --p:2px;
+      --w:48px; --h:28px; --p:3px;   /* ← más grande */
       position:relative; width:var(--w); height:var(--h);
       border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
       box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer; flex-shrink:0;
@@ -120,7 +125,7 @@
     }
     .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
-    .switch-label{ font-size:12px; font-weight:800; color:#ddd; }
+    .switch-label{ font-size:13px; font-weight:800; color:#ddd; } /* ← un toque más grande */
 
     /* ===== CHAT (NO TOCAR) ===== */
     .chat{
@@ -195,17 +200,16 @@
     }
 
     @media (max-width:480px){
-      .topbar{ font-size:18px; }
-      .btn-back, .chip-bot{ padding:6px 8px; font-size:11px; }
-      .switch-label{ font-size:11px; }
+      .btn-back{ padding: 11px 12px; font-size:13px; }
+      .switch-label{ font-size:12px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
     <div class="brand-ribbon" aria-hidden="true"></div>
-    <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
+    {# ==== LABEL DE COMPAÑÍA (para topbar y chip) ==== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -219,6 +223,10 @@
       {% set company_label = bot %}
     {% endif %}
 
+    <!-- Topbar ahora muestra el nombre del bot -->
+    <div class="topbar">{{ company_label }}</div>
+
+    <!-- Barra de acciones (Volver | Chip | Switch) -->
     <div class="actions">
       <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ Volver</a>
       <div class="chip-bot" title="{{ company_label }}">{{ company_label }}</div>
@@ -228,6 +236,7 @@
       </div>
     </div>
 
+    <!-- Chat -->
     <main id="chat" class="chat"
           data-bot="{{ bot }}"
           data-numero="{{ numero }}"
@@ -241,6 +250,7 @@
       </div>
     </main>
 
+    <!-- Composer -->
     <form id="composer" class="composer" autocomplete="off">
       <div class="composer-inner">
         <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
@@ -360,7 +370,7 @@
       switchEl.addEventListener('click', toggleClick);
       switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
 
-      // Enviar manual SIN pintar localmente (evita duplicados). Confiamos en el polling.
+      // Enviar manual SIN pintar localmente (evita duplicados)
       composerEl.addEventListener('submit', async (ev)=>{
         ev.preventDefault();
         const texto = (inputEl.value || '').trim();
@@ -375,8 +385,6 @@
           });
           if (res.ok){
             inputEl.value = '';
-            // IMPORTANTE: no llamamos appendMessage aquí.
-            // Hacemos un tick manual para que aparezca 1 sola vez desde el backend.
             await tick();
             if (userNearBottom) scrollToBottom(true);
             showToast('Enviado');
