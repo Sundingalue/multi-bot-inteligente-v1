@@ -4,16 +4,14 @@
   <meta charset="UTF-8" />
   <title>Panel de Conversación</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#F7BD02" />
+  <meta name="theme-color" content="#0e0e0e" />
   <style>
     :root{
       --brand:#F7BD02; --brand-2:#E3AE00;
       --ink:#0B0B0B; --paper:#FFFFFF;
-      --radius:16px; --radius-lg:22px;
-      --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
-      --shadow-md: 0 16px 28px rgba(0,0,0,.22);
-      --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
       --line: rgba(255,255,255,.14);
+      --shadow-sm: 0 6px 14px rgba(0,0,0,.18);
+      --radius:12px; --radius-lg:16px;
       --success:#2aa26b; --danger:#d64545;
     }
     *{ box-sizing:border-box; }
@@ -23,205 +21,170 @@
       -webkit-font-smoothing: antialiased;
       color: var(--ink); background: #0e0e0e;
     }
-
     /* ===== LAYERS ===== */
-    .app{ min-height:100vh; display:flex; flex-direction:column; position: relative; isolation: isolate; }
+    .app{ min-height:100dvh; display:flex; flex-direction:column; position:relative; isolation:isolate; }
     .app::before{
-      content:""; position: fixed; inset: 0; z-index: -3; pointer-events:none;
+      content:""; position:fixed; inset:0; z-index:-3; pointer-events:none;
       background:
-        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
-        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
-        radial-gradient(circle at 25% 25%, rgba(255,255,255,.06) 1px, transparent 1.5px) 0 0/22px 22px,
-        radial-gradient(circle at 75% 75%, rgba(0,0,0,.12) 1px, transparent 1.5px) 0 0/22px 22px,
-        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px),
-        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
-      background-size: cover, cover, 22px 22px, 22px 22px, 20px 20px, cover;
-      background-position: center top, center top, center, center, center, center top;
-      background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
+        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.22), transparent 60%),
+        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.22), transparent 60%),
+        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px);
     }
     .app::after{
-      content:""; position: fixed; inset: clamp(8px, 2vw, 16px);
-      border-radius: var(--radius-lg); z-index: -2; pointer-events:none;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
-        linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
-      border: 1px solid transparent; box-shadow: var(--shadow-xl);
+      content:""; position:fixed; inset:clamp(6px,2vw,12px); border-radius:var(--radius-lg);
+      z-index:-2; pointer-events:none;
+      background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.04));
+      border:1px solid rgba(255,255,255,.12); box-shadow: var(--shadow-sm);
     }
-    .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
-    .brand-ribbon::before,.brand-ribbon::after{
-      content:""; position: absolute; left: -10%; right: -10%; height: 10px;
-      background: linear-gradient(90deg, var(--brand), var(--brand-2));
-      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25)); opacity:.65;
-    }
-    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
-    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
-    /* ===== TOP BAR ===== */
+    /* ===== TOPBAR (compacta móvil) ===== */
     .topbar{
-      position:sticky; top:0; z-index:8;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
-        rgba(10,10,10,.82);
-      backdrop-filter: blur(6px);
+      position:sticky; top:0; z-index:10;
+      background: rgba(10,10,10,.78);
+      backdrop-filter: blur(8px);
       color:#fff;
-      padding: calc(env(safe-area-inset-top) + 10px) 12px 8px;
-      text-align:center;
-      font-weight: 900; letter-spacing:.35px; font-size: 22px; text-transform: uppercase;
-      border-bottom: 1px solid rgba(255,255,255,.18);
-      box-shadow: 0 8px 24px rgba(0,0,0,.35);
-      border-radius: var(--radius) var(--radius) 0 0;
+      padding: calc(env(safe-area-inset-top) + 8px) 10px 6px;
+      text-align:center; font-weight:900; text-transform:uppercase;
+      letter-spacing:.3px; font-size: clamp(16px, 4vw, 18px);
+      border-bottom:1px solid rgba(255,255,255,.16);
     }
 
-    /* ===== ACTIONS (más compacto y alineado) ===== */
+    /* ===== ACTIONS (una sola fila, botones chicos) ===== */
     .actions{
-      position:sticky;
-      top: calc(env(safe-area-inset-top) + 48px);
-      z-index:7;
+      position:sticky; top: calc(env(safe-area-inset-top) + 42px); z-index:9;
       display:grid;
-      grid-template-columns: auto 1fr auto auto;
-      align-items:center; gap:10px;
-      padding: 8px 12px;
-      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
-      border-bottom: 1px solid rgba(255,255,255,.16);
-      backdrop-filter: blur(4px);
+      grid-template-columns: auto minmax(0,1fr) auto auto auto;
+      align-items:center; gap:6px;
+      padding: 6px 8px;
+      background: rgba(10,10,10,.6);
+      backdrop-filter: blur(6px);
+      border-bottom:1px solid rgba(255,255,255,.12);
+      overflow-x:auto; overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
     }
     .btn-xs{
-      display:inline-flex; align-items:center; gap:8px;
-      padding: 8px 10px; border-radius: 10px;
-      font-size: 13px; font-weight: 800; text-decoration:none;
-      background: linear-gradient(180deg, #fff, #f3f3f3) padding-box,
-                  linear-gradient(180deg, rgba(0,0,0,.18), rgba(255,255,255,.4)) border-box;
-      border: 1px solid transparent; color:#111; box-shadow: var(--shadow-sm);
-      transition: transform .06s ease, box-shadow .2s ease;
+      display:inline-flex; align-items:center; gap:6px;
+      padding: 6px 8px; border-radius: 10px;
+      font-size: 12px; font-weight: 800; text-decoration:none;
+      background: linear-gradient(180deg, #fff, #f3f3f3);
+      border: 1px solid rgba(0,0,0,.12); color:#111; box-shadow: var(--shadow-sm);
       white-space: nowrap;
+      transition: transform .06s ease, box-shadow .2s ease;
     }
-    .btn-xs:active{ transform: translateY(1px); box-shadow: 0 8px 16px rgba(0,0,0,.18); }
+    .btn-xs:active{ transform: translateY(1px); box-shadow: 0 6px 12px rgba(0,0,0,.18); }
 
     .chip-bot{
-      justify-self: center;
       display:flex; align-items:center; justify-content:center;
-      background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)), #0e0e0e;
+      background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
       color: var(--brand);
-      padding: 8px 12px; border-radius: 10px;
-      font-size: 12px; font-weight: 900; text-transform: uppercase;
-      min-width: 42%; border: 1px solid rgba(255,255,255,.14);
-      text-shadow: 0 1px 0 rgba(0,0,0,.35);
+      padding: 6px 8px; border-radius: 10px;
+      border:1px solid rgba(255,255,255,.14);
+      font-size: 11.5px; font-weight:900; text-transform:uppercase;
+      min-width: 40%;
+      text-overflow: ellipsis; white-space:nowrap; overflow:hidden;
     }
 
-    /* Switch pequeño */
+    /* Switch mini */
+    .switch-wrap{ display:flex; align-items:center; gap:6px; justify-self:end; }
     .switch{
-      --w:44px; --h:24px; --p:3px;
+      --w:36px; --h:20px; --p:2px;
       position:relative; width:var(--w); height:var(--h);
-      border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer;
-      justify-self: end;
+      border-radius:999px; background:#2a2f3a; border:1px solid rgba(255,255,255,.18);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.06); cursor:pointer; flex-shrink:0;
     }
     .switch::after{
       content:""; position:absolute; top:var(--p); left:var(--p);
       width: calc(var(--h) - var(--p)*2); height: calc(var(--h) - var(--p)*2);
-      border-radius: 50%; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,.32);
+      border-radius:50%; background:#fff; box-shadow: 0 3px 8px rgba(0,0,0,.28);
       transition: transform .18s ease, background .2s ease;
     }
-    .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
+    .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.55); }
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
-    .switch-label{ font-size:12px; font-weight:800; color:#ddd; margin-left:6px; }
+    .switch-label{ font-size:11.5px; font-weight:800; color:#ddd; }
 
-    /* ===== CHAT (scroll) ===== */
+    /* ===== CHAT (mobile-first) ===== */
     .chat{
-      flex:1 1 auto; position: relative; z-index: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
-      padding: 16px 14px 110px; /* extra bottom para el composer */
+      flex:1 1 auto; position: relative; z-index: 1;
+      overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+      padding: 12px 10px 96px; /* espacio inferior para el composer */
     }
-    .chat::before{
-      content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
-      background:
-        linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
-        linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
-      mix-blend-mode: overlay; opacity:.45;
-    }
-    .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:14px; padding: 4px; }
+    .stack{ display:flex; flex-direction:column; gap:10px; }
 
-    /* ===== BUBBLES (más chicas y fijas) ===== */
+    /* ===== BUBBLES (más chicas, consistentes) ===== */
     .bubble{
-      max-width: 82%;
-      padding: 12px 14px;
-      border-radius: 14px;
-      font-size: 15px; line-height: 1.5;
-      box-shadow: var(--shadow-md);
-      position: relative;
+      max-width: 88%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 14.5px; line-height: 1.45;
       border: 1px solid rgba(0,0,0,.08);
+      box-shadow: 0 6px 12px rgba(0,0,0,.20);
       word-break: break-word; white-space: pre-wrap;
+      contain: paint; /* rinde mejor en móvil */
     }
-    .bubble::before{ display:none; } /* quitamos la “pestaña” para compactar */
-    .bubble::after{ display:none; }  /* quitamos brillo extra para que no “agrande” */
-
     .bot{
-      align-self: flex-start; color: #fefefe;
-      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
-      border: 1px solid rgba(255,255,255,.14);
-      box-shadow: 0 0 0 1px rgba(247,189,2,.22) inset, var(--shadow-md);
+      align-self:flex-start; color:#f7f7f7;
+      background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(0,0,0,.06)), #111315;
+      border-color: rgba(255,255,255,.14);
+      box-shadow: 0 0 0 1px rgba(247,189,2,.18) inset, 0 6px 12px rgba(0,0,0,.20);
     }
     .user{
-      align-self: flex-end;
-      background: linear-gradient(180deg, #fff, #f7f7f7);
-      color: #151515; border: 1px solid rgba(0,0,0,.08);
-      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md);
+      align-self:flex-end; color:#151515;
+      background: linear-gradient(180deg, #fff, #f6f6f6);
+      border-color: rgba(0,0,0,.08);
+      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, 0 6px 12px rgba(0,0,0,.18);
     }
     .admin{
-      align-self:flex-end;
-      color:#0d3a24; background: linear-gradient(180deg, #e9fff4, #e0f7ee);
-      border:1px solid rgba(42,162,107,.35);
-      box-shadow: 0 0 0 1px rgba(42,162,107,.25) inset, 0 10px 24px rgba(0,0,0,.2);
+      align-self:flex-end; color:#0c3a23;
+      background: linear-gradient(180deg, #eafff4, #e4f8ee);
+      border-color: rgba(42,162,107,.3);
+      box-shadow: 0 0 0 1px rgba(42,162,107,.22) inset, 0 6px 12px rgba(0,0,0,.18);
     }
 
-    /* ===== COMPOSER (dejamos el que te gustó) ===== */
+    /* ===== COMPOSER (el que te gustó, con ajustes iOS) ===== */
     .composer{
-      position: fixed; left:0; right:0; bottom:0; z-index:12;
-      padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
-        rgba(10,12,16,.65);
-      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-      border-top:1px solid var(--line);
+      position:fixed; left:0; right:0; bottom:0; z-index:12;
+      padding: 8px 10px calc(env(safe-area-inset-bottom) + 8px);
+      background: rgba(10,12,16,.65);
+      backdrop-filter: blur(8px);
+      border-top:1px solid rgba(255,255,255,.12);
     }
     .composer-inner{
-      max-width: 900px; margin:0 auto; display:flex; gap:10px; align-items:center;
-      background: #12151c; border:1px solid var(--line); border-radius: 14px; padding: 8px;
+      max-width: 900px; margin:0 auto; display:flex; gap:8px; align-items:center;
+      background:#12151c; border:1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 6px;
       box-shadow: var(--shadow-sm);
     }
     .composer input[type="text"]{
-      flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.06);
-      padding: 0 12px; font-size:15.5px; outline:none; color:#e8eaf0;
-      background: rgba(255,255,255,.04);
+      flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.08);
+      padding: 0 12px; font-size:16px; /* >=16px evita zoom en iOS */
+      outline:none; color:#e8eaf0; background: rgba(255,255,255,.04);
     }
     .btn-send{
       height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.12);
       background: linear-gradient(180deg, var(--brand), var(--brand-2));
-      color:#000; font-weight:900; padding: 0 14px; cursor:pointer; box-shadow: var(--shadow-sm);
+      color:#000; font-weight:900; padding: 0 12px; cursor:pointer; box-shadow: var(--shadow-sm);
     }
     .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
 
     /* Toast */
     .toast{
-      position: fixed; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 80px); z-index:20;
-      padding: 10px 12px; border-radius: 10px; color:#0f1115; font-weight:900;
-      background: linear-gradient(180deg, #fff, #f2f2f2);
-      border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
+      position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:20;
+      padding: 8px 10px; border-radius: 10px; color:#0f1115; font-weight:900;
+      background: #fff; border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
     }
 
-    @media (max-width:480px){
-      .topbar{ font-size:20px; }
-      .chip-bot{ min-width: 38%; font-size:11px; }
+    /* ===== Desktop “enhance” (solo si hay espacio) ===== */
+    @media (min-width: 768px){
+      .topbar{ font-size:18px; }
+      .actions{ padding:8px 12px; gap:8px; }
+      .bubble{ max-width: 70%; font-size:15px; }
+      .composer-inner{ padding:8px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <!-- Cintas sutiles -->
-    <div class="brand-ribbon" aria-hidden="true"></div>
-
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
-    {# ==== LABEL DE COMPAÑÍA ==== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -235,18 +198,19 @@
       {% set company_label = bot %}
     {% endif %}
 
-    <!-- Barra compacta y alineada -->
+    <!-- Barra superior: botones pequeños + switch mini -->
     <div class="actions">
       <a class="btn-xs" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver">⟵ Volver</a>
-      <div class="chip-bot">{{ company_label }}</div>
+      <div class="chip-bot" title="{{ company_label }}">{{ company_label }}</div>
       <a class="btn-xs" href="#" title="Send your live">Send your live</a>
-      <div style="display:flex; align-items:center;">
+      <a class="btn-xs" href="#" title="Insurance">Insurance</a>
+      <div class="switch-wrap">
         <div id="switch" class="switch" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot"></div>
         <span id="switchText" class="switch-label">BOT OFF</span>
       </div>
     </div>
 
-    <!-- Contenedor de chat -->
+    <!-- Chat -->
     <main id="chat" class="chat" data-bot="{{ bot }}" data-numero="{{ numero }}">
       <div class="stack" id="stack">
         {% for msg in mensajes %}
@@ -257,7 +221,7 @@
       </div>
     </main>
 
-    <!-- Composer moderno (se mantiene) -->
+    <!-- Composer -->
     <form id="composer" class="composer" autocomplete="off">
       <div class="composer-inner">
         <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
@@ -278,7 +242,6 @@
       const btnSend = document.getElementById('btnSend');
       const composerEl = document.getElementById('composer');
       const toastEl = document.getElementById('toast');
-
       if (!chatEl || !stackEl) return;
 
       const botRaw    = chatEl.getAttribute('data-bot') || '';
@@ -292,9 +255,9 @@
 
       let lastTs = 0;
       let bootstrap = true;
-      const NEAR_PX = 200;
+      const NEAR_PX = 140; /* más sensible en móvil */
       let userNearBottom = true;
-      let botEnabled = true; // default
+      let botEnabled = true;
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
@@ -316,13 +279,7 @@
         switchEl.setAttribute('aria-pressed', String(!!enabled));
         switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
       }
-
-      function showToast(text){
-        toastEl.textContent = text || 'Listo';
-        toastEl.style.display = 'block';
-        setTimeout(()=> toastEl.style.display = 'none', 1400);
-      }
-
+      function showToast(text){ toastEl.textContent = text || 'Listo'; toastEl.style.display='block'; setTimeout(()=> toastEl.style.display='none', 1300); }
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
         div.className = `bubble ${tipo}`;
@@ -364,10 +321,9 @@
               if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        }catch(e){ /* silencio */ }
+        }catch(e){ /* silencioso */ }
       }
 
-      // Toggle click
       async function toggleClick(){
         try{
           const newVal = !botEnabled;
@@ -388,7 +344,6 @@
       switchEl.addEventListener('click', toggleClick);
       switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
 
-      // Enviar manual
       composerEl.addEventListener('submit', async (ev)=>{
         ev.preventDefault();
         const texto = (inputEl.value || '').trim();
@@ -408,14 +363,11 @@
             inputEl.value = '';
             scrollToBottom(true);
             showToast('Enviado');
-          }else{
-            showToast('Fallo al enviar');
-          }
+          }else{ showToast('Fallo al enviar'); }
         }catch(_){ showToast('Error de red'); }
         finally{ btnSend.disabled = false; }
       });
 
-      // Bootstrap
       setTimeout(()=> { scrollToBottom(false); userNearBottom = true; }, 30);
       tick();
       setInterval(tick, 3000);
