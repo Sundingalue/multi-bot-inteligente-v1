@@ -139,11 +139,18 @@
       margin-top: 8px;
     }
 
-    /* Botones de acción por lead */
+    /* === Acciones de lead en línea === */
+    .lead-actions{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      margin-top:10px;   /* separación de los datos */
+      flex-wrap:wrap;    /* si la pantalla es muy angosta, permite salto elegante */
+    }
+
     .btn-delete,
     .btn-view{
       display:inline-block;
-      margin-top: 10px;
       font-size: 14px;
       padding: 8px 10px;
       border-radius: 10px;
@@ -153,6 +160,9 @@
       box-shadow: var(--shadow);
       transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
       text-decoration:none;
+      margin:0;          /* la fila controla los márgenes */
+      white-space: nowrap;
+      flex:0 0 auto;
     }
     .btn-delete{
       border: 1.5px solid #b00020;
@@ -162,9 +172,8 @@
     .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
 
     .btn-view{
-      border:1.5px solid #0B5ED7;   /* azul */
+      border:1.5px solid #0B5ED7;
       color:#0B5ED7;
-      margin-left:8px;               /* queda “al lado” del borrar */
     }
     .btn-view:hover{ background:#eaf1ff; }
     .btn-view:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
@@ -205,9 +214,11 @@
             </select>
           </div>
 
-          <!-- Botones: Borrar + Ver conversación (nuevo) -->
-          <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ Borrar conversación</button>
-          <a class="btn-view" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}" title="Ver conversación">👁️ Ver conversación</a>
+          <!-- Botones en la misma fila -->
+          <div class="lead-actions">
+            <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ Borrar conversación</button>
+            <a class="btn-view" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}" title="Ver conversación">👁️ Ver conversación</a>
+          </div>
         </div>
       {% endfor %}
     {% else %}
@@ -282,7 +293,7 @@
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             numero: `${bot}|${numero}`,
-            estado: "",              // no cambiamos estado
+            estado: "",                  // no cambiamos estado
             nota: (nombre || "").trim()  // guardamos alias en notes
           })
         });
