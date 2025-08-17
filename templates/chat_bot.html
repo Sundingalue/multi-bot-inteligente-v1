@@ -4,187 +4,258 @@
   <meta charset="UTF-8" />
   <title>Panel de Conversación</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0e0e0e" />
+  <meta name="theme-color" content="#F7BD02" />
   <style>
     :root{
-      --brand:#F7BD02; --brand-2:#E3AE00;
-      --ink:#0B0B0B; --paper:#FFFFFF;
+      --brand:#F7BD02;        /* Amarillo IN */
+      --brand-2:#E3AE00;      /* Amarillo más oscuro */
+      --ink:#0B0B0B;          /* Negro profundo */
+      --paper:#FFFFFF;        /* Blanco */
+      --radius:16px;
+      --radius-lg:22px;
+      --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
+      --shadow-md: 0 16px 28px rgba(0,0,0,.22);
+      --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
       --line: rgba(255,255,255,.14);
-      --shadow-sm: 0 6px 14px rgba(0,0,0,.18);
-      --radius:12px; --radius-lg:16px;
-      --success:#2aa26b; --danger:#d64545;
     }
+
     *{ box-sizing:border-box; }
     html,body{
       margin:0; padding:0; height:100%;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      color: var(--ink); background: #0e0e0e;
+      color: var(--ink);
+      background: #0e0e0e;
     }
-    /* ===== LAYERS ===== */
-    .app{ min-height:100dvh; display:flex; flex-direction:column; position:relative; isolation:isolate; }
+
+    /* ===== LAYERS (NO TOCAR) ===== */
+    .app{
+      min-height:100vh;
+      display:flex;
+      flex-direction:column;
+      position: relative;
+      isolation: isolate; /* stacking context */
+    }
     .app::before{
-      content:""; position:fixed; inset:0; z-index:-3; pointer-events:none;
+      content:"";
+      position: fixed; /* no se mueve */
+      inset: 0;
+      z-index: -3;
+      pointer-events:none;
       background:
-        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.22), transparent 60%),
-        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.22), transparent 60%),
-        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px);
+        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(circle at 25% 25%, rgba(255,255,255,.06) 1px, transparent 1.5px) 0 0/22px 22px,
+        radial-gradient(circle at 75% 75%, rgba(0,0,0,.12) 1px, transparent 1.5px) 0 0/22px 22px,
+        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px),
+        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
+      background-size: cover, cover, 22px 22px, 22px 22px, 20px 20px, cover;
+      background-position: center top, center top, center, center, center, center top;
+      background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
     }
     .app::after{
-      content:""; position:fixed; inset:clamp(6px,2vw,12px); border-radius:var(--radius-lg);
-      z-index:-2; pointer-events:none;
-      background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.04));
-      border:1px solid rgba(255,255,255,.12); box-shadow: var(--shadow-sm);
+      content:"";
+      position: fixed;
+      inset: clamp(8px, 2vw, 16px);
+      border-radius: var(--radius-lg);
+      z-index: -2;
+      pointer-events:none;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
+        linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
+      border: 1px solid transparent;
+      box-shadow: var(--shadow-xl);
     }
+    .brand-ribbon{
+      position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    }
+    .brand-ribbon::before,
+    .brand-ribbon::after{
+      content:"";
+      position: absolute; left: -10%; right: -10%; height: 10px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25));
+      opacity:.65;
+    }
+    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
+    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
-    /* ===== TOPBAR (compacta móvil) ===== */
+    /* ===== TOP BAR (compacta) ===== */
     .topbar{
-      position:sticky; top:0; z-index:10;
-      background: rgba(10,10,10,.78);
-      backdrop-filter: blur(8px);
+      position:sticky; top:0; z-index:5;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        rgba(10,10,10,.82);
+      backdrop-filter: blur(6px);
       color:#fff;
-      padding: calc(env(safe-area-inset-top) + 8px) 10px 6px;
-      text-align:center; font-weight:900; text-transform:uppercase;
-      letter-spacing:.3px; font-size: clamp(16px, 4vw, 18px);
-      border-bottom:1px solid rgba(255,255,255,.16);
+      /* ↓ más compacta */
+      padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
+      text-align:center;
+      font-weight: 900; letter-spacing:.35px; font-size: 20px; text-transform: uppercase;
+      border-bottom: 1px solid rgba(255,255,255,.18);
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+      border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* ===== ACTIONS (una sola fila, botones chicos) ===== */
+    /* ===== ACTIONS (solo Volver | NombreBot | Switch) ===== */
     .actions{
-      position:sticky; top: calc(env(safe-area-inset-top) + 42px); z-index:9;
+      position:sticky;
+      top: calc(env(safe-area-inset-top) + 44px);
+      z-index:4;
       display:grid;
-      grid-template-columns: auto minmax(0,1fr) auto auto auto;
-      align-items:center; gap:6px;
-      padding: 6px 8px;
-      background: rgba(10,10,10,.6);
-      backdrop-filter: blur(6px);
-      border-bottom:1px solid rgba(255,255,255,.12);
-      overflow-x:auto; overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
+      grid-template-columns: auto 1fr auto; /* volver | nombre | switch */
+      align-items:center; gap:10px;
+      padding: 6px 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
+      border-bottom: 1px solid rgba(255,255,255,.16);
+      backdrop-filter: blur(4px);
     }
-    .btn-xs{
-      display:inline-flex; align-items:center; gap:6px;
-      padding: 6px 8px; border-radius: 10px;
-      font-size: 12px; font-weight: 800; text-decoration:none;
-      background: linear-gradient(180deg, #fff, #f3f3f3);
-      border: 1px solid rgba(0,0,0,.12); color:#111; box-shadow: var(--shadow-sm);
+    .btn-back{
+      display:inline-flex; align-items:center; gap:8px;
+      background:
+        linear-gradient(180deg, #fff, #f1f1f1) padding-box,
+        linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
+      color: var(--ink);
+      /* ↓ más pequeño */
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      font-weight: 900; font-size: 12px;
+      text-decoration:none;
+      box-shadow: var(--shadow-sm);
+      transition: transform .06s ease, box-shadow .2s ease, filter .2s ease;
       white-space: nowrap;
-      transition: transform .06s ease, box-shadow .2s ease;
     }
-    .btn-xs:active{ transform: translateY(1px); box-shadow: 0 6px 12px rgba(0,0,0,.18); }
+    .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
 
     .chip-bot{
       display:flex; align-items:center; justify-content:center;
-      background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        #0e0e0e;
       color: var(--brand);
-      padding: 6px 8px; border-radius: 10px;
-      border:1px solid rgba(255,255,255,.14);
-      font-size: 11.5px; font-weight:900; text-transform:uppercase;
+      /* ↓ más pequeño */
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-weight: 900; font-size: 12px;
+      text-transform: uppercase;
+      box-shadow: var(--shadow-sm);
       min-width: 40%;
-      text-overflow: ellipsis; white-space:nowrap; overflow:hidden;
+      border: 1px solid rgba(255,255,255,.14);
+      text-shadow: 0 1px 0 rgba(0,0,0,.35);
+      text-overflow:ellipsis; overflow:hidden; white-space:nowrap;
+      margin: 0 4px;
     }
 
-    /* Switch mini */
-    .switch-wrap{ display:flex; align-items:center; gap:6px; justify-self:end; }
+    /* ===== Switch mini (ON/OFF) ===== */
+    .switch-wrap{ display:inline-flex; align-items:center; gap:6px; justify-self:end; }
     .switch{
       --w:36px; --h:20px; --p:2px;
       position:relative; width:var(--w); height:var(--h);
-      border-radius:999px; background:#2a2f3a; border:1px solid rgba(255,255,255,.18);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.06); cursor:pointer; flex-shrink:0;
+      border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      cursor:pointer; flex-shrink:0;
     }
     .switch::after{
-      content:""; position:absolute; top:var(--p); left:var(--p);
+      content:"";
+      position:absolute; top:var(--p); left:var(--p);
       width: calc(var(--h) - var(--p)*2); height: calc(var(--h) - var(--p)*2);
-      border-radius:50%; background:#fff; box-shadow: 0 3px 8px rgba(0,0,0,.28);
+      border-radius: 50%; background: #fff;
+      box-shadow: 0 4px 10px rgba(0,0,0,.32);
       transition: transform .18s ease, background .2s ease;
     }
-    .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.55); }
+    .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
-    .switch-label{ font-size:11.5px; font-weight:800; color:#ddd; }
+    .switch-label{ font-size:12px; font-weight:800; color:#ddd; }
 
-    /* ===== CHAT (mobile-first) ===== */
+    /* ===== CHAT (NO TOCAR: burbujas y fondo quedan igual) ===== */
     .chat{
-      flex:1 1 auto; position: relative; z-index: 1;
-      overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-      padding: 12px 10px 96px; /* espacio inferior para el composer */
+      flex:1 1 auto;
+      position: relative;
+      z-index: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
     }
-    .stack{ display:flex; flex-direction:column; gap:10px; }
-
-    /* ===== BUBBLES (más chicas, consistentes) ===== */
+    .chat::before{
+      content:"";
+      position:absolute; inset:0;
+      z-index:0; pointer-events:none;
+      background:
+        linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
+        linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
+      mix-blend-mode: overlay;
+      opacity:.55;
+    }
+    .stack{
+      position: relative; z-index:1;
+      display:flex; flex-direction:column; gap:24px;
+      padding: 6px;
+    }
     .bubble{
-      max-width: 88%;
-      padding: 10px 12px;
-      border-radius: 12px;
-      font-size: 14.5px; line-height: 1.45;
+      max-width: 92%;
+      padding: 18px 20px;
+      border-radius: 18px;
+      font-size: 16.5px;
+      line-height: 1.55;
+      box-shadow: var(--shadow-md);
+      position: relative;
       border: 1px solid rgba(0,0,0,.08);
-      box-shadow: 0 6px 12px rgba(0,0,0,.20);
-      word-break: break-word; white-space: pre-wrap;
-      contain: paint; /* rinde mejor en móvil */
+    }
+    .bubble::before{
+      content:"";
+      position:absolute; left: 22px; top: -8px;
+      width: 46px; height: 12px; border-radius: 8px;
+      background: linear-gradient(180deg, rgba(0,0,0,.09), rgba(255,255,255,.18));
+      border: 1px solid rgba(0,0,0,.08);
+      filter: blur(.2px);
+    }
+    .bubble::after{
+      content:"";
+      position:absolute; inset:0;
+      border-radius: 18px;
+      pointer-events:none;
+      background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
+      mix-blend-mode: screen;
     }
     .bot{
-      align-self:flex-start; color:#f7f7f7;
-      background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(0,0,0,.06)), #111315;
-      border-color: rgba(255,255,255,.14);
-      box-shadow: 0 0 0 1px rgba(247,189,2,.18) inset, 0 6px 12px rgba(0,0,0,.20);
+      align-self: flex-start;
+      color: #fefefe;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)),
+        #111315;
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow:
+        0 0 0 1px rgba(247,189,2,.28) inset,
+        var(--shadow-md);
     }
     .user{
-      align-self:flex-end; color:#151515;
-      background: linear-gradient(180deg, #fff, #f6f6f6);
-      border-color: rgba(0,0,0,.08);
-      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, 0 6px 12px rgba(0,0,0,.18);
-    }
-    .admin{
-      align-self:flex-end; color:#0c3a23;
-      background: linear-gradient(180deg, #eafff4, #e4f8ee);
-      border-color: rgba(42,162,107,.3);
-      box-shadow: 0 0 0 1px rgba(42,162,107,.22) inset, 0 6px 12px rgba(0,0,0,.18);
+      align-self: flex-end;
+      background:
+        linear-gradient(180deg, #fff, #f7f7f7);
+      color: #151515;
+      border: 1px solid rgba(0,0,0,.08);
+      box-shadow:
+        0 1px 0 rgba(255,255,255,.8) inset,
+        var(--shadow-md);
     }
 
-    /* ===== COMPOSER (el que te gustó, con ajustes iOS) ===== */
-    .composer{
-      position:fixed; left:0; right:0; bottom:0; z-index:12;
-      padding: 8px 10px calc(env(safe-area-inset-bottom) + 8px);
-      background: rgba(10,12,16,.65);
-      backdrop-filter: blur(8px);
-      border-top:1px solid rgba(255,255,255,.12);
-    }
-    .composer-inner{
-      max-width: 900px; margin:0 auto; display:flex; gap:8px; align-items:center;
-      background:#12151c; border:1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 6px;
-      box-shadow: var(--shadow-sm);
-    }
-    .composer input[type="text"]{
-      flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.08);
-      padding: 0 12px; font-size:16px; /* >=16px evita zoom en iOS */
-      outline:none; color:#e8eaf0; background: rgba(255,255,255,.04);
-    }
-    .btn-send{
-      height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.12);
-      background: linear-gradient(180deg, var(--brand), var(--brand-2));
-      color:#000; font-weight:900; padding: 0 12px; cursor:pointer; box-shadow: var(--shadow-sm);
-    }
-    .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
-
-    /* Toast */
-    .toast{
-      position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:20;
-      padding: 8px 10px; border-radius: 10px; color:#0f1115; font-weight:900;
-      background: #fff; border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
-    }
-
-    /* ===== Desktop “enhance” (solo si hay espacio) ===== */
-    @media (min-width: 768px){
+    @media (max-width:480px){
       .topbar{ font-size:18px; }
-      .actions{ padding:8px 12px; gap:8px; }
-      .bubble{ max-width: 70%; font-size:15px; }
-      .composer-inner{ padding:8px; }
+      .btn-back, .chip-bot{ padding: 6px 8px; font-size:11px; }
+      .switch-label{ font-size:11px; }
+      /* Burbujas se mantienen tal cual — NO tocar */
     }
   </style>
 </head>
 <body>
   <div class="app">
+    <!-- Cintas sutiles de marca (NO TOCAR) -->
+    <div class="brand-ribbon" aria-hidden="true"></div>
+
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
+    {# ==== LABEL DE COMPAÑÍA CON FALLBACKS (NO TOCAR) ==== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -198,66 +269,45 @@
       {% set company_label = bot %}
     {% endif %}
 
-    <!-- Barra superior: botones pequeños + switch mini -->
+    <!-- ===== Barra superior mínima: Volver | Nombre | Switch ===== -->
     <div class="actions">
-      <a class="btn-xs" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver">⟵ Volver</a>
+      <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ Volver</a>
       <div class="chip-bot" title="{{ company_label }}">{{ company_label }}</div>
-      <a class="btn-xs" href="#" title="Send your live">Send your live</a>
-      <a class="btn-xs" href="#" title="Insurance">Insurance</a>
       <div class="switch-wrap">
         <div id="switch" class="switch" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot"></div>
         <span id="switchText" class="switch-label">BOT OFF</span>
       </div>
     </div>
 
-    <!-- Chat -->
-    <main id="chat" class="chat" data-bot="{{ bot }}" data-numero="{{ numero }}">
+    <!-- ===== Chat (NO TOCAR) ===== -->
+    <main id="chat" class="chat"
+          data-bot="{{ bot }}"
+          data-numero="{{ numero }}"
+          data-last-hora="{% if mensajes and mensajes|length>0 %}{{ mensajes[-1].hora }}{% endif %}">
       <div class="stack" id="stack">
         {% for msg in mensajes %}
-          <div class="bubble {% if msg.tipo == 'user' %}user{% elif msg.tipo == 'admin' %}admin{% else %}bot{% endif %}">
+          <div class="bubble {% if msg.tipo == 'user' %}user{% else %}bot{% endif %}">
             {{ msg.texto }}
           </div>
         {% endfor %}
       </div>
     </main>
-
-    <!-- Composer -->
-    <form id="composer" class="composer" autocomplete="off">
-      <div class="composer-inner">
-        <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
-        <button id="btnSend" class="btn-send" type="submit">Enviar</button>
-      </div>
-    </form>
-
-    <div id="toast" class="toast" role="status" aria-live="polite">Listo</div>
   </div>
 
   <script>
+    // Polling cada 3s con autoscroll inteligente + manejo opcional del switch
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
       const switchEl = document.getElementById('switch');
       const switchText = document.getElementById('switchText');
-      const inputEl = document.getElementById('inputText');
-      const btnSend = document.getElementById('btnSend');
-      const composerEl = document.getElementById('composer');
-      const toastEl = document.getElementById('toast');
       if (!chatEl || !stackEl) return;
-
-      const botRaw    = chatEl.getAttribute('data-bot') || '';
-      const numeroRaw = chatEl.getAttribute('data-numero') || '';
-      const bot = encodeURIComponent(botRaw);
-      const numero = encodeURIComponent(numeroRaw);
-
-      const apiPoll = `/api/chat/${bot}/${numero}`;
-      const apiToggle = `/api/conversation_bot`;
-      const apiManual = `/api/send_manual`;
 
       let lastTs = 0;
       let bootstrap = true;
-      const NEAR_PX = 140; /* más sensible en móvil */
+      const NEAR_PX = 200;
       let userNearBottom = true;
-      let botEnabled = true;
+      let botEnabled = true; // estado por defecto (si backend no lo envía)
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
@@ -267,32 +317,44 @@
         const last = stackEl.lastElementChild;
         if (!last) return;
         requestAnimationFrame(() => {
-          try{ last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' }); }
-          catch(_){ chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); }
+          try{
+            last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
+          }catch(_){
+            chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+          }
         });
       }
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
+      setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
-      function setSwitchState(enabled){
-        botEnabled = !!enabled;
-        switchEl.classList.toggle('on',  enabled);
-        switchEl.setAttribute('aria-pressed', String(!!enabled));
-        switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
-      }
-      function showToast(text){ toastEl.textContent = text || 'Listo'; toastEl.style.display='block'; setTimeout(()=> toastEl.style.display='none', 1300); }
+      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
+      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
+      const apiBase   = `/api/chat/${bot}/${numero}`;
+      const apiToggle = `/api/conversation_bot`; // ya existente en tu backend
+
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
-        div.className = `bubble ${tipo}`;
+        div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
       }
 
+      function setSwitchState(enabled){
+        botEnabled = !!enabled;
+        if (switchEl){
+          switchEl.classList.toggle('on', enabled);
+          switchEl.setAttribute('aria-pressed', String(!!enabled));
+        }
+        if (switchText) switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
+      }
+
       async function tick(){
         try{
-          const res = await fetch(`${apiPoll}?since=${lastTs}`, { credentials: 'same-origin' });
+          const res = await fetch(`${apiBase}?since=${lastTs}`, { credentials: 'same-origin' });
           if(!res.ok) return;
           const data = await res.json();
 
+          // Si tu /api/chat devuelve { bot_enabled: true/false }, lo usamos. Si no, ignoramos.
           if (typeof data.bot_enabled === 'boolean') setSwitchState(data.bot_enabled);
 
           if (bootstrap){
@@ -302,15 +364,13 @@
             }
             if (maxTs > lastTs) lastTs = maxTs;
             bootstrap = false;
-            setTimeout(()=> { scrollToBottom(false); userNearBottom = true; }, 30);
             return;
           }
 
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
             for (const m of data.mensajes){
-              const tipo = (m.tipo === 'user') ? 'user' : (m.tipo === 'admin' ? 'admin' : 'bot');
-              appendMessage(tipo, m.texto);
+              appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
             if (userNearBottom) scrollToBottom(true);
 
@@ -321,9 +381,10 @@
               if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        }catch(e){ /* silencioso */ }
+        }catch(e){ /* silencio */ }
       }
 
+      // Toggle del switch (opcional si ya tienes /api/conversation_bot)
       async function toggleClick(){
         try{
           const newVal = !botEnabled;
@@ -331,46 +392,29 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, enabled: newVal })
+            body: JSON.stringify({ bot: decodeURIComponent(bot), numero: decodeURIComponent(numero), enabled: newVal })
           });
-          if (!res.ok){ showToast('Error al cambiar estado'); return; }
-          const out = await res.json();
+          if (!res.ok){ setSwitchState(botEnabled); return; }
+          const out = await res.json().catch(()=>({}));
           if (out && typeof out.enabled === 'boolean'){
             setSwitchState(out.enabled);
-            showToast(out.enabled ? 'Bot activado' : 'Bot desactivado');
+          }else{
+            // si el backend no responde con enabled, asumimos el value pedido
+            setSwitchState(newVal);
           }
-        }catch(_){ showToast('Error de red'); }
+        }catch(_){
+          // revertimos visual si hay error
+          setSwitchState(botEnabled);
+        }
       }
-      switchEl.addEventListener('click', toggleClick);
-      switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+      if (switchEl){
+        switchEl.addEventListener('click', toggleClick);
+        switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+      }
 
-      composerEl.addEventListener('submit', async (ev)=>{
-        ev.preventDefault();
-        const texto = (inputEl.value || '').trim();
-        if (!texto) return;
-        btnSend.disabled = true;
-        try{
-          const res = await fetch(apiManual, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, texto })
-          });
-          if (!res.ok){ showToast('Error al enviar'); btnSend.disabled = false; return; }
-          const out = await res.json();
-          if (out && out.ok){
-            appendMessage('admin', texto);
-            inputEl.value = '';
-            scrollToBottom(true);
-            showToast('Enviado');
-          }else{ showToast('Fallo al enviar'); }
-        }catch(_){ showToast('Error de red'); }
-        finally{ btnSend.disabled = false; }
-      });
-
-      setTimeout(()=> { scrollToBottom(false); userNearBottom = true; }, 30);
       tick();
       setInterval(tick, 3000);
+
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
       });
