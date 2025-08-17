@@ -49,7 +49,7 @@
       display:flex;
       gap:12px;
       align-items:center;
-      justify-content:flex-end;
+      justify-content:flex-end;   /* como en panel.html en desktop */
       flex-wrap:wrap;
       margin: 6px auto 18px;
     }
@@ -116,7 +116,7 @@
 
     .lead-info { margin-top: 10px; font-size: 15px; }
 
-    /* Selector de estado */
+    /* Selector de estado (igual estilo) */
     .lead-select {
       margin-top: 10px;
       font-size: 15px;
@@ -139,45 +139,24 @@
       margin-top: 8px;
     }
 
-    /* === Acciones de lead en línea === */
-    .lead-actions{
-      display:flex;
-      align-items:center;
-      gap:8px;
-      margin-top:10px;   /* separación de los datos */
-      flex-wrap:wrap;    /* si la pantalla es muy angosta, permite salto elegante */
-    }
-
-    .btn-delete,
-    .btn-view{
-      display:inline-block;
+    /* Botón borrar conversación */
+    .btn-delete{
+      margin-top: 10px;
       font-size: 14px;
       padding: 8px 10px;
       border-radius: 10px;
+      border: 1.5px solid #b00020;
       background-color: #fff;
+      color: #b00020;
       font-weight: 800;
       cursor: pointer;
       box-shadow: var(--shadow);
       transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
-      text-decoration:none;
-      margin:0;          /* la fila controla los márgenes */
-      white-space: nowrap;
-      flex:0 0 auto;
-    }
-    .btn-delete{
-      border: 1.5px solid #b00020;
-      color: #b00020;
     }
     .btn-delete:hover{ background:#ffe8ec; }
     .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
 
-    .btn-view{
-      border:1.5px solid #0B5ED7;
-      color:#0B5ED7;
-    }
-    .btn-view:hover{ background:#eaf1ff; }
-    .btn-view:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
-
+    /* En pantallas anchas, alinear controles */
     @media (min-width: 720px){
       .controls{ justify-content: flex-end; }
     }
@@ -188,7 +167,7 @@
 
   <div class="container">
 
-    <!-- Controles: solo Cerrar sesión -->
+    <!-- Controles: solo Cerrar sesión (misma “pill” que en panel.html) -->
     <div class="controls">
       <a class="pill" href="{{ url_for('logout') }}" title="Cerrar sesión" aria-label="Cerrar sesión">⎋ Cerrar sesión</a>
     </div>
@@ -214,11 +193,7 @@
             </select>
           </div>
 
-          <!-- Botones en la misma fila -->
-          <div class="lead-actions">
-            <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ Borrar conversación</button>
-            <a class="btn-view" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}" title="Ver conversación">👁️ Ver conversación</a>
-          </div>
+          <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ Borrar conversación</button>
         </div>
       {% endfor %}
     {% else %}
@@ -293,7 +268,7 @@
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             numero: `${bot}|${numero}`,
-            estado: "",                  // no cambiamos estado
+            estado: "",              // no cambiamos estado
             nota: (nombre || "").trim()  // guardamos alias en notes
           })
         });
