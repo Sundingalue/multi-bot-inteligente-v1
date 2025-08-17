@@ -49,7 +49,7 @@
       display:flex;
       gap:12px;
       align-items:center;
-      justify-content:flex-end;   /* como en panel.html en desktop */
+      justify-content:flex-end;
       flex-wrap:wrap;
       margin: 6px auto 18px;
     }
@@ -116,7 +116,7 @@
 
     .lead-info { margin-top: 10px; font-size: 15px; }
 
-    /* Selector de estado (igual estilo) */
+    /* Selector de estado */
     .lead-select {
       margin-top: 10px;
       font-size: 15px;
@@ -156,7 +156,23 @@
     .btn-delete:hover{ background:#ffe8ec; }
     .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
 
-    /* En pantallas anchas, alinear controles */
+    /* Botón ver conversación */
+    .btn-view{
+      margin-top: 10px;
+      font-size: 14px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1.5px solid var(--brand);
+      background-color: #fff;
+      color: var(--brand);
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+    }
+    .btn-view:hover{ background:#fff8e1; }
+    .btn-view:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
     @media (min-width: 720px){
       .controls{ justify-content: flex-end; }
     }
@@ -166,8 +182,6 @@
   <div class="header">Panel Exclusivo - {{ nombre_comercial }}</div>
 
   <div class="container">
-
-    <!-- Controles: solo Cerrar sesión (misma “pill” que en panel.html) -->
     <div class="controls">
       <a class="pill" href="{{ url_for('logout') }}" title="Cerrar sesión" aria-label="Cerrar sesión">⎋ Cerrar sesión</a>
     </div>
@@ -175,7 +189,6 @@
     {% if leads %}
       {% for clave, datos in leads.items() %}
         <div class="lead-card" data-key="{{ bot }}|{{ datos.numero }}">
-          <!-- Link al chat por-bot + alias editable -->
           <a class="lead-link" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}">
             <span class="lead-name" id="name-{{ loop.index0 }}">{{ (datos.notes or datos.numero) if datos.notes is defined else datos.numero }}</span>
           </a>
@@ -194,6 +207,7 @@
           </div>
 
           <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ Borrar conversación</button>
+          <a class="btn-view" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}">👁️ Ver conversación</a>
         </div>
       {% endfor %}
     {% else %}
@@ -209,7 +223,7 @@
         body: JSON.stringify({
           numero: `${bot}|${numero}`,
           estado: estado,
-          nota: "" // no tocar alias aquí
+          nota: ""
         })
       })
       .then(r => r.json())
@@ -255,12 +269,11 @@
       }
     }
 
-    // Editar alias (guarda en "notes" vía /guardar-lead)
     async function editarAlias(bot, numero, spanId, valorActual){
       const el = document.getElementById(spanId);
       if(!el) return;
       const nombre = prompt("Escribe el nombre que quieres mostrar en el panel:", valorActual || el.textContent.trim());
-      if (nombre === null) return; // cancelado
+      if (nombre === null) return;
 
       try{
         const res = await fetch('/guardar-lead', {
@@ -268,13 +281,13 @@
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             numero: `${bot}|${numero}`,
-            estado: "",              // no cambiamos estado
-            nota: (nombre || "").trim()  // guardamos alias en notes
+            estado: "",
+            nota: (nombre || "").trim()
           })
         });
         const out = await res.json();
         if(out && !out.error){
-          el.textContent = (nombre || "").trim() || numero; // si vacío, vuelve a número
+          el.textContent = (nombre || "").trim() || numero;
         }else{
           alert("No se pudo guardar el nombre.");
         }
