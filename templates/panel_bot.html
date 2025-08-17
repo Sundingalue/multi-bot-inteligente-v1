@@ -49,7 +49,7 @@
       display:flex;
       gap:12px;
       align-items:center;
-      justify-content:flex-end;   /* como en panel.html en desktop */
+      justify-content:flex-end;
       flex-wrap:wrap;
       margin: 6px auto 18px;
     }
@@ -116,7 +116,7 @@
 
     .lead-info { margin-top: 10px; font-size: 15px; }
 
-    /* Selector de estado (igual estilo) */
+    /* Selector de estado */
     .lead-select {
       margin-top: 10px;
       font-size: 15px;
@@ -139,24 +139,36 @@
       margin-top: 8px;
     }
 
-    /* Botón borrar conversación */
-    .btn-delete{
+    /* Botones de acción por lead */
+    .btn-delete,
+    .btn-view{
+      display:inline-block;
       margin-top: 10px;
       font-size: 14px;
       padding: 8px 10px;
       border-radius: 10px;
-      border: 1.5px solid #b00020;
       background-color: #fff;
-      color: #b00020;
       font-weight: 800;
       cursor: pointer;
       box-shadow: var(--shadow);
       transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      text-decoration:none;
+    }
+    .btn-delete{
+      border: 1.5px solid #b00020;
+      color: #b00020;
     }
     .btn-delete:hover{ background:#ffe8ec; }
     .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
 
-    /* En pantallas anchas, alinear controles */
+    .btn-view{
+      border:1.5px solid #0B5ED7;   /* azul */
+      color:#0B5ED7;
+      margin-left:8px;               /* queda “al lado” del borrar */
+    }
+    .btn-view:hover{ background:#eaf1ff; }
+    .btn-view:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
     @media (min-width: 720px){
       .controls{ justify-content: flex-end; }
     }
@@ -167,7 +179,7 @@
 
   <div class="container">
 
-    <!-- Controles: solo Cerrar sesión (misma “pill” que en panel.html) -->
+    <!-- Controles: solo Cerrar sesión -->
     <div class="controls">
       <a class="pill" href="{{ url_for('logout') }}" title="Cerrar sesión" aria-label="Cerrar sesión">⎋ Cerrar sesión</a>
     </div>
@@ -193,7 +205,9 @@
             </select>
           </div>
 
+          <!-- Botones: Borrar + Ver conversación (nuevo) -->
           <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ Borrar conversación</button>
+          <a class="btn-view" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}" title="Ver conversación">👁️ Ver conversación</a>
         </div>
       {% endfor %}
     {% else %}
