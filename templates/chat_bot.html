@@ -4,159 +4,204 @@
   <meta charset="UTF-8" />
   <title>Panel de Conversación</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#F7BD02" />
+  <meta name="theme-color" content="#0f1115" />
   <style>
+    /* =========================
+       THEME — delicado y sobrio
+       ========================= */
     :root{
-      --brand:#F7BD02; --brand-2:#E3AE00;
-      --ink:#0B0B0B; --paper:#FFFFFF;
-      --radius:16px; --radius-lg:22px;
-      --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
-      --shadow-md: 0 16px 28px rgba(0,0,0,.22);
-      --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
-      --line: rgba(255,255,255,.14);
-      --danger:#b00020; --success:#1a7f37;
+      --brand:#F7BD02;          /* Amarillo IN */
+      --brand-2:#E3AE00;
+      --bg:#0f1115;             /* Fondo principal */
+      --card:#12151c;           /* Tarjetas / zonas elevadas */
+      --ink:#e8eaf0;            /* Texto principal */
+      --ink-dim:#b6bbcb;        /* Texto secundario */
+      --line:rgba(255,255,255,.08);
+      --radius:14px; --radius-lg:18px;
+      --shadow-lg: 0 20px 60px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.25);
+      --shadow-sm: 0 8px 24px rgba(0,0,0,.22);
+      --success:#2aa26b;
+      --danger:#d64545;
     }
     *{ box-sizing:border-box; }
     html,body{
       margin:0; padding:0; height:100%;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      color: var(--ink); background: #0e0e0e;
+      background: var(--bg);
+      color: var(--ink);
     }
-    .app{ min-height:100vh; display:flex; flex-direction:column; position: relative; isolation: isolate; }
+    .app{ min-height:100vh; display:flex; flex-direction:column; position:relative; isolation:isolate; }
+
+    /* Fondo con textura sutil + “bloom” */
     .app::before{
-      content:""; position: fixed; inset: 0; z-index: -3; pointer-events:none;
+      content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
       background:
-        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
-        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
-        radial-gradient(circle at 25% 25%, rgba(255,255,255,.06) 1px, transparent 1.5px) 0 0/22px 22px,
-        radial-gradient(circle at 75% 75%, rgba(0,0,0,.12) 1px, transparent 1.5px) 0 0/22px 22px,
-        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px),
-        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
-      background-size: cover, cover, 22px 22px, 22px 22px, 20px 20px, cover;
-      background-position: center top, center top, center, center, center, center top;
-      background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
+        radial-gradient(60% 40% at 15% 10%, rgba(247,189,2,.08), transparent 60%),
+        radial-gradient(60% 40% at 85% 90%, rgba(227,174,0,.07), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,.0)),
+        repeating-linear-gradient(135deg, rgba(255,255,255,.02) 0 2px, transparent 2px 16px);
     }
-    .app::after{
-      content:""; position: fixed; inset: clamp(8px, 2vw, 16px);
-      border-radius: var(--radius-lg); z-index: -2; pointer-events:none;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
-        linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
-      border: 1px solid transparent; box-shadow: var(--shadow-xl);
-    }
-    .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
-    .brand-ribbon::before,.brand-ribbon::after{
-      content:""; position: absolute; left: -10%; right: -10%; height: 10px;
-      background: linear-gradient(90deg, var(--brand), var(--brand-2));
-      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25)); opacity:.65;
-    }
-    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
-    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
+    /* Topbar flotante */
     .topbar{
-      position:sticky; top:0; z-index:7;
-      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)), rgba(10,10,10,.82);
-      backdrop-filter: blur(6px);
-      color:#fff; padding: calc(env(safe-area-inset-top) + 12px) 16px 8px;
-      text-align:center; font-weight: 900; letter-spacing:.35px; font-size: 26px; text-transform: uppercase;
-      border-bottom: 1px solid rgba(255,255,255,.18); box-shadow: 0 8px 24px rgba(0,0,0,.35); border-radius: var(--radius) var(--radius) 0 0;
-    }
-    .actions{
-      position:sticky; top: calc(env(safe-area-inset-top) + 62px); z-index:6;
-      display:flex; align-items:center; justify-content:space-between; gap:12px;
-      padding: 10px 14px 12px;
-      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
-      border-bottom: 1px solid rgba(255,255,255,.16);
-      backdrop-filter: blur(4px);
-    }
-    .btn-back{
-      display:inline-flex; align-items:center; gap:10px;
-      background: linear-gradient(180deg, #fff, #f1f1f1) padding-box, linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
-      color: var(--ink); padding: 12px 16px; border-radius: 12px; border: 1px solid transparent; font-weight: 900; text-decoration:none; box-shadow: var(--shadow-sm);
-      transition: transform .06s ease, box-shadow .2s ease;
-    }
-    .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
-    .chip-bot{
-      display:flex; align-items:center; justify-content:center; flex:1;
-      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)), #0e0e0e;
-      color: var(--brand); padding: 12px 16px; border-radius: 12px; font-weight: 900; text-transform: uppercase; box-shadow: var(--shadow-sm);
-      min-width: 42%; border: 1px solid rgba(255,255,255,.14); text-shadow: 0 2px 0 rgba(0,0,0,.35);
-    }
-
-    /* ===== Toggle & mini-toolbar ===== */
-    .toolbar{ display:flex; align-items:center; gap:10px; }
-    .toggle{
-      display:inline-flex; align-items:center; gap:8px; cursor:pointer; user-select:none;
-      padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.2);
-      background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(0,0,0,.1));
-      color:#fff; font-weight:800; box-shadow: var(--shadow-sm);
-    }
-    .dot{
-      width:12px; height:12px; border-radius:999px; background: #aaa; box-shadow: 0 0 0 2px rgba(0,0,0,.25) inset;
-    }
-    .toggle.on .dot{ background: var(--success); }
-    .toggle.off .dot{ background: var(--danger); }
-    .mini-info{ color:#ddd; font-size:12.5px; }
-
-    /* ===== Chat ===== */
-    .chat{ flex:1 1 auto; position: relative; z-index: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 22px 18px 100px; }
-    .chat::before{ content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
+      position:sticky; top:0; z-index:10;
       background:
-        linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
-        linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
-      mix-blend-mode: overlay; opacity:.55;
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)),
+        rgba(10,12,16,.7);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom:1px solid var(--line);
+      padding: calc(env(safe-area-inset-top)+14px) 18px 12px;
+      text-align:center; letter-spacing:.3px; text-transform:uppercase;
+      font-weight: 800; font-size: clamp(20px, 2.8vw, 24px);
+      color: var(--ink);
     }
-    .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:24px; padding: 6px; }
-    .bubble{
-      max-width: 92%; padding: 14px 16px; border-radius: 14px; font-size: 16px; line-height: 1.55; box-shadow: var(--shadow-md);
-      position: relative; border: 1px solid rgba(0,0,0,.08); word-break: break-word; white-space: pre-wrap;
-    }
-    .bot{ align-self: flex-start; color: #fefefe; background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
-      border: 1px solid rgba(255,255,255,.14); box-shadow: 0 0 0 1px rgba(247,189,2,.28) inset, var(--shadow-md); }
-    .user{ align-self: flex-end; background: linear-gradient(180deg, #fff, #f7f7f7); color: #151515; border: 1px solid rgba(0,0,0,.08);
-      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md); }
-    .admin{ align-self: flex-end; background: linear-gradient(180deg, #eef8f0, #e3f6e8); color: #0a3d1e; border: 1px solid rgba(0,0,0,.08);
-      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md); }
 
-    /* ===== Composer (barra inferior fija) ===== */
+    /* Cinta de acciones */
+    .actions{
+      position:sticky; top: calc(env(safe-area-inset-top) + 62px); z-index:9;
+      display:flex; align-items:center; gap:12px; justify-content:space-between;
+      padding: 10px 14px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
+        rgba(10,12,16,.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-bottom:1px solid var(--line);
+    }
+    .btn{
+      display:inline-flex; align-items:center; gap:10px;
+      border-radius: 12px; padding: 10px 14px; text-decoration:none; cursor:pointer;
+      border:1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
+      color: var(--ink);
+      font-weight: 800;
+      box-shadow: var(--shadow-sm);
+      transition: transform .06s ease, box-shadow .2s ease, opacity .2s ease;
+    }
+    .btn:active{ transform: translateY(1px); box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+    .chip{
+      display:flex; align-items:center; justify-content:center; gap:10px; flex:1;
+      min-height:42px; padding: 10px 14px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.00)),
+        var(--card);
+      border:1px solid var(--line); border-radius:12px;
+      color: var(--ink-dim); font-weight:900; text-transform:uppercase;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Toggle elegante */
+    .switch{
+      --w:56px; --h:30px; --p:3px;
+      position:relative; width:var(--w); height:var(--h);
+      border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      cursor:pointer; flex-shrink:0;
+    }
+    .switch::after{
+      content:"";
+      position:absolute; top:var(--p); left:var(--p);
+      width: calc(var(--h) - var(--p)*2); height: calc(var(--h) - var(--p)*2);
+      border-radius: 50%; background: #fff;
+      box-shadow: 0 6px 18px rgba(0,0,0,.35);
+      transition: transform .22s ease, background .2s ease;
+    }
+    .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
+    .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
+    .switch-label{
+      font-size:12.5px; font-weight:800; color: var(--ink-dim);
+      user-select:none;
+    }
+    .toolbar{ display:flex; align-items:center; gap:10px; }
+
+    /* Área del chat */
+    .chat{
+      flex:1 1 auto; position:relative; z-index:1; overflow:auto;
+      padding: 18px 16px 110px;
+      background:
+        radial-gradient(500px 300px at 15% 0%, rgba(255,255,255,.03), transparent 60%),
+        radial-gradient(500px 300px at 85% 100%, rgba(255,255,255,.03), transparent 60%);
+    }
+    .stack{ display:flex; flex-direction:column; gap:16px; max-width:900px; margin:0 auto; }
+
+    /* Burbujas */
+    .bubble{
+      max-width: 85%;
+      padding: 12px 14px; border-radius: 14px; line-height: 1.55;
+      font-size: 15.5px; word-break: break-word; white-space: pre-wrap;
+      border:1px solid var(--line);
+      box-shadow: 0 10px 24px rgba(0,0,0,.25);
+    }
+    .bot{
+      align-self:flex-start;
+      color:#e9ecf4;
+      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)), #141821;
+      border-color: rgba(247,189,2,.25);
+      box-shadow: 0 0 0 1px rgba(247,189,2,.22) inset, 0 10px 24px rgba(0,0,0,.25);
+    }
+    .user{
+      align-self:flex-end;
+      color:#0f1115;
+      background: linear-gradient(180deg, #ffffff, #f6f7fb);
+      border-color: rgba(0,0,0,.08);
+    }
+    .admin{
+      align-self:flex-end;
+      color:#0d3a24;
+      background: linear-gradient(180deg, #e9fff4, #e0f7ee);
+      border-color: rgba(42,162,107,.35);
+      box-shadow: 0 0 0 1px rgba(42,162,107,.25) inset, 0 10px 24px rgba(0,0,0,.2);
+    }
+
+    /* Composer fijo */
     .composer{
-      position: fixed; left:0; right:0; bottom:0; z-index:8;
+      position:fixed; left:0; right:0; bottom:0; z-index:12;
       padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
-      background: linear-gradient(180deg, rgba(255,255,255,.85), rgba(255,255,255,.95));
-      border-top: 1px solid rgba(0,0,0,.08);
-      display:flex; gap:10px; align-items:center;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
+        rgba(10,12,16,.65);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border-top:1px solid var(--line);
+    }
+    .composer-inner{
+      max-width: 900px; margin:0 auto; display:flex; gap:10px; align-items:center;
+      background: var(--card); border:1px solid var(--line); border-radius: 14px; padding: 8px;
+      box-shadow: var(--shadow-sm);
     }
     .composer input[type="text"]{
-      flex:1; height:46px; border-radius: 12px; border:1px solid rgba(0,0,0,.2);
-      padding: 0 14px; font-size:16px; outline:none;
+      flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.06);
+      padding: 0 12px; font-size:15.5px; outline:none; color:var(--ink);
+      background: rgba(255,255,255,.04);
     }
     .btn-send{
-      height:46px; border-radius: 12px; border:1px solid rgba(0,0,0,.22);
+      height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.12);
       background: linear-gradient(180deg, var(--brand), var(--brand-2));
-      color:#000; font-weight:900; padding: 0 16px; cursor:pointer; box-shadow: var(--shadow-sm);
+      color:#000; font-weight:900; padding: 0 14px; cursor:pointer; box-shadow: var(--shadow-sm);
     }
     .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
 
     /* Toast */
     .toast{
-      position: fixed; right: 14px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:9;
-      padding: 10px 12px; border-radius: 10px; color:#fff; font-weight:800;
-      background: rgba(0,0,0,.8); box-shadow: var(--shadow-sm); display:none;
+      position: fixed; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 80px); z-index:20;
+      padding: 10px 12px; border-radius: 10px; color:#0f1115; font-weight:900;
+      background: linear-gradient(180deg, #fff, #f2f2f2);
+      border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
     }
 
-    @media (max-width:480px){
-      .topbar{ font-size:22px; }
-      .bubble{ font-size:15.5px; padding:12px 14px; }
+    @media (max-width:520px){
+      .bubble{ font-size:15px; }
+      .chip{ min-width: 40%; }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <div class="brand-ribbon" aria-hidden="true"></div>
-    <div class="topbar">PANEL DE CONVERSACIÓN</div>
+    <div class="topbar">Panel de conversación</div>
 
-    {# ==== LABEL DE COMPAÑÍA CON FALLBACKS ==== #}
+    {# ===== Etiqueta de compañía con fallbacks ===== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -171,22 +216,18 @@
     {% endif %}
 
     <div class="actions">
-      <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ VOLVER</a>
-      <div class="chip-bot">{{ company_label }}</div>
+      <a class="btn" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver">⟵ Volver</a>
+      <div class="chip">{{ company_label }}</div>
 
-      <!-- ✅ Toggle ON/OFF por conversación -->
+      <!-- Toggle ON/OFF más delicado -->
       <div class="toolbar">
-        <div id="toggle" class="toggle off" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot para esta conversación">
-          <span class="dot"></span>
-          <span id="toggleLabel">BOT OFF</span>
-        </div>
+        <div class="switch-label" id="switchText">BOT OFF</div>
+        <div id="switch" class="switch" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot"></div>
       </div>
     </div>
 
-    <!-- ÚNICO contenedor que hace scroll -->
-    <main id="chat" class="chat"
-          data-bot="{{ bot }}"
-          data-numero="{{ numero }}">
+    <!-- Contenedor de chat -->
+    <main id="chat" class="chat" data-bot="{{ bot }}" data-numero="{{ numero }}">
       <div class="stack" id="stack">
         {% for msg in mensajes %}
           <div class="bubble {% if msg.tipo == 'user' %}user{% elif msg.tipo == 'admin' %}admin{% else %}bot{% endif %}">
@@ -196,10 +237,12 @@
       </div>
     </main>
 
-    <!-- ✅ Composer para responder manualmente -->
+    <!-- Composer -->
     <form id="composer" class="composer" autocomplete="off">
-      <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
-      <button id="btnSend" class="btn-send" type="submit">Enviar</button>
+      <div class="composer-inner">
+        <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
+        <button id="btnSend" class="btn-send" type="submit">Enviar</button>
+      </div>
     </form>
 
     <div id="toast" class="toast" role="status" aria-live="polite">Listo</div>
@@ -209,8 +252,8 @@
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
-      const toggleEl = document.getElementById('toggle');
-      const toggleLabel = document.getElementById('toggleLabel');
+      const switchEl = document.getElementById('switch');
+      const switchText = document.getElementById('switchText');
       const inputEl = document.getElementById('inputText');
       const btnSend = document.getElementById('btnSend');
       const composerEl = document.getElementById('composer');
@@ -231,7 +274,7 @@
       let bootstrap = true;
       const NEAR_PX = 200;
       let userNearBottom = true;
-      let botEnabled = true; // por defecto
+      let botEnabled = true; // default
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
@@ -247,18 +290,17 @@
       }
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
 
-      function setToggleState(enabled){
+      function setSwitchState(enabled){
         botEnabled = !!enabled;
-        toggleEl.classList.toggle('on',  enabled);
-        toggleEl.classList.toggle('off', !enabled);
-        toggleEl.setAttribute('aria-pressed', String(!!enabled));
-        toggleLabel.textContent = enabled ? 'BOT ON' : 'BOT OFF';
+        switchEl.classList.toggle('on',  enabled);
+        switchEl.setAttribute('aria-pressed', String(!!enabled));
+        switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
       }
 
       function showToast(text){
         toastEl.textContent = text || 'Listo';
         toastEl.style.display = 'block';
-        setTimeout(()=> toastEl.style.display = 'none', 1500);
+        setTimeout(()=> toastEl.style.display = 'none', 1400);
       }
 
       function appendMessage(tipo, texto){
@@ -275,12 +317,9 @@
           const data = await res.json();
 
           // Estado del toggle desde backend
-          if (typeof data.bot_enabled === 'boolean') {
-            setToggleState(data.bot_enabled);
-          }
+          if (typeof data.bot_enabled === 'boolean') setSwitchState(data.bot_enabled);
 
           if (bootstrap){
-            // Solo sincronizo lastTs la primera vez
             let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
             if (Array.isArray(data.mensajes) && data.mensajes.length){
               maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), maxTs);
@@ -306,7 +345,7 @@
               if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        }catch(e){ /* silencio */ }
+        }catch(e){ /* silencioso */ }
       }
 
       // Toggle click
@@ -319,22 +358,16 @@
             credentials: 'same-origin',
             body: JSON.stringify({ bot: botRaw, numero: numeroRaw, enabled: newVal })
           });
-          if (!res.ok){
-            const t = await res.text();
-            showToast('Error al cambiar estado');
-            return;
-          }
+          if (!res.ok){ showToast('Error al cambiar estado'); return; }
           const out = await res.json();
           if (out && typeof out.enabled === 'boolean'){
-            setToggleState(out.enabled);
+            setSwitchState(out.enabled);
             showToast(out.enabled ? 'Bot activado' : 'Bot desactivado');
           }
-        }catch(e){
-          showToast('Error de red');
-        }
+        }catch(_){ showToast('Error de red'); }
       }
-      toggleEl.addEventListener('click', toggleClick);
-      toggleEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+      switchEl.addEventListener('click', toggleClick);
+      switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
 
       // Enviar manual
       composerEl.addEventListener('submit', async (ev)=>{
@@ -349,11 +382,7 @@
             credentials: 'same-origin',
             body: JSON.stringify({ bot: botRaw, numero: numeroRaw, texto })
           });
-          if (!res.ok){
-            showToast('Error al enviar');
-            btnSend.disabled = false;
-            return;
-          }
+          if (!res.ok){ showToast('Error al enviar'); btnSend.disabled = false; return; }
           const out = await res.json();
           if (out && out.ok){
             appendMessage('admin', texto);
@@ -363,11 +392,8 @@
           }else{
             showToast('Fallo al enviar');
           }
-        }catch(_){
-          showToast('Error de red');
-        }finally{
-          btnSend.disabled = false;
-        }
+        }catch(_){ showToast('Error de red'); }
+        finally{ btnSend.disabled = false; }
       });
 
       // Bootstrap
