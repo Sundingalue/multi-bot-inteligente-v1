@@ -7,43 +7,25 @@
   <meta name="theme-color" content="#F7BD02" />
   <style>
     :root{
-      --brand:#F7BD02;        /* Amarillo IN */
-      --brand-2:#E3AE00;      /* Amarillo más oscuro */
-      --ink:#0B0B0B;          /* Negro profundo */
-      --paper:#FFFFFF;        /* Blanco */
-      --radius:16px;
-      --radius-lg:22px;
+      --brand:#F7BD02; --brand-2:#E3AE00;
+      --ink:#0B0B0B; --paper:#FFFFFF;
+      --radius:16px; --radius-lg:22px;
       --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
       --shadow-md: 0 16px 28px rgba(0,0,0,.22);
       --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
       --line: rgba(255,255,255,.14);
+      --danger:#b00020; --success:#1a7f37;
     }
-
     *{ box-sizing:border-box; }
     html,body{
       margin:0; padding:0; height:100%;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      color: var(--ink);
-      background: #0e0e0e;
+      color: var(--ink); background: #0e0e0e;
     }
-
-    /* ===== LAYERS ===== */
-    .app{
-      min-height:100vh;
-      display:flex;
-      flex-direction:column;
-      position: relative;
-      isolation: isolate; /* stacking context */
-    }
-
-    /* Capa 1: Fondo FIJO con textura */
+    .app{ min-height:100vh; display:flex; flex-direction:column; position: relative; isolation: isolate; }
     .app::before{
-      content:"";
-      position: fixed; /* no se mueve */
-      inset: 0;
-      z-index: -3;
-      pointer-events:none;
+      content:""; position: fixed; inset: 0; z-index: -3; pointer-events:none;
       background:
         radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
         radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
@@ -55,188 +37,123 @@
       background-position: center top, center top, center, center, center, center top;
       background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
     }
-
-    /* Capa 2: Marco “card” con borde suave y sombra */
     .app::after{
-      content:"";
-      position: fixed;
-      inset: clamp(8px, 2vw, 16px);
-      border-radius: var(--radius-lg);
-      z-index: -2;
-      pointer-events:none;
+      content:""; position: fixed; inset: clamp(8px, 2vw, 16px);
+      border-radius: var(--radius-lg); z-index: -2; pointer-events:none;
       background:
         linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
         linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
-      border: 1px solid transparent;
-      box-shadow: var(--shadow-xl);
+      border: 1px solid transparent; box-shadow: var(--shadow-xl);
     }
-
-    /* Capa 3: Cintas diagonales de marca */
-    .brand-ribbon{
-      position: fixed; inset: 0; z-index: -1; pointer-events: none;
-    }
-    .brand-ribbon::before,
-    .brand-ribbon::after{
-      content:"";
-      position: absolute; left: -10%; right: -10%; height: 10px;
+    .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+    .brand-ribbon::before,.brand-ribbon::after{
+      content:""; position: absolute; left: -10%; right: -10%; height: 10px;
       background: linear-gradient(90deg, var(--brand), var(--brand-2));
-      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25));
-      opacity:.65;
+      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25)); opacity:.65;
     }
     .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
     .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
-    /* ===== TOP BAR ===== */
     .topbar{
-      position:sticky; top:0; z-index:5;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
-        rgba(10,10,10,.82);
+      position:sticky; top:0; z-index:7;
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)), rgba(10,10,10,.82);
       backdrop-filter: blur(6px);
-      color:#fff;
-      padding: calc(env(safe-area-inset-top) + 12px) 16px 14px;
-      text-align:center;
-      font-weight: 900; letter-spacing:.35px; font-size: 26px; text-transform: uppercase;
-      border-bottom: 1px solid rgba(255,255,255,.18);
-      box-shadow: 0 8px 24px rgba(0,0,0,.35);
-      border-radius: var(--radius) var(--radius) 0 0;
+      color:#fff; padding: calc(env(safe-area-inset-top) + 12px) 16px 8px;
+      text-align:center; font-weight: 900; letter-spacing:.35px; font-size: 26px; text-transform: uppercase;
+      border-bottom: 1px solid rgba(255,255,255,.18); box-shadow: 0 8px 24px rgba(0,0,0,.35); border-radius: var(--radius) var(--radius) 0 0;
     }
-
-    /* ===== ACTIONS ===== */
     .actions{
-      position:sticky;
-      top: calc(env(safe-area-inset-top) + 65px);
-      z-index:4;
-      display:flex; align-items:center; justify-content:space-between; gap:15px;
-      padding: 10px 18px 12px;
+      position:sticky; top: calc(env(safe-area-inset-top) + 62px); z-index:6;
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding: 10px 14px 12px;
       background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
       border-bottom: 1px solid rgba(255,255,255,.16);
       backdrop-filter: blur(4px);
     }
-
     .btn-back{
-      display:inline-flex; align-items:center; gap:12px;
-      background:
-        linear-gradient(180deg, #fff, #f1f1f1) padding-box,
-        linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
-      color: var(--ink);
-      padding: 14px 20px;
-      border-radius: 14px;
-      border: 1px solid transparent;
-      font-weight: 900;
-      text-decoration:none;
-      box-shadow: var(--shadow-sm);
-      transition: transform .06s ease, box-shadow .2s ease, filter .2s ease;
+      display:inline-flex; align-items:center; gap:10px;
+      background: linear-gradient(180deg, #fff, #f1f1f1) padding-box, linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
+      color: var(--ink); padding: 12px 16px; border-radius: 12px; border: 1px solid transparent; font-weight: 900; text-decoration:none; box-shadow: var(--shadow-sm);
+      transition: transform .06s ease, box-shadow .2s ease;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
-
     .chip-bot{
-      display:flex; align-items:center; justify-content:center;
-      flex:1;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
-        #0e0e0e;
-      color: var(--brand);
-      padding: 14px 20px;
-      border-radius: 14px;
-      font-weight: 900;
-      text-transform: uppercase;
-      box-shadow: var(--shadow-sm);
-      min-width: 42%;
-      border: 1px solid rgba(255,255,255,.14);
-      text-shadow: 0 2px 0 rgba(0,0,0,.35);
+      display:flex; align-items:center; justify-content:center; flex:1;
+      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)), #0e0e0e;
+      color: var(--brand); padding: 12px 16px; border-radius: 12px; font-weight: 900; text-transform: uppercase; box-shadow: var(--shadow-sm);
+      min-width: 42%; border: 1px solid rgba(255,255,255,.14); text-shadow: 0 2px 0 rgba(0,0,0,.35);
     }
 
-    /* ===== CHAT (único contenedor con scroll) ===== */
-    .chat{
-      flex:1 1 auto;
-      position: relative;
-      z-index: 1;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
+    /* ===== Toggle & mini-toolbar ===== */
+    .toolbar{ display:flex; align-items:center; gap:10px; }
+    .toggle{
+      display:inline-flex; align-items:center; gap:8px; cursor:pointer; user-select:none;
+      padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.2);
+      background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(0,0,0,.1));
+      color:#fff; font-weight:800; box-shadow: var(--shadow-sm);
     }
+    .dot{
+      width:12px; height:12px; border-radius:999px; background: #aaa; box-shadow: 0 0 0 2px rgba(0,0,0,.25) inset;
+    }
+    .toggle.on .dot{ background: var(--success); }
+    .toggle.off .dot{ background: var(--danger); }
+    .mini-info{ color:#ddd; font-size:12.5px; }
 
-    .chat::before{
-      content:"";
-      position:absolute; inset:0;
-      z-index:0; pointer-events:none;
+    /* ===== Chat ===== */
+    .chat{ flex:1 1 auto; position: relative; z-index: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 22px 18px 100px; }
+    .chat::before{ content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
       background:
         linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
         linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
-      mix-blend-mode: overlay;
-      opacity:.55;
+      mix-blend-mode: overlay; opacity:.55;
     }
-
-    .stack{
-      position: relative; z-index:1;
-      display:flex; flex-direction:column; gap:24px;
-      padding: 6px;
-    }
-
-    /* ===== BUBBLES ===== */
+    .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:24px; padding: 6px; }
     .bubble{
-      max-width: 92%;
-      padding: 18px 20px;
-      border-radius: 18px;
-      font-size: 16.5px;
-      line-height: 1.55;
-      box-shadow: var(--shadow-md);
-      position: relative;
-      border: 1px solid rgba(0,0,0,.08);
+      max-width: 92%; padding: 14px 16px; border-radius: 14px; font-size: 16px; line-height: 1.55; box-shadow: var(--shadow-md);
+      position: relative; border: 1px solid rgba(0,0,0,.08); word-break: break-word; white-space: pre-wrap;
     }
-    .bubble::before{
-      content:"";
-      position:absolute; left: 22px; top: -8px;
-      width: 46px; height: 12px; border-radius: 8px;
-      background: linear-gradient(180deg, rgba(0,0,0,.09), rgba(255,255,255,.18));
-      border: 1px solid rgba(0,0,0,.08);
-      filter: blur(.2px);
-    }
-    .bubble::after{
-      content:"";
-      position:absolute; inset:0;
-      border-radius: 18px;
-      pointer-events:none;
-      background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
-      mix-blend-mode: screen;
-    }
+    .bot{ align-self: flex-start; color: #fefefe; background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
+      border: 1px solid rgba(255,255,255,.14); box-shadow: 0 0 0 1px rgba(247,189,2,.28) inset, var(--shadow-md); }
+    .user{ align-self: flex-end; background: linear-gradient(180deg, #fff, #f7f7f7); color: #151515; border: 1px solid rgba(0,0,0,.08);
+      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md); }
+    .admin{ align-self: flex-end; background: linear-gradient(180deg, #eef8f0, #e3f6e8); color: #0a3d1e; border: 1px solid rgba(0,0,0,.08);
+      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md); }
 
-    .bot{
-      align-self: flex-start;
-      color: #fefefe;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)),
-        #111315;
-      border: 1px solid rgba(255,255,255,.14);
-      box-shadow:
-        0 0 0 1px rgba(247,189,2,.28) inset,
-        var(--shadow-md);
+    /* ===== Composer (barra inferior fija) ===== */
+    .composer{
+      position: fixed; left:0; right:0; bottom:0; z-index:8;
+      padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
+      background: linear-gradient(180deg, rgba(255,255,255,.85), rgba(255,255,255,.95));
+      border-top: 1px solid rgba(0,0,0,.08);
+      display:flex; gap:10px; align-items:center;
     }
+    .composer input[type="text"]{
+      flex:1; height:46px; border-radius: 12px; border:1px solid rgba(0,0,0,.2);
+      padding: 0 14px; font-size:16px; outline:none;
+    }
+    .btn-send{
+      height:46px; border-radius: 12px; border:1px solid rgba(0,0,0,.22);
+      background: linear-gradient(180deg, var(--brand), var(--brand-2));
+      color:#000; font-weight:900; padding: 0 16px; cursor:pointer; box-shadow: var(--shadow-sm);
+    }
+    .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
 
-    .user{
-      align-self: flex-end;
-      background:
-        linear-gradient(180deg, #fff, #f7f7f7);
-      color: #151515;
-      border: 1px solid rgba(0,0,0,.08);
-      box-shadow:
-        0 1px 0 rgba(255,255,255,.8) inset,
-        var(--shadow-md);
+    /* Toast */
+    .toast{
+      position: fixed; right: 14px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:9;
+      padding: 10px 12px; border-radius: 10px; color:#fff; font-weight:800;
+      background: rgba(0,0,0,.8); box-shadow: var(--shadow-sm); display:none;
     }
 
     @media (max-width:480px){
       .topbar{ font-size:22px; }
-      .btn-back, .chip-bot{ padding: 12px 16px; }
-      .bubble{ font-size:15.5px; padding:16px 18px; }
+      .bubble{ font-size:15.5px; padding:12px 14px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <!-- Cintas sutiles de marca -->
     <div class="brand-ribbon" aria-hidden="true"></div>
-
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
     {# ==== LABEL DE COMPAÑÍA CON FALLBACKS ==== #}
@@ -254,90 +171,131 @@
     {% endif %}
 
     <div class="actions">
-      <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">
-        ⟵ VOLVER
-      </a>
+      <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ VOLVER</a>
       <div class="chip-bot">{{ company_label }}</div>
+
+      <!-- ✅ Toggle ON/OFF por conversación -->
+      <div class="toolbar">
+        <div id="toggle" class="toggle off" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot para esta conversación">
+          <span class="dot"></span>
+          <span id="toggleLabel">BOT OFF</span>
+        </div>
+      </div>
     </div>
 
     <!-- ÚNICO contenedor que hace scroll -->
     <main id="chat" class="chat"
           data-bot="{{ bot }}"
-          data-numero="{{ numero }}"
-          data-last-hora="{% if mensajes and mensajes|length>0 %}{{ mensajes[-1].hora }}{% endif %}">
+          data-numero="{{ numero }}">
       <div class="stack" id="stack">
         {% for msg in mensajes %}
-          <div class="bubble {% if msg.tipo == 'user' %}user{% else %}bot{% endif %}">
+          <div class="bubble {% if msg.tipo == 'user' %}user{% elif msg.tipo == 'admin' %}admin{% else %}bot{% endif %}">
             {{ msg.texto }}
           </div>
         {% endfor %}
       </div>
     </main>
+
+    <!-- ✅ Composer para responder manualmente -->
+    <form id="composer" class="composer" autocomplete="off">
+      <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
+      <button id="btnSend" class="btn-send" type="submit">Enviar</button>
+    </form>
+
+    <div id="toast" class="toast" role="status" aria-live="polite">Listo</div>
   </div>
 
   <script>
-    // Polling cada 3s con autoscroll inteligente
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
+      const toggleEl = document.getElementById('toggle');
+      const toggleLabel = document.getElementById('toggleLabel');
+      const inputEl = document.getElementById('inputText');
+      const btnSend = document.getElementById('btnSend');
+      const composerEl = document.getElementById('composer');
+      const toastEl = document.getElementById('toast');
+
       if (!chatEl || !stackEl) return;
+
+      const botRaw    = chatEl.getAttribute('data-bot') || '';
+      const numeroRaw = chatEl.getAttribute('data-numero') || '';
+      const bot = encodeURIComponent(botRaw);
+      const numero = encodeURIComponent(numeroRaw);
+
+      const apiPoll = `/api/chat/${bot}/${numero}`;
+      const apiToggle = `/api/conversation_bot`;
+      const apiManual = `/api/send_manual`;
 
       let lastTs = 0;
       let bootstrap = true;
       const NEAR_PX = 200;
       let userNearBottom = true;
+      let botEnabled = true; // por defecto
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
         return distance <= NEAR_PX;
       }
-
       function scrollToBottom(smooth=true){
         const last = stackEl.lastElementChild;
         if (!last) return;
         requestAnimationFrame(() => {
-          try{
-            last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
-          }catch(_){
-            chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-          }
+          try{ last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' }); }
+          catch(_){ chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); }
         });
       }
-
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
-      setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
-      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
-      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
-      const apiBase = `/api/chat/${bot}/${numero}`;
+      function setToggleState(enabled){
+        botEnabled = !!enabled;
+        toggleEl.classList.toggle('on',  enabled);
+        toggleEl.classList.toggle('off', !enabled);
+        toggleEl.setAttribute('aria-pressed', String(!!enabled));
+        toggleLabel.textContent = enabled ? 'BOT ON' : 'BOT OFF';
+      }
+
+      function showToast(text){
+        toastEl.textContent = text || 'Listo';
+        toastEl.style.display = 'block';
+        setTimeout(()=> toastEl.style.display = 'none', 1500);
+      }
 
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
-        div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
+        div.className = `bubble ${tipo}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
       }
 
       async function tick(){
         try{
-          const res = await fetch(`${apiBase}?since=${lastTs}`, { credentials: 'same-origin' });
+          const res = await fetch(`${apiPoll}?since=${lastTs}`, { credentials: 'same-origin' });
           if(!res.ok) return;
           const data = await res.json();
 
+          // Estado del toggle desde backend
+          if (typeof data.bot_enabled === 'boolean') {
+            setToggleState(data.bot_enabled);
+          }
+
           if (bootstrap){
+            // Solo sincronizo lastTs la primera vez
             let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
             if (Array.isArray(data.mensajes) && data.mensajes.length){
               maxTs = data.mensajes.reduce((mx, m)=> Math.max(mx, m.ts||0), maxTs);
             }
             if (maxTs > lastTs) lastTs = maxTs;
             bootstrap = false;
+            setTimeout(()=> { scrollToBottom(false); userNearBottom = true; }, 30);
             return;
           }
 
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
             for (const m of data.mensajes){
-              appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
+              const tipo = (m.tipo === 'user') ? 'user' : (m.tipo === 'admin' ? 'admin' : 'bot');
+              appendMessage(tipo, m.texto);
             }
             if (userNearBottom) scrollToBottom(true);
 
@@ -351,9 +309,71 @@
         }catch(e){ /* silencio */ }
       }
 
+      // Toggle click
+      async function toggleClick(){
+        try{
+          const newVal = !botEnabled;
+          const res = await fetch(apiToggle, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, enabled: newVal })
+          });
+          if (!res.ok){
+            const t = await res.text();
+            showToast('Error al cambiar estado');
+            return;
+          }
+          const out = await res.json();
+          if (out && typeof out.enabled === 'boolean'){
+            setToggleState(out.enabled);
+            showToast(out.enabled ? 'Bot activado' : 'Bot desactivado');
+          }
+        }catch(e){
+          showToast('Error de red');
+        }
+      }
+      toggleEl.addEventListener('click', toggleClick);
+      toggleEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+
+      // Enviar manual
+      composerEl.addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const texto = (inputEl.value || '').trim();
+        if (!texto) return;
+        btnSend.disabled = true;
+        try{
+          const res = await fetch(apiManual, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, texto })
+          });
+          if (!res.ok){
+            showToast('Error al enviar');
+            btnSend.disabled = false;
+            return;
+          }
+          const out = await res.json();
+          if (out && out.ok){
+            appendMessage('admin', texto);
+            inputEl.value = '';
+            scrollToBottom(true);
+            showToast('Enviado');
+          }else{
+            showToast('Fallo al enviar');
+          }
+        }catch(_){
+          showToast('Error de red');
+        }finally{
+          btnSend.disabled = false;
+        }
+      });
+
+      // Bootstrap
+      setTimeout(()=> { scrollToBottom(false); userNearBottom = true; }, 30);
       tick();
       setInterval(tick, 3000);
-
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
       });
