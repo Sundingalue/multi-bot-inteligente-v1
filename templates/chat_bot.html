@@ -57,7 +57,7 @@
     .brand-ribbon::before{ top:18%; transform: rotate(-18deg); }
     .brand-ribbon::after { bottom:12%; transform: rotate(14deg); }
 
-    /* ===== TOP BAR: ahora muestra el NOMBRE DEL BOT y más grande ===== */
+    /* ===== TOP BAR: muestra el NOMBRE DEL BOT ===== */
     .topbar{
       position:sticky; top:0; z-index:5;
       background:
@@ -67,17 +67,17 @@
       color:#fff;
       padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
       text-align:center; font-weight:900; letter-spacing:.35px;
-      font-size: clamp(22px, 4.8vw, 28px); /* ← más grande para “Senior Life …” */
+      font-size: clamp(22px, 4.8vw, 28px);
       text-transform: uppercase;
       border-bottom:1px solid rgba(255,255,255,.18);
       box-shadow: 0 8px 24px rgba(0,0,0,.35);
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* ===== ACTIONS (Volver | Chip | Switch) — botones más grandes ===== */
+    /* ===== ACTIONS: SOLO Volver (izq) + Switch (der) ===== */
     .actions{
       position:sticky; top: calc(env(safe-area-inset-top) + 58px); z-index:4;
-      display:grid; grid-template-columns: auto 1fr auto; align-items:center; gap:10px;
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
       padding: 8px 12px;
       background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
       border-bottom: 1px solid rgba(255,255,255,.16);
@@ -89,30 +89,17 @@
         linear-gradient(180deg, #fff, #f1f1f1) padding-box,
         linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      padding: 12px 14px;            /* ← más grande */
-      border-radius: 12px;
-      border: 1px solid transparent;
-      font-weight: 900; font-size: 14px; /* ← más grande */
+      padding: 12px 14px;
+      border-radius: 12px; border: 1px solid transparent;
+      font-weight: 900; font-size: 14px;
       text-decoration:none; box-shadow: var(--shadow-sm);
       white-space: nowrap;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
 
-    .chip-bot{
-      display:flex; align-items:center; justify-content:center;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
-        #0e0e0e;
-      color: var(--brand);
-      padding: 6px 10px; border-radius: 10px; font-weight:900; font-size:12px;
-      text-transform: uppercase; box-shadow: var(--shadow-sm);
-      min-width: 40%; border: 1px solid rgba(255,255,255,.14); text-shadow: 0 1px 0 rgba(0,0,0,.35);
-      text-overflow:ellipsis; overflow:hidden; white-space:nowrap; margin: 0 4px;
-    }
-
-    .switch-wrap{ display:inline-flex; align-items:center; gap:8px; justify-self:end; }
+    .switch-wrap{ display:inline-flex; align-items:center; gap:8px; }
     .switch{
-      --w:48px; --h:28px; --p:3px;   /* ← más grande */
+      --w:48px; --h:28px; --p:3px;
       position:relative; width:var(--w); height:var(--h);
       border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
       box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer; flex-shrink:0;
@@ -125,7 +112,7 @@
     }
     .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
-    .switch-label{ font-size:13px; font-weight:800; color:#ddd; } /* ← un toque más grande */
+    .switch-label{ font-size:13px; font-weight:800; color:#ddd; }
 
     /* ===== CHAT (NO TOCAR) ===== */
     .chat{
@@ -209,7 +196,7 @@
   <div class="app">
     <div class="brand-ribbon" aria-hidden="true"></div>
 
-    {# ==== LABEL DE COMPAÑÍA (para topbar y chip) ==== #}
+    {# ==== LABEL DE COMPAÑÍA ==== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -223,13 +210,12 @@
       {% set company_label = bot %}
     {% endif %}
 
-    <!-- Topbar ahora muestra el nombre del bot -->
+    <!-- Topbar: SOLO nombre del bot -->
     <div class="topbar">{{ company_label }}</div>
 
-    <!-- Barra de acciones (Volver | Chip | Switch) -->
+    <!-- Acciones: SOLO Volver (izq) + Switch (der) -->
     <div class="actions">
       <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ Volver</a>
-      <div class="chip-bot" title="{{ company_label }}">{{ company_label }}</div>
       <div class="switch-wrap">
         <div id="switch" class="switch" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot"></div>
         <span id="switchText" class="switch-label">BOT OFF</span>
