@@ -7,12 +7,9 @@
   <meta name="theme-color" content="#F7BD02" />
   <style>
     :root{
-      --brand:#F7BD02;        /* Amarillo IN */
-      --brand-2:#E3AE00;      /* Amarillo más oscuro */
-      --ink:#0B0B0B;          /* Negro profundo */
-      --paper:#FFFFFF;        /* Blanco */
-      --radius:16px;
-      --radius-lg:22px;
+      --brand:#F7BD02; --brand-2:#E3AE00;
+      --ink:#0B0B0B; --paper:#FFFFFF;
+      --radius:16px; --radius-lg:22px;
       --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
       --shadow-md: 0 16px 28px rgba(0,0,0,.22);
       --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
@@ -24,21 +21,13 @@
       margin:0; padding:0; height:100%;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      color: var(--ink);
-      background: #0e0e0e;
+      color: var(--ink); background: #0e0e0e;
     }
 
     /* ===== LAYERS (NO TOCAR) ===== */
-    .app{
-      min-height:100vh;
-      display:flex;
-      flex-direction:column;
-      position: relative;
-      isolation: isolate;
-    }
+    .app{ min-height:100vh; display:flex; flex-direction:column; position: relative; isolation:isolate; }
     .app::before{
-      content:"";
-      position: fixed; inset: 0; z-index: -3; pointer-events:none;
+      content:""; position: fixed; inset:0; z-index:-3; pointer-events:none;
       background:
         radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
         radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
@@ -51,23 +40,22 @@
       background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
     }
     .app::after{
-      content:"";
-      position: fixed; inset: clamp(8px, 2vw, 16px);
-      border-radius: var(--radius-lg); z-index: -2; pointer-events:none;
+      content:""; position: fixed; inset: clamp(8px, 2vw, 16px); border-radius: var(--radius-lg);
+      z-index:-2; pointer-events:none;
       background:
         linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
         linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
       border: 1px solid transparent; box-shadow: var(--shadow-xl);
     }
-    .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+    .brand-ribbon{ position: fixed; inset:0; z-index:-1; pointer-events:none; }
     .brand-ribbon::before,
     .brand-ribbon::after{
-      content:""; position: absolute; left: -10%; right: -10%; height: 10px;
+      content:""; position:absolute; left:-10%; right:-10%; height:10px;
       background: linear-gradient(90deg, var(--brand), var(--brand-2));
       filter: drop-shadow(0 8px 10px rgba(0,0,0,.25)); opacity:.65;
     }
-    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
-    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
+    .brand-ribbon::before{ top:18%; transform: rotate(-18deg); }
+    .brand-ribbon::after { bottom:12%; transform: rotate(14deg); }
 
     /* ===== TOP BAR (compacta) ===== */
     .topbar{
@@ -78,21 +66,16 @@
       backdrop-filter: blur(6px);
       color:#fff;
       padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
-      text-align:center;
-      font-weight: 900; letter-spacing:.35px; font-size: 20px; text-transform: uppercase;
-      border-bottom: 1px solid rgba(255,255,255,.18);
+      text-align:center; font-weight:900; letter-spacing:.35px; font-size:20px; text-transform:uppercase;
+      border-bottom:1px solid rgba(255,255,255,.18);
       box-shadow: 0 8px 24px rgba(0,0,0,.35);
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
     /* ===== ACTIONS (Volver | Nombre | Switch) ===== */
     .actions{
-      position:sticky;
-      top: calc(env(safe-area-inset-top) + 44px);
-      z-index:4;
-      display:grid;
-      grid-template-columns: auto 1fr auto;
-      align-items:center; gap:10px;
+      position:sticky; top: calc(env(safe-area-inset-top) + 44px); z-index:4;
+      display:grid; grid-template-columns: auto 1fr auto; align-items:center; gap:10px;
       padding: 6px 10px;
       background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
       border-bottom: 1px solid rgba(255,255,255,.16);
@@ -104,12 +87,8 @@
         linear-gradient(180deg, #fff, #f1f1f1) padding-box,
         linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      padding: 8px 10px;
-      border-radius: 10px;
-      border: 1px solid transparent;
-      font-weight: 900; font-size: 12px;
-      text-decoration:none;
-      box-shadow: var(--shadow-sm);
+      padding: 8px 10px; border-radius: 10px; border: 1px solid transparent;
+      font-weight: 900; font-size: 12px; text-decoration:none; box-shadow: var(--shadow-sm);
       white-space: nowrap;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
@@ -120,94 +99,70 @@
         linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
         #0e0e0e;
       color: var(--brand);
-      padding: 6px 10px;
-      border-radius: 10px;
-      font-weight: 900; font-size: 12px;
-      text-transform: uppercase;
-      box-shadow: var(--shadow-sm);
-      min-width: 40%;
-      border: 1px solid rgba(255,255,255,.14);
-      text-shadow: 0 1px 0 rgba(0,0,0,.35);
-      text-overflow:ellipsis; overflow:hidden; white-space:nowrap;
-      margin: 0 4px;
+      padding: 6px 10px; border-radius: 10px; font-weight:900; font-size:12px;
+      text-transform: uppercase; box-shadow: var(--shadow-sm);
+      min-width: 40%; border: 1px solid rgba(255,255,255,.14); text-shadow: 0 1px 0 rgba(0,0,0,.35);
+      text-overflow:ellipsis; overflow:hidden; white-space:nowrap; margin: 0 4px;
     }
 
-    /* Switch mini (ON/OFF) */
     .switch-wrap{ display:inline-flex; align-items:center; gap:6px; justify-self:end; }
     .switch{
       --w:36px; --h:20px; --p:2px;
       position:relative; width:var(--w); height:var(--h);
       border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-      cursor:pointer; flex-shrink:0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer; flex-shrink:0;
     }
     .switch::after{
-      content:"";
-      position:absolute; top:var(--p); left:var(--p);
+      content:""; position:absolute; top:var(--p); left:var(--p);
       width: calc(var(--h) - var(--p)*2); height: calc(var(--h) - var(--p)*2);
-      border-radius: 50%; background: #fff;
-      box-shadow: 0 4px 10px rgba(0,0,0,.32);
+      border-radius: 50%; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,.32);
       transition: transform .18s ease, background .2s ease;
     }
     .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
     .switch-label{ font-size:12px; font-weight:800; color:#ddd; }
 
-    /* ===== CHAT (NO TOCAR burbujas/fondo) ===== */
+    /* ===== CHAT (NO TOCAR) ===== */
     .chat{
-      flex:1 1 auto;
-      position: relative;
-      z-index: 1;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding: 22px 18px calc(env(safe-area-inset-bottom) + 96px); /* <-- más espacio por composer fijo */
+      flex:1 1 auto; position: relative; z-index:1;
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding: 22px 18px calc(env(safe-area-inset-bottom) + 96px);
     }
     .chat::before{
-      content:"";
-      position:absolute; inset:0; z-index:0; pointer-events:none;
+      content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
       background:
         linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
         linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
       mix-blend-mode: overlay; opacity:.55;
     }
-    .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:24px; padding: 6px; }
+    .stack{ position:relative; z-index:1; display:flex; flex-direction:column; gap:24px; padding:6px; }
     .bubble{
-      max-width: 92%;
-      padding: 18px 20px;
-      border-radius: 18px;
-      font-size: 16.5px;
-      line-height: 1.55;
-      box-shadow: var(--shadow-md);
-      position: relative;
-      border: 1px solid rgba(0,0,0,.08);
+      max-width: 92%; padding: 18px 20px; border-radius:18px; font-size:16.5px; line-height:1.55;
+      box-shadow: var(--shadow-md); position:relative; border: 1px solid rgba(0,0,0,.08);
     }
     .bubble::before{
-      content:"";
-      position:absolute; left: 22px; top: -8px;
-      width: 46px; height: 12px; border-radius: 8px;
+      content:""; position:absolute; left:22px; top:-8px; width:46px; height:12px; border-radius:8px;
       background: linear-gradient(180deg, rgba(0,0,0,.09), rgba(255,255,255,.18));
-      border: 1px solid rgba(0,0,0,.08);
-      filter: blur(.2px);
+      border: 1px solid rgba(0,0,0,.08); filter: blur(.2px);
     }
     .bubble::after{
-      content:"";
-      position:absolute; inset:0; border-radius: 18px; pointer-events:none;
+      content:""; position:absolute; inset:0; border-radius:18px; pointer-events:none;
       background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
       mix-blend-mode: screen;
     }
     .bot{
-      align-self: flex-start; color: #fefefe;
+      align-self:flex-start; color:#fefefe;
       background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
       border: 1px solid rgba(255,255,255,.14);
       box-shadow: 0 0 0 1px rgba(247,189,2,.28) inset, var(--shadow-md);
     }
     .user{
-      align-self: flex-end; background: linear-gradient(180deg, #fff, #f7f7f7);
-      color: #151515; border: 1px solid rgba(0,0,0,.08);
+      align-self:flex-end; background: linear-gradient(180deg, #fff, #f7f7f7);
+      color:#151515; border: 1px solid rgba(0,0,0,.08);
       box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md);
     }
 
-    /* ===== COMPOSER (restaurado para enviar mensajes) ===== */
+    /* ===== COMPOSER ===== */
     .composer{
       position: fixed; left:0; right:0; bottom:0; z-index:12;
       padding: 8px 10px calc(env(safe-area-inset-bottom) + 8px);
@@ -218,31 +173,30 @@
       border-top:1px solid var(--line);
     }
     .composer-inner{
-      max-width: 900px; margin:0 auto; display:flex; gap:8px; align-items:center;
-      background: #12151c; border:1px solid var(--line); border-radius: 12px; padding: 6px;
+      max-width:900px; margin:0 auto; display:flex; gap:8px; align-items:center;
+      background:#12151c; border:1px solid var(--line); border-radius:12px; padding:6px;
       box-shadow: var(--shadow-sm);
     }
     .composer input[type="text"]{
-      flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.08);
-      padding: 0 12px; font-size:16px; /* >=16px evita zoom en iOS */
-      outline:none; color:#e8eaf0; background: rgba(255,255,255,.04);
+      flex:1; height:44px; border-radius:10px; border:1px solid rgba(255,255,255,.08);
+      padding:0 12px; font-size:16px; outline:none; color:#e8eaf0; background: rgba(255,255,255,.04);
     }
     .btn-send{
-      height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.12);
+      height:44px; border-radius:10px; border:1px solid rgba(255,255,255,.12);
       background: linear-gradient(180deg, var(--brand), var(--brand-2));
-      color:#000; font-weight:900; padding: 0 12px; cursor:pointer; box-shadow: var(--shadow-sm);
+      color:#000; font-weight:900; padding:0 12px; cursor:pointer; box-shadow: var(--shadow-sm);
     }
     .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
 
     .toast{
-      position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:20;
-      padding: 8px 10px; border-radius: 10px; color:#0f1115; font-weight:900;
-      background: #fff; border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
+      position: fixed; right:12px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:20;
+      padding:8px 10px; border-radius:10px; color:#0f1115; font-weight:900;
+      background:#fff; border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
     }
 
     @media (max-width:480px){
       .topbar{ font-size:18px; }
-      .btn-back, .chip-bot{ padding: 6px 8px; font-size:11px; }
+      .btn-back, .chip-bot{ padding:6px 8px; font-size:11px; }
       .switch-label{ font-size:11px; }
     }
   </style>
@@ -265,7 +219,6 @@
       {% set company_label = bot %}
     {% endif %}
 
-    <!-- Barra superior mínima -->
     <div class="actions">
       <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ Volver</a>
       <div class="chip-bot" title="{{ company_label }}">{{ company_label }}</div>
@@ -275,7 +228,6 @@
       </div>
     </div>
 
-    <!-- Chat (sin cambios visuales) -->
     <main id="chat" class="chat"
           data-bot="{{ bot }}"
           data-numero="{{ numero }}"
@@ -289,7 +241,6 @@
       </div>
     </main>
 
-    <!-- Composer para responder -->
     <form id="composer" class="composer" autocomplete="off">
       <div class="composer-inner">
         <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
@@ -316,7 +267,7 @@
       let bootstrap = true;
       const NEAR_PX = 200;
       let userNearBottom = true;
-      let botEnabled = true; // por defecto
+      let botEnabled = true;
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
@@ -338,13 +289,12 @@
       const bot    = encodeURIComponent(botRaw);
       const numero = encodeURIComponent(numeroRaw);
       const apiBase   = `/api/chat/${bot}/${numero}`;
-      const apiToggle = `/api/conversation_bot`;  // si lo usas
-      const apiManual = `/api/send_manual`;       // para enviar como admin
+      const apiToggle = `/api/conversation_bot`;
+      const apiManual = `/api/send_manual`;
 
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
-        div.className = `bubble ${tipo === 'user' ? 'user' : (tipo === 'admin' ? 'user' : 'bot')}`;
-        /* nota: mostramos admin con estilo 'user' para distinguir de bot */
+        div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
         div.textContent = texto || '';
         stackEl.appendChild(div);
       }
@@ -377,8 +327,7 @@
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
             for (const m of data.mensajes){
-              const tipo = (m.tipo === 'user') ? 'user' : (m.tipo === 'admin' ? 'user' : 'bot');
-              appendMessage(tipo, m.texto);
+              appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
             }
             if (userNearBottom) scrollToBottom(true);
 
@@ -392,7 +341,7 @@
         }catch(e){ /* silencio */ }
       }
 
-      // Toggle del switch (si usas el endpoint)
+      // Toggle del switch
       async function toggleClick(){
         try{
           const newVal = !botEnabled;
@@ -402,16 +351,16 @@
             credentials: 'same-origin',
             body: JSON.stringify({ bot: botRaw, numero: numeroRaw, enabled: newVal })
           });
-          if (!res.ok){ setSwitchState(botEnabled); return; }
+          if (!res.ok){ return; }
           const out = await res.json().catch(()=>({}));
           if (out && typeof out.enabled === 'boolean'){ setSwitchState(out.enabled); }
           else { setSwitchState(newVal); }
-        }catch(_){ setSwitchState(botEnabled); }
+        }catch(_){ /* noop */ }
       }
       switchEl.addEventListener('click', toggleClick);
       switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
 
-      // Enviar manual como admin
+      // Enviar manual SIN pintar localmente (evita duplicados). Confiamos en el polling.
       composerEl.addEventListener('submit', async (ev)=>{
         ev.preventDefault();
         const texto = (inputEl.value || '').trim();
@@ -424,15 +373,15 @@
             credentials: 'same-origin',
             body: JSON.stringify({ bot: botRaw, numero: numeroRaw, texto })
           });
-          if (!res.ok){ showToast('Error al enviar'); btnSend.disabled = false; return; }
-          const out = await res.json().catch(()=>({}));
-          if (out && out.ok){
-            appendMessage('admin', texto);
+          if (res.ok){
             inputEl.value = '';
-            scrollToBottom(true);
+            // IMPORTANTE: no llamamos appendMessage aquí.
+            // Hacemos un tick manual para que aparezca 1 sola vez desde el backend.
+            await tick();
+            if (userNearBottom) scrollToBottom(true);
             showToast('Enviado');
           }else{
-            showToast('Fallo al enviar');
+            showToast('Error al enviar');
           }
         }catch(_){ showToast('Error de red'); }
         finally{ btnSend.disabled = false; }
