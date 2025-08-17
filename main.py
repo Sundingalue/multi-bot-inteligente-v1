@@ -15,6 +15,9 @@ import glob
 import random
 import hashlib
 
+# 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
+from twilio.rest import Client as TwilioClient
+
 # 🔹 Firebase
 import firebase_admin
 from firebase_admin import credentials, db
@@ -26,6 +29,10 @@ load_dotenv("/etc/secrets/.env")
 load_dotenv()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or ""
+
+# Twilio REST creds (necesarias para enviar mensajes OUTBOUND)
+TWILIO_ACCOUNT_SID = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+TWILIO_AUTH_TOKEN  = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
 
 # Fallbacks globales (se usan SOLO si el bot no trae link en su JSON ni hay variable de entorno)
 BOOKING_URL_FALLBACK = (os.environ.get("BOOKING_URL", "").strip())
@@ -77,6 +84,19 @@ if not firebase_admin._apps:
     else:
         firebase_admin.initialize_app(cred)
         print("⚠️ Firebase inicializado sin databaseURL (db.reference fallará hasta configurar FIREBASE_DB_URL).")
+
+# =======================
+#  Twilio REST Client (para respuestas manuales)
+# =======================
+twilio_client = None
+if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+    try:
+        twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        print("[BOOT] Twilio REST client inicializado.")
+    except Exception as e:
+        print(f"⚠️ No se pudo inicializar Twilio REST client: {e}")
+else:
+    print("⚠️ TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN no configurados. El envío manual desde panel no funcionará hasta configurarlos.")
 
 # =======================
 #  Cargar bots desde carpeta bots/
@@ -139,6 +159,13 @@ def _get_bot_cfg_by_name(name: str):
 
 def _get_bot_cfg_by_number(to_number: str):
     return bots_config.get(to_number)
+
+def _get_bot_number_by_name(bot_name: str) -> str:
+    """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
+    for number_key, cfg in bots_config.items():
+        if isinstance(cfg, dict) and cfg.get("name", "").strip().lower() == (bot_name or "").strip().lower():
+            return number_key
+    return ""
 
 def _split_sentences(text: str):
     parts = re.split(r'(?<=[\.\!\?])\s+', text.strip())
@@ -381,7 +408,7 @@ def fb_clear_historial(bot_nombre, numero):
         return False
 
 # =======================
-#  ✅ Kill-Switch: estado ON/OFF desde Firebase
+#  ✅ Kill-Switch GLOBAL por bot
 # =======================
 def fb_is_bot_on(bot_name: str) -> bool:
     try:
@@ -393,6 +420,34 @@ def fb_is_bot_on(bot_name: str) -> bool:
     except Exception as e:
         print(f"⚠️ Error leyendo status del bot '{bot_name}': {e}")
     return True  # si no hay dato, asumimos ON
+
+# =======================
+#  ✅ NUEVO: Kill-Switch por conversación (ON/OFF individual)
+# =======================
+def fb_is_conversation_on(bot_nombre: str, numero: str) -> bool:
+    """Devuelve True si la conversación tiene el bot activado; si no existe el flag, asume ON."""
+    try:
+        ref = _lead_ref(bot_nombre, numero)
+        lead = ref.get() or {}
+        val = lead.get("bot_enabled", None)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ("on", "true", "1", "yes", "si", "sí")
+    except Exception as e:
+        print(f"⚠️ Error leyendo bot_enabled en {bot_nombre}/{numero}: {e}")
+    return True
+
+def fb_set_conversation_on(bot_nombre: str, numero: str, enabled: bool):
+    try:
+        ref = _lead_ref(bot_nombre, numero)
+        cur = ref.get() or {}
+        cur["bot_enabled"] = bool(enabled)
+        ref.set(cur)
+        return True
+    except Exception as e:
+        print(f"⚠️ Error guardando bot_enabled en {bot_nombre}/{numero}: {e}")
+        return False
 
 # =======================
 #  🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
@@ -794,6 +849,79 @@ def api_delete_chat():
     return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
 
 # =======================
+#  ✅ NUEVO: API para responder MANUALMENTE desde el panel
+# =======================
+@app.route("/api/send_manual", methods=["POST"])
+def api_send_manual():
+    """
+    JSON esperado: { "bot": "Sara", "numero": "whatsapp:+1786...", "texto": "Tu mensaje" }
+    Envía un mensaje por WhatsApp usando Twilio REST, lo guarda en Firebase como tipo "admin".
+    """
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+
+    data = request.json or {}
+    bot_nombre = (data.get("bot") or "").strip()
+    numero = (data.get("numero") or "").strip()
+    texto = (data.get("texto") or "").strip()
+
+    if not bot_nombre or not numero or not texto:
+        return jsonify({"error": "Parámetros inválidos (bot, numero, texto)"}), 400
+
+    bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
+    if not _user_can_access_bot(bot_normalizado):
+        return jsonify({"error": "No autorizado para este bot"}), 403
+
+    from_number = _get_bot_number_by_name(bot_normalizado)  # ej: "whatsapp:+1346..."
+    if not from_number:
+        return jsonify({"error": f"No se encontró el número del bot para '{bot_normalizado}'"}), 400
+
+    if not twilio_client:
+        return jsonify({"error": "Twilio REST no configurado (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN)"}), 500
+
+    try:
+        # Enviar vía Twilio REST
+        twilio_client.messages.create(
+            from_=from_number,
+            to=numero,
+            body=texto
+        )
+        # Guardar en historial como "admin"
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fb_append_historial(bot_normalizado, numero, {"tipo": "admin", "texto": texto, "hora": ahora})
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"❌ Error enviando manualmente por Twilio: {e}")
+        return jsonify({"error": "Fallo enviando el mensaje"}), 500
+
+# =======================
+#  ✅ NUEVO: API para ON/OFF por conversación (botón en chat)
+# =======================
+@app.route("/api/conversation_bot", methods=["POST"])
+def api_conversation_bot():
+    """
+    JSON: { "bot": "Sara", "numero": "whatsapp:+1786...", "enabled": true/false }
+    Guarda el flag 'bot_enabled' en Firebase por conversación.
+    """
+    if not session.get("autenticado"):
+        return jsonify({"error": "No autenticado"}), 401
+
+    data = request.json or {}
+    bot_nombre = (data.get("bot") or "").strip()
+    numero = (data.get("numero") or "").strip()
+    enabled = data.get("enabled", None)
+
+    if enabled is None or not bot_nombre or not numero:
+        return jsonify({"error": "Parámetros inválidos (bot, numero, enabled)"}), 400
+
+    bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
+    if not _user_can_access_bot(bot_normalizado):
+        return jsonify({"error": "No autorizado para este bot"}), 403
+
+    ok = fb_set_conversation_on(bot_normalizado, numero, bool(enabled))
+    return jsonify({"ok": bool(ok), "enabled": bool(enabled)})
+
+# =======================
 #  Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
@@ -836,10 +964,15 @@ def whatsapp_bot():
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
 
-    # 🔒 KILL-SWITCH: si el bot está OFF, no respondemos
+    # 🔒 Kill-Switch GLOBAL por bot
     bot_name = bot.get("name", "")
     if bot_name and not fb_is_bot_on(bot_name):
         return str(MessagingResponse())  # Twilio <Response/> vacío
+
+    # 🔒 ✅ NUEVO: Kill-Switch POR CONVERSACIÓN
+    if not fb_is_conversation_on(bot_name, sender_number):
+        # Bot OFF para esta conversación: no responder, solo registrar
+        return str(MessagingResponse())
 
     response = MessagingResponse()
     msg = response.message()
@@ -1095,7 +1228,10 @@ def api_chat(bot, numero):
                 last_ts = ts
         nuevos = [{"texto": reg.get("texto", ""), "hora": reg.get("hora", ""), "tipo": reg.get("tipo", "user"), "ts": _hora_to_epoch_ms(reg.get("hora", ""))} for reg in historial]
 
-    return jsonify({"mensajes": nuevos, "last_ts": last_ts})
+    # ✅ Adjuntamos estado ON/OFF por conversación para que el front muestre el botón correcto
+    bot_enabled = fb_is_conversation_on(bot_normalizado, numero)
+
+    return jsonify({"mensajes": nuevos, "last_ts": last_ts, "bot_enabled": bool(bot_enabled)})
 
 # =======================
 #  Run
