@@ -173,11 +173,18 @@
       margin-top: 8px;
     }
 
+    /* ===== Acciones (borrar / ver) ===== */
+    .lead-actions{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      margin-top: 12px;
+    }
+
     /* Botón borrar conversación */
     .btn-delete{
-      margin-top: 10px;
       font-size: 14px;
-      padding: 8px 10px;
+      padding: 10px 12px;
       border-radius: 10px;
       border: 1.5px solid #b00020;
       background-color: #fff;
@@ -186,9 +193,42 @@
       cursor: pointer;
       box-shadow: var(--shadow);
       transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      display:inline-flex; align-items:center; justify-content:center;
+      text-decoration:none;
     }
     .btn-delete:hover{ background:#ffe8ec; }
     .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
+    /* Botón ver conversación */
+    .btn-view{
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1.5px solid var(--brand);
+      background-color: #fff;
+      color: var(--brand);
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      display:inline-flex; align-items:center; justify-content:center;
+      text-decoration:none;
+      white-space: nowrap; /* evita quiebres del texto */
+    }
+    .btn-view:hover{ background:#fff8e1; }
+    .btn-view:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
+    /* Responsive móvil: dos columnas iguales para los dos botones */
+    @media (max-width: 520px){
+      .lead-actions{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap:10px;
+      }
+      .btn-delete, .btn-view{
+        width:100%;
+      }
+    }
 
     /* En pantallas anchas, alineamos controles a los lados */
     @media (min-width: 720px){
@@ -239,7 +279,11 @@
             </select>
           </div>
 
-          <button class="btn-delete" onclick="borrarConversacion('{{ lead.bot }}','{{ lead.numero }}')">🗑️ Borrar conversación</button>
+          <!-- Acciones: borrar + ver -->
+          <div class="lead-actions">
+            <button class="btn-delete" onclick="borrarConversacion('{{ lead.bot }}','{{ lead.numero }}')">🗑️ Borrar conversación</button>
+            <a class="btn-view" href="{{ url_for('chat_general', bot=lead.bot, numero=lead.numero) }}">👁️ Ver conversación</a>
+          </div>
         </div>
       {% endfor %}
     {% else %}
