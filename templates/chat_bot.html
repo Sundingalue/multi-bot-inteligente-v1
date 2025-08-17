@@ -4,161 +4,178 @@
   <meta charset="UTF-8" />
   <title>Panel de Conversación</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0f1115" />
+  <meta name="theme-color" content="#F7BD02" />
   <style>
-    /* =========================
-       THEME — delicado y sobrio
-       ========================= */
     :root{
-      --brand:#F7BD02;          /* Amarillo IN */
-      --brand-2:#E3AE00;
-      --bg:#0f1115;             /* Fondo principal */
-      --card:#12151c;           /* Tarjetas / zonas elevadas */
-      --ink:#e8eaf0;            /* Texto principal */
-      --ink-dim:#b6bbcb;        /* Texto secundario */
-      --line:rgba(255,255,255,.08);
-      --radius:14px; --radius-lg:18px;
-      --shadow-lg: 0 20px 60px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.25);
-      --shadow-sm: 0 8px 24px rgba(0,0,0,.22);
-      --success:#2aa26b;
-      --danger:#d64545;
+      --brand:#F7BD02; --brand-2:#E3AE00;
+      --ink:#0B0B0B; --paper:#FFFFFF;
+      --radius:16px; --radius-lg:22px;
+      --shadow-xl: 0 30px 60px rgba(0,0,0,.35);
+      --shadow-md: 0 16px 28px rgba(0,0,0,.22);
+      --shadow-sm: 0 8px 16px rgba(0,0,0,.18);
+      --line: rgba(255,255,255,.14);
+      --success:#2aa26b; --danger:#d64545;
     }
     *{ box-sizing:border-box; }
     html,body{
       margin:0; padding:0; height:100%;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      background: var(--bg);
-      color: var(--ink);
+      color: var(--ink); background: #0e0e0e;
     }
-    .app{ min-height:100vh; display:flex; flex-direction:column; position:relative; isolation:isolate; }
 
-    /* Fondo con textura sutil + “bloom” */
+    /* ===== LAYERS ===== */
+    .app{ min-height:100vh; display:flex; flex-direction:column; position: relative; isolation: isolate; }
     .app::before{
-      content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+      content:""; position: fixed; inset: 0; z-index: -3; pointer-events:none;
       background:
-        radial-gradient(60% 40% at 15% 10%, rgba(247,189,2,.08), transparent 60%),
-        radial-gradient(60% 40% at 85% 90%, rgba(227,174,0,.07), transparent 60%),
-        linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,.0)),
-        repeating-linear-gradient(135deg, rgba(255,255,255,.02) 0 2px, transparent 2px 16px);
+        radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
+        radial-gradient(circle at 25% 25%, rgba(255,255,255,.06) 1px, transparent 1.5px) 0 0/22px 22px,
+        radial-gradient(circle at 75% 75%, rgba(0,0,0,.12) 1px, transparent 1.5px) 0 0/22px 22px,
+        repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 2px, transparent 2px 20px),
+        url('{{ url_for("static", filename="img/fondo_chat_in_houston.jpg") }}');
+      background-size: cover, cover, 22px 22px, 22px 22px, 20px 20px, cover;
+      background-position: center top, center top, center, center, center, center top;
+      background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
     }
+    .app::after{
+      content:""; position: fixed; inset: clamp(8px, 2vw, 16px);
+      border-radius: var(--radius-lg); z-index: -2; pointer-events:none;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
+        linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
+      border: 1px solid transparent; box-shadow: var(--shadow-xl);
+    }
+    .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+    .brand-ribbon::before,.brand-ribbon::after{
+      content:""; position: absolute; left: -10%; right: -10%; height: 10px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-2));
+      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25)); opacity:.65;
+    }
+    .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
+    .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
-    /* Topbar flotante */
+    /* ===== TOP BAR ===== */
     .topbar{
-      position:sticky; top:0; z-index:10;
+      position:sticky; top:0; z-index:8;
       background:
-        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)),
-        rgba(10,12,16,.7);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom:1px solid var(--line);
-      padding: calc(env(safe-area-inset-top)+14px) 18px 12px;
-      text-align:center; letter-spacing:.3px; text-transform:uppercase;
-      font-weight: 800; font-size: clamp(20px, 2.8vw, 24px);
-      color: var(--ink);
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
+        rgba(10,10,10,.82);
+      backdrop-filter: blur(6px);
+      color:#fff;
+      padding: calc(env(safe-area-inset-top) + 10px) 12px 8px;
+      text-align:center;
+      font-weight: 900; letter-spacing:.35px; font-size: 22px; text-transform: uppercase;
+      border-bottom: 1px solid rgba(255,255,255,.18);
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+      border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* Cinta de acciones */
+    /* ===== ACTIONS (más compacto y alineado) ===== */
     .actions{
-      position:sticky; top: calc(env(safe-area-inset-top) + 62px); z-index:9;
-      display:flex; align-items:center; gap:12px; justify-content:space-between;
-      padding: 10px 14px;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
-        rgba(10,12,16,.5);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border-bottom:1px solid var(--line);
+      position:sticky;
+      top: calc(env(safe-area-inset-top) + 48px);
+      z-index:7;
+      display:grid;
+      grid-template-columns: auto 1fr auto auto;
+      align-items:center; gap:10px;
+      padding: 8px 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
+      border-bottom: 1px solid rgba(255,255,255,.16);
+      backdrop-filter: blur(4px);
     }
-    .btn{
-      display:inline-flex; align-items:center; gap:10px;
-      border-radius: 12px; padding: 10px 14px; text-decoration:none; cursor:pointer;
-      border:1px solid var(--line);
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02));
-      color: var(--ink);
-      font-weight: 800;
-      box-shadow: var(--shadow-sm);
-      transition: transform .06s ease, box-shadow .2s ease, opacity .2s ease;
+    .btn-xs{
+      display:inline-flex; align-items:center; gap:8px;
+      padding: 8px 10px; border-radius: 10px;
+      font-size: 13px; font-weight: 800; text-decoration:none;
+      background: linear-gradient(180deg, #fff, #f3f3f3) padding-box,
+                  linear-gradient(180deg, rgba(0,0,0,.18), rgba(255,255,255,.4)) border-box;
+      border: 1px solid transparent; color:#111; box-shadow: var(--shadow-sm);
+      transition: transform .06s ease, box-shadow .2s ease;
+      white-space: nowrap;
     }
-    .btn:active{ transform: translateY(1px); box-shadow: 0 6px 18px rgba(0,0,0,.25); }
-    .chip{
-      display:flex; align-items:center; justify-content:center; gap:10px; flex:1;
-      min-height:42px; padding: 10px 14px;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.00)),
-        var(--card);
-      border:1px solid var(--line); border-radius:12px;
-      color: var(--ink-dim); font-weight:900; text-transform:uppercase;
-      box-shadow: var(--shadow-sm);
+    .btn-xs:active{ transform: translateY(1px); box-shadow: 0 8px 16px rgba(0,0,0,.18); }
+
+    .chip-bot{
+      justify-self: center;
+      display:flex; align-items:center; justify-content:center;
+      background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)), #0e0e0e;
+      color: var(--brand);
+      padding: 8px 12px; border-radius: 10px;
+      font-size: 12px; font-weight: 900; text-transform: uppercase;
+      min-width: 42%; border: 1px solid rgba(255,255,255,.14);
+      text-shadow: 0 1px 0 rgba(0,0,0,.35);
     }
 
-    /* Toggle elegante */
+    /* Switch pequeño */
     .switch{
-      --w:56px; --h:30px; --p:3px;
+      --w:44px; --h:24px; --p:3px;
       position:relative; width:var(--w); height:var(--h);
       border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-      cursor:pointer; flex-shrink:0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer;
+      justify-self: end;
     }
     .switch::after{
-      content:"";
-      position:absolute; top:var(--p); left:var(--p);
+      content:""; position:absolute; top:var(--p); left:var(--p);
       width: calc(var(--h) - var(--p)*2); height: calc(var(--h) - var(--p)*2);
-      border-radius: 50%; background: #fff;
-      box-shadow: 0 6px 18px rgba(0,0,0,.35);
-      transition: transform .22s ease, background .2s ease;
+      border-radius: 50%; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,.32);
+      transition: transform .18s ease, background .2s ease;
     }
     .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
-    .switch-label{
-      font-size:12.5px; font-weight:800; color: var(--ink-dim);
-      user-select:none;
-    }
-    .toolbar{ display:flex; align-items:center; gap:10px; }
+    .switch-label{ font-size:12px; font-weight:800; color:#ddd; margin-left:6px; }
 
-    /* Área del chat */
+    /* ===== CHAT (scroll) ===== */
     .chat{
-      flex:1 1 auto; position:relative; z-index:1; overflow:auto;
-      padding: 18px 16px 110px;
+      flex:1 1 auto; position: relative; z-index: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding: 16px 14px 110px; /* extra bottom para el composer */
+    }
+    .chat::before{
+      content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
       background:
-        radial-gradient(500px 300px at 15% 0%, rgba(255,255,255,.03), transparent 60%),
-        radial-gradient(500px 300px at 85% 100%, rgba(255,255,255,.03), transparent 60%);
+        linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
+        linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
+      mix-blend-mode: overlay; opacity:.45;
     }
-    .stack{ display:flex; flex-direction:column; gap:16px; max-width:900px; margin:0 auto; }
+    .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:14px; padding: 4px; }
 
-    /* Burbujas */
+    /* ===== BUBBLES (más chicas y fijas) ===== */
     .bubble{
-      max-width: 85%;
-      padding: 12px 14px; border-radius: 14px; line-height: 1.55;
-      font-size: 15.5px; word-break: break-word; white-space: pre-wrap;
-      border:1px solid var(--line);
-      box-shadow: 0 10px 24px rgba(0,0,0,.25);
+      max-width: 82%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      font-size: 15px; line-height: 1.5;
+      box-shadow: var(--shadow-md);
+      position: relative;
+      border: 1px solid rgba(0,0,0,.08);
+      word-break: break-word; white-space: pre-wrap;
     }
+    .bubble::before{ display:none; } /* quitamos la “pestaña” para compactar */
+    .bubble::after{ display:none; }  /* quitamos brillo extra para que no “agrande” */
+
     .bot{
-      align-self:flex-start;
-      color:#e9ecf4;
-      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)), #141821;
-      border-color: rgba(247,189,2,.25);
-      box-shadow: 0 0 0 1px rgba(247,189,2,.22) inset, 0 10px 24px rgba(0,0,0,.25);
+      align-self: flex-start; color: #fefefe;
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow: 0 0 0 1px rgba(247,189,2,.22) inset, var(--shadow-md);
     }
     .user{
-      align-self:flex-end;
-      color:#0f1115;
-      background: linear-gradient(180deg, #ffffff, #f6f7fb);
-      border-color: rgba(0,0,0,.08);
+      align-self: flex-end;
+      background: linear-gradient(180deg, #fff, #f7f7f7);
+      color: #151515; border: 1px solid rgba(0,0,0,.08);
+      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md);
     }
     .admin{
       align-self:flex-end;
-      color:#0d3a24;
-      background: linear-gradient(180deg, #e9fff4, #e0f7ee);
-      border-color: rgba(42,162,107,.35);
+      color:#0d3a24; background: linear-gradient(180deg, #e9fff4, #e0f7ee);
+      border:1px solid rgba(42,162,107,.35);
       box-shadow: 0 0 0 1px rgba(42,162,107,.25) inset, 0 10px 24px rgba(0,0,0,.2);
     }
 
-    /* Composer fijo */
+    /* ===== COMPOSER (dejamos el que te gustó) ===== */
     .composer{
-      position:fixed; left:0; right:0; bottom:0; z-index:12;
+      position: fixed; left:0; right:0; bottom:0; z-index:12;
       padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
       background:
         linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
@@ -168,12 +185,12 @@
     }
     .composer-inner{
       max-width: 900px; margin:0 auto; display:flex; gap:10px; align-items:center;
-      background: var(--card); border:1px solid var(--line); border-radius: 14px; padding: 8px;
+      background: #12151c; border:1px solid var(--line); border-radius: 14px; padding: 8px;
       box-shadow: var(--shadow-sm);
     }
     .composer input[type="text"]{
       flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.06);
-      padding: 0 12px; font-size:15.5px; outline:none; color:var(--ink);
+      padding: 0 12px; font-size:15.5px; outline:none; color:#e8eaf0;
       background: rgba(255,255,255,.04);
     }
     .btn-send{
@@ -191,17 +208,20 @@
       border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
     }
 
-    @media (max-width:520px){
-      .bubble{ font-size:15px; }
-      .chip{ min-width: 40%; }
+    @media (max-width:480px){
+      .topbar{ font-size:20px; }
+      .chip-bot{ min-width: 38%; font-size:11px; }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <div class="topbar">Panel de conversación</div>
+    <!-- Cintas sutiles -->
+    <div class="brand-ribbon" aria-hidden="true"></div>
 
-    {# ===== Etiqueta de compañía con fallbacks ===== #}
+    <div class="topbar">PANEL DE CONVERSACIÓN</div>
+
+    {# ==== LABEL DE COMPAÑÍA ==== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -215,14 +235,14 @@
       {% set company_label = bot %}
     {% endif %}
 
+    <!-- Barra compacta y alineada -->
     <div class="actions">
-      <a class="btn" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver">⟵ Volver</a>
-      <div class="chip">{{ company_label }}</div>
-
-      <!-- Toggle ON/OFF más delicado -->
-      <div class="toolbar">
-        <div class="switch-label" id="switchText">BOT OFF</div>
+      <a class="btn-xs" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver">⟵ Volver</a>
+      <div class="chip-bot">{{ company_label }}</div>
+      <a class="btn-xs" href="#" title="Send your live">Send your live</a>
+      <div style="display:flex; align-items:center;">
         <div id="switch" class="switch" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot"></div>
+        <span id="switchText" class="switch-label">BOT OFF</span>
       </div>
     </div>
 
@@ -237,7 +257,7 @@
       </div>
     </main>
 
-    <!-- Composer -->
+    <!-- Composer moderno (se mantiene) -->
     <form id="composer" class="composer" autocomplete="off">
       <div class="composer-inner">
         <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
@@ -316,7 +336,6 @@
           if(!res.ok) return;
           const data = await res.json();
 
-          // Estado del toggle desde backend
           if (typeof data.bot_enabled === 'boolean') setSwitchState(data.bot_enabled);
 
           if (bootstrap){
@@ -345,7 +364,7 @@
               if (maxTs2 > lastTs) lastTs = maxTs2;
             }
           }
-        }catch(e){ /* silencioso */ }
+        }catch(e){ /* silencio */ }
       }
 
       // Toggle click
