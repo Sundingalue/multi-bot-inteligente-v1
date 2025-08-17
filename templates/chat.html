@@ -26,8 +26,8 @@
       background: #0e0e0e;
     }
 
+    /* ===== LAYERS (NO TOCAR) ===== */
     .app{ min-height:100vh; display:flex; flex-direction:column; position: relative; isolation:isolate; }
-
     .app::before{
       content:""; position: fixed; inset: 0; z-index: -3; pointer-events:none;
       background:
@@ -42,7 +42,6 @@
       background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, no-repeat;
       filter: saturate(1) contrast(1);
     }
-
     .app::after{
       content:""; position: fixed; inset: clamp(8px, 2vw, 16px); border-radius: var(--radius-lg);
       z-index:-2; pointer-events:none;
@@ -51,7 +50,6 @@
         linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
       border: 1px solid transparent; box-shadow: var(--shadow-xl);
     }
-
     .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
     .brand-ribbon::before,.brand-ribbon::after{
       content:""; position: absolute; left: -10%; right: -10%; height: 10px;
@@ -61,7 +59,7 @@
     .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
     .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
 
-    /* ===== TOP BAR: ahora muestra el nombre del bot/empresa ===== */
+    /* ===== TOP BAR: NOMBRE DE LA EMPRESA/BOT ===== */
     .topbar{
       position:sticky; top:0; z-index:5;
       background:
@@ -79,44 +77,50 @@
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* ===== ACTIONS (igual que antes) ===== */
+    /* ===== ACTIONS: SOLO Volver (izq) + Switch (der) ===== */
     .actions{
       position:sticky; top: calc(env(safe-area-inset-top) + 58px); z-index:4;
-      display:flex; align-items:center; justify-content:space-between; gap:15px;
-      padding: 10px 18px 12px;
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding: 8px 12px;
       background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
       border-bottom: 1px solid rgba(255,255,255,.16);
       backdrop-filter: blur(4px);
     }
     .btn-back{
-      display:inline-flex; align-items:center; gap:12px;
+      display:inline-flex; align-items:center; gap:10px;
       background:
         linear-gradient(180deg, #fff, #f1f1f1) padding-box,
         linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      padding: 14px 20px;
-      border-radius: 14px; border: 1px solid transparent;
-      font-weight: 900; text-decoration:none; box-shadow: var(--shadow-sm);
-      transition: transform .06s ease, box-shadow .2s ease, filter .2s ease;
+      padding: 12px 14px;
+      border-radius: 12px; border: 1px solid transparent;
+      font-weight: 900; font-size: 14px; text-decoration:none; box-shadow: var(--shadow-sm);
+      white-space: nowrap;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
 
-    .chip-bot{
-      display:flex; align-items:center; justify-content:center; flex:1;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
-        #0e0e0e;
-      color: var(--brand);
-      padding: 14px 20px; border-radius: 14px; font-weight: 900; text-transform: uppercase;
-      box-shadow: var(--shadow-sm); min-width: 42%;
-      border: 1px solid rgba(255,255,255,.14); text-shadow: 0 2px 0 rgba(0,0,0,.35);
+    .switch-wrap{ display:inline-flex; align-items:center; gap:8px; }
+    .switch{
+      --w:48px; --h:28px; --p:3px;
+      position:relative; width:var(--w); height:var(--h);
+      border-radius:999px; background:#2a2f3a; border:1px solid var(--line);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08); cursor:pointer; flex-shrink:0;
     }
+    .switch::after{
+      content:""; position:absolute; top:var(--p); left:var(--p);
+      width: calc(var(--h) - var(--p)*2); height: calc(var(--h) - var(--p)*2);
+      border-radius: 50%; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,.32);
+      transition: transform .18s ease, background .2s ease;
+    }
+    .switch.on{ background: rgba(42,162,107,.25); border-color: rgba(42,162,107,.6); }
+    .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
+    .switch-label{ font-size:13px; font-weight:800; color:#ddd; }
 
-    /* ===== CHAT ===== */
+    /* ===== CHAT (mismo diseño) ===== */
     .chat{
       flex:1 1 auto; position: relative; z-index: 1;
       overflow-y: auto; -webkit-overflow-scrolling: touch;
-      padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
+      padding: 22px 18px calc(env(safe-area-inset-bottom) + 96px); /* espacio para composer */
     }
     .chat::before{
       content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
@@ -125,9 +129,7 @@
         linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
       mix-blend-mode: overlay; opacity:.55;
     }
-
     .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:24px; padding: 6px; }
-
     .bubble{
       max-width: 92%; padding: 18px 20px; border-radius: 18px;
       font-size: 16.5px; line-height: 1.55; box-shadow: var(--shadow-md);
@@ -143,7 +145,6 @@
       background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
       mix-blend-mode: screen;
     }
-
     .bot{
       align-self: flex-start; color: #fefefe;
       background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
@@ -156,13 +157,41 @@
       box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md);
     }
 
-    .stack > .bot + .bot::before, .stack > .user + .user::before{
-      width: 72px; background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(0,0,0,.12)); opacity:.9;
+    /* ===== COMPOSER (input + Enviar) ===== */
+    .composer{
+      position: fixed; left:0; right:0; bottom:0; z-index:12;
+      padding: 8px 10px calc(env(safe-area-inset-bottom) + 8px);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
+        rgba(10,12,16,.65);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border-top:1px solid var(--line);
+    }
+    .composer-inner{
+      max-width:900px; margin:0 auto; display:flex; gap:8px; align-items:center;
+      background:#12151c; border:1px solid var(--line); border-radius:12px; padding:6px;
+      box-shadow: var(--shadow-sm);
+    }
+    .composer input[type="text"]{
+      flex:1; height:44px; border-radius:10px; border:1px solid rgba(255,255,255,.08);
+      padding:0 12px; font-size:16px; outline:none; color:#e8eaf0; background: rgba(255,255,255,.04);
+    }
+    .btn-send{
+      height:44px; border-radius:10px; border:1px solid rgba(255,255,255,.12);
+      background: linear-gradient(180deg, var(--brand), var(--brand-2));
+      color:#000; font-weight:900; padding:0 12px; cursor:pointer; box-shadow: var(--shadow-sm);
+    }
+    .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
+
+    .toast{
+      position: fixed; right:12px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:20;
+      padding:8px 10px; border-radius:10px; color:#0f1115; font-weight:900;
+      background:#fff; border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
     }
 
     @media (max-width:480px){
-      .topbar{ font-size:22px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; }
-      .btn-back, .chip-bot{ padding: 12px 16px; }
+      .btn-back{ padding: 11px 12px; font-size:13px; }
+      .switch-label{ font-size:12px; }
       .bubble{ font-size:15.5px; padding:16px 18px; }
     }
   </style>
@@ -185,16 +214,19 @@
       {% set company_label = bot %}
     {% endif %}
 
-    <!-- TOP BAR: ahora muestra el nombre del bot/empresa -->
+    <!-- Topbar: SOLO el nombre -->
     <div class="topbar">{{ company_label }}</div>
 
-    <!-- Acciones (sin cambios de lógica) -->
+    <!-- Acciones: Volver + Switch -->
     <div class="actions">
-      <a class="btn-back" href="{{ url_for('panel') }}">⟵ VOLVER</a>
-      <div class="chip-bot">{{ company_label }}</div>
+      <a class="btn-back" href="{{ url_for('panel') }}" aria-label="Volver al panel general">⟵ Volver</a>
+      <div class="switch-wrap">
+        <div id="switch" class="switch" role="button" tabindex="0" aria-pressed="false" title="Activar/Desactivar bot"></div>
+        <span id="switchText" class="switch-label">BOT OFF</span>
+      </div>
     </div>
 
-    <!-- ÚNICO contenedor que hace scroll -->
+    <!-- Chat -->
     <main id="chat" class="chat" data-bot="{{ bot }}" data-numero="{{ numero }}">
       <div class="stack" id="stack">
         {% for msg in mensajes %}
@@ -204,42 +236,58 @@
         {% endfor %}
       </div>
     </main>
+
+    <!-- Composer -->
+    <form id="composer" class="composer" autocomplete="off">
+      <div class="composer-inner">
+        <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
+        <button id="btnSend" class="btn-send" type="submit">Enviar</button>
+      </div>
+    </form>
+
+    <div id="toast" class="toast" role="status" aria-live="polite">Listo</div>
   </div>
 
   <script>
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
+      const switchEl = document.getElementById('switch');
+      const switchText = document.getElementById('switchText');
+      const composerEl = document.getElementById('composer');
+      const inputEl = document.getElementById('inputText');
+      const btnSend = document.getElementById('btnSend');
+      const toastEl = document.getElementById('toast');
       if (!chatEl || !stackEl) return;
 
       let lastTs = 0;
       let bootstrap = true;
       const NEAR_PX = 200;
       let userNearBottom = true;
+      let botEnabled = true;
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
         return distance <= NEAR_PX;
       }
-
       function scrollToBottom(smooth=true){
         const last = stackEl.lastElementChild;
         if (!last) return;
         requestAnimationFrame(() => {
-          try{
-            last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
-          }catch(_){
-            chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-          }
+          try{ last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' }); }
+          catch(_){ chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); }
         });
       }
-
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
       setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
-      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
-      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
-      const apiBase = `/api/chat/${bot}/${numero}`;
+      const botRaw    = chatEl.getAttribute('data-bot') || '';
+      const numeroRaw = chatEl.getAttribute('data-numero') || '';
+      const bot    = encodeURIComponent(botRaw);
+      const numero = encodeURIComponent(numeroRaw);
+      const apiBase   = `/api/chat/${bot}/${numero}`;
+      const apiToggle = `/api/conversation_bot`;
+      const apiManual = `/api/send_manual`;
 
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
@@ -248,11 +296,21 @@
         stackEl.appendChild(div);
       }
 
+      function setSwitchState(enabled){
+        botEnabled = !!enabled;
+        switchEl.classList.toggle('on', enabled);
+        switchEl.setAttribute('aria-pressed', String(!!enabled));
+        switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
+      }
+
       async function tick(){
         try{
           const res = await fetch(`${apiBase}?since=${lastTs}`, { credentials: 'same-origin' });
           if(!res.ok) return;
           const data = await res.json();
+
+          // Si tu API ya devuelve el estado del bot, lo reflejamos
+          if (typeof data.bot_enabled === 'boolean') setSwitchState(data.bot_enabled);
 
           if (bootstrap){
             let maxTs = typeof data.last_ts === 'number' ? data.last_ts : 0;
@@ -281,9 +339,58 @@
         }catch(e){ /* silencio */ }
       }
 
+      // Toggle ON/OFF (igual que chat_bot.html)
+      async function toggleClick(){
+        try{
+          const newVal = !botEnabled;
+          const res = await fetch(apiToggle, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, enabled: newVal })
+          });
+          if (!res.ok){ return; }
+          const out = await res.json().catch(()=>({}));
+          if (out && typeof out.enabled === 'boolean'){ setSwitchState(out.enabled); }
+          else { setSwitchState(newVal); }
+        }catch(_){ /* noop */ }
+      }
+      switchEl.addEventListener('click', toggleClick);
+      switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+
+      // Enviar manual SIN pintar local (evita duplicados; el polling lo trae)
+      composerEl.addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const texto = (inputEl.value || '').trim();
+        if (!texto) return;
+        btnSend.disabled = true;
+        try{
+          const res = await fetch(apiManual, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, texto })
+          });
+          if (res.ok){
+            inputEl.value = '';
+            await tick();
+            if (userNearBottom) scrollToBottom(true);
+            showToast('Enviado');
+          }else{
+            showToast('Error al enviar');
+          }
+        }catch(_){ showToast('Error de red'); }
+        finally{ btnSend.disabled = false; }
+      });
+
+      function showToast(text){
+        toastEl.textContent = text || 'Listo';
+        toastEl.style.display = 'block';
+        setTimeout(()=> toastEl.style.display = 'none', 1400);
+      }
+
       tick();
       setInterval(tick, 3000);
-
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
       });
