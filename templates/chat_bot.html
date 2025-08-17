@@ -34,14 +34,11 @@
       display:flex;
       flex-direction:column;
       position: relative;
-      isolation: isolate; /* stacking context */
+      isolation: isolate;
     }
     .app::before{
       content:"";
-      position: fixed; /* no se mueve */
-      inset: 0;
-      z-index: -3;
-      pointer-events:none;
+      position: fixed; inset: 0; z-index: -3; pointer-events:none;
       background:
         radial-gradient(1200px 800px at 16% 20%, rgba(0,0,0,.26), transparent 60%),
         radial-gradient(1200px 800px at 84% 80%, rgba(0,0,0,.26), transparent 60%),
@@ -55,27 +52,19 @@
     }
     .app::after{
       content:"";
-      position: fixed;
-      inset: clamp(8px, 2vw, 16px);
-      border-radius: var(--radius-lg);
-      z-index: -2;
-      pointer-events:none;
+      position: fixed; inset: clamp(8px, 2vw, 16px);
+      border-radius: var(--radius-lg); z-index: -2; pointer-events:none;
       background:
         linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04)) padding-box,
         linear-gradient(180deg, rgba(255,255,255,.65), rgba(255,255,255,0)) border-box;
-      border: 1px solid transparent;
-      box-shadow: var(--shadow-xl);
+      border: 1px solid transparent; box-shadow: var(--shadow-xl);
     }
-    .brand-ribbon{
-      position: fixed; inset: 0; z-index: -1; pointer-events: none;
-    }
+    .brand-ribbon{ position: fixed; inset: 0; z-index: -1; pointer-events: none; }
     .brand-ribbon::before,
     .brand-ribbon::after{
-      content:"";
-      position: absolute; left: -10%; right: -10%; height: 10px;
+      content:""; position: absolute; left: -10%; right: -10%; height: 10px;
       background: linear-gradient(90deg, var(--brand), var(--brand-2));
-      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25));
-      opacity:.65;
+      filter: drop-shadow(0 8px 10px rgba(0,0,0,.25)); opacity:.65;
     }
     .brand-ribbon::before{ top: 18%; transform: rotate(-18deg); }
     .brand-ribbon::after { bottom: 12%; transform: rotate(14deg); }
@@ -88,7 +77,6 @@
         rgba(10,10,10,.82);
       backdrop-filter: blur(6px);
       color:#fff;
-      /* ↓ más compacta */
       padding: calc(env(safe-area-inset-top) + 8px) 12px 8px;
       text-align:center;
       font-weight: 900; letter-spacing:.35px; font-size: 20px; text-transform: uppercase;
@@ -97,13 +85,13 @@
       border-radius: var(--radius) var(--radius) 0 0;
     }
 
-    /* ===== ACTIONS (solo Volver | NombreBot | Switch) ===== */
+    /* ===== ACTIONS (Volver | Nombre | Switch) ===== */
     .actions{
       position:sticky;
       top: calc(env(safe-area-inset-top) + 44px);
       z-index:4;
       display:grid;
-      grid-template-columns: auto 1fr auto; /* volver | nombre | switch */
+      grid-template-columns: auto 1fr auto;
       align-items:center; gap:10px;
       padding: 6px 10px;
       background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
@@ -116,14 +104,12 @@
         linear-gradient(180deg, #fff, #f1f1f1) padding-box,
         linear-gradient(180deg, rgba(0,0,0,.2), rgba(255,255,255,.5)) border-box;
       color: var(--ink);
-      /* ↓ más pequeño */
       padding: 8px 10px;
       border-radius: 10px;
       border: 1px solid transparent;
       font-weight: 900; font-size: 12px;
       text-decoration:none;
       box-shadow: var(--shadow-sm);
-      transition: transform .06s ease, box-shadow .2s ease, filter .2s ease;
       white-space: nowrap;
     }
     .btn-back:active{ transform: translateY(1px); box-shadow: 0 10px 18px rgba(0,0,0,.20); }
@@ -134,7 +120,6 @@
         linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.02)),
         #0e0e0e;
       color: var(--brand);
-      /* ↓ más pequeño */
       padding: 6px 10px;
       border-radius: 10px;
       font-weight: 900; font-size: 12px;
@@ -147,7 +132,7 @@
       margin: 0 4px;
     }
 
-    /* ===== Switch mini (ON/OFF) ===== */
+    /* Switch mini (ON/OFF) */
     .switch-wrap{ display:inline-flex; align-items:center; gap:6px; justify-self:end; }
     .switch{
       --w:36px; --h:20px; --p:2px;
@@ -168,30 +153,24 @@
     .switch.on::after{ transform: translateX(calc(var(--w) - var(--h))); background:#eafff5; }
     .switch-label{ font-size:12px; font-weight:800; color:#ddd; }
 
-    /* ===== CHAT (NO TOCAR: burbujas y fondo quedan igual) ===== */
+    /* ===== CHAT (NO TOCAR burbujas/fondo) ===== */
     .chat{
       flex:1 1 auto;
       position: relative;
       z-index: 1;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
-      padding: 22px 18px calc(env(safe-area-inset-bottom) + 22px);
+      padding: 22px 18px calc(env(safe-area-inset-bottom) + 96px); /* <-- más espacio por composer fijo */
     }
     .chat::before{
       content:"";
-      position:absolute; inset:0;
-      z-index:0; pointer-events:none;
+      position:absolute; inset:0; z-index:0; pointer-events:none;
       background:
         linear-gradient(180deg, var(--line) 1px, transparent 1px) 0 0/100% 48px,
         linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0/48px 100%;
-      mix-blend-mode: overlay;
-      opacity:.55;
+      mix-blend-mode: overlay; opacity:.55;
     }
-    .stack{
-      position: relative; z-index:1;
-      display:flex; flex-direction:column; gap:24px;
-      padding: 6px;
-    }
+    .stack{ position: relative; z-index:1; display:flex; flex-direction:column; gap:24px; padding: 6px; }
     .bubble{
       max-width: 92%;
       padding: 18px 20px;
@@ -212,50 +191,67 @@
     }
     .bubble::after{
       content:"";
-      position:absolute; inset:0;
-      border-radius: 18px;
-      pointer-events:none;
+      position:absolute; inset:0; border-radius: 18px; pointer-events:none;
       background: radial-gradient(600px 220px at 10% 0%, rgba(255,255,255,.22), transparent 65%);
       mix-blend-mode: screen;
     }
     .bot{
-      align-self: flex-start;
-      color: #fefefe;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)),
-        #111315;
+      align-self: flex-start; color: #fefefe;
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.06)), #111315;
       border: 1px solid rgba(255,255,255,.14);
-      box-shadow:
-        0 0 0 1px rgba(247,189,2,.28) inset,
-        var(--shadow-md);
+      box-shadow: 0 0 0 1px rgba(247,189,2,.28) inset, var(--shadow-md);
     }
     .user{
-      align-self: flex-end;
+      align-self: flex-end; background: linear-gradient(180deg, #fff, #f7f7f7);
+      color: #151515; border: 1px solid rgba(0,0,0,.08);
+      box-shadow: 0 1px 0 rgba(255,255,255,.8) inset, var(--shadow-md);
+    }
+
+    /* ===== COMPOSER (restaurado para enviar mensajes) ===== */
+    .composer{
+      position: fixed; left:0; right:0; bottom:0; z-index:12;
+      padding: 8px 10px calc(env(safe-area-inset-bottom) + 8px);
       background:
-        linear-gradient(180deg, #fff, #f7f7f7);
-      color: #151515;
-      border: 1px solid rgba(0,0,0,.08);
-      box-shadow:
-        0 1px 0 rgba(255,255,255,.8) inset,
-        var(--shadow-md);
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.00)),
+        rgba(10,12,16,.65);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border-top:1px solid var(--line);
+    }
+    .composer-inner{
+      max-width: 900px; margin:0 auto; display:flex; gap:8px; align-items:center;
+      background: #12151c; border:1px solid var(--line); border-radius: 12px; padding: 6px;
+      box-shadow: var(--shadow-sm);
+    }
+    .composer input[type="text"]{
+      flex:1; height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.08);
+      padding: 0 12px; font-size:16px; /* >=16px evita zoom en iOS */
+      outline:none; color:#e8eaf0; background: rgba(255,255,255,.04);
+    }
+    .btn-send{
+      height:44px; border-radius: 10px; border:1px solid rgba(255,255,255,.12);
+      background: linear-gradient(180deg, var(--brand), var(--brand-2));
+      color:#000; font-weight:900; padding: 0 12px; cursor:pointer; box-shadow: var(--shadow-sm);
+    }
+    .btn-send:disabled{ opacity:.5; cursor:not-allowed; }
+
+    .toast{
+      position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 70px); z-index:20;
+      padding: 8px 10px; border-radius: 10px; color:#0f1115; font-weight:900;
+      background: #fff; border:1px solid rgba(0,0,0,.08); box-shadow: var(--shadow-sm); display:none;
     }
 
     @media (max-width:480px){
       .topbar{ font-size:18px; }
       .btn-back, .chip-bot{ padding: 6px 8px; font-size:11px; }
       .switch-label{ font-size:11px; }
-      /* Burbujas se mantienen tal cual — NO tocar */
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <!-- Cintas sutiles de marca (NO TOCAR) -->
     <div class="brand-ribbon" aria-hidden="true"></div>
-
     <div class="topbar">PANEL DE CONVERSACIÓN</div>
 
-    {# ==== LABEL DE COMPAÑÍA CON FALLBACKS (NO TOCAR) ==== #}
     {% set company_label = 'In Houston Texas' %}
     {% if bot_data is defined and bot_data %}
       {% if bot_data.business_name is defined and bot_data.business_name %}
@@ -269,7 +265,7 @@
       {% set company_label = bot %}
     {% endif %}
 
-    <!-- ===== Barra superior mínima: Volver | Nombre | Switch ===== -->
+    <!-- Barra superior mínima -->
     <div class="actions">
       <a class="btn-back" href="{{ url_for('panel_exclusivo_bot', bot_nombre=bot) }}" aria-label="Volver al panel del bot">⟵ Volver</a>
       <div class="chip-bot" title="{{ company_label }}">{{ company_label }}</div>
@@ -279,7 +275,7 @@
       </div>
     </div>
 
-    <!-- ===== Chat (NO TOCAR) ===== -->
+    <!-- Chat (sin cambios visuales) -->
     <main id="chat" class="chat"
           data-bot="{{ bot }}"
           data-numero="{{ numero }}"
@@ -292,22 +288,35 @@
         {% endfor %}
       </div>
     </main>
+
+    <!-- Composer para responder -->
+    <form id="composer" class="composer" autocomplete="off">
+      <div class="composer-inner">
+        <input id="inputText" type="text" name="texto" placeholder="Escribe tu respuesta manual como admin…" required />
+        <button id="btnSend" class="btn-send" type="submit">Enviar</button>
+      </div>
+    </form>
+
+    <div id="toast" class="toast" role="status" aria-live="polite">Listo</div>
   </div>
 
   <script>
-    // Polling cada 3s con autoscroll inteligente + manejo opcional del switch
     (function(){
       const chatEl  = document.getElementById('chat');
       const stackEl = document.getElementById('stack');
       const switchEl = document.getElementById('switch');
       const switchText = document.getElementById('switchText');
+      const composerEl = document.getElementById('composer');
+      const inputEl = document.getElementById('inputText');
+      const btnSend = document.getElementById('btnSend');
+      const toastEl = document.getElementById('toast');
       if (!chatEl || !stackEl) return;
 
       let lastTs = 0;
       let bootstrap = true;
       const NEAR_PX = 200;
       let userNearBottom = true;
-      let botEnabled = true; // estado por defecto (si backend no lo envía)
+      let botEnabled = true; // por defecto
 
       function atBottom(){
         const distance = (chatEl.scrollHeight - chatEl.clientHeight) - chatEl.scrollTop;
@@ -317,35 +326,34 @@
         const last = stackEl.lastElementChild;
         if (!last) return;
         requestAnimationFrame(() => {
-          try{
-            last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
-          }catch(_){
-            chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-          }
+          try{ last.scrollIntoView({ block: 'end', inline: 'nearest', behavior: smooth ? 'smooth' : 'auto' }); }
+          catch(_){ chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); }
         });
       }
       chatEl.addEventListener('scroll', () => { userNearBottom = atBottom(); });
       setTimeout(() => { scrollToBottom(false); userNearBottom = true; }, 30);
 
-      const bot    = encodeURIComponent(chatEl.getAttribute('data-bot') || '');
-      const numero = encodeURIComponent(chatEl.getAttribute('data-numero') || '');
+      const botRaw    = chatEl.getAttribute('data-bot') || '';
+      const numeroRaw = chatEl.getAttribute('data-numero') || '';
+      const bot    = encodeURIComponent(botRaw);
+      const numero = encodeURIComponent(numeroRaw);
       const apiBase   = `/api/chat/${bot}/${numero}`;
-      const apiToggle = `/api/conversation_bot`; // ya existente en tu backend
+      const apiToggle = `/api/conversation_bot`;  // si lo usas
+      const apiManual = `/api/send_manual`;       // para enviar como admin
 
       function appendMessage(tipo, texto){
         const div = document.createElement('div');
-        div.className = `bubble ${tipo === 'user' ? 'user' : 'bot'}`;
+        div.className = `bubble ${tipo === 'user' ? 'user' : (tipo === 'admin' ? 'user' : 'bot')}`;
+        /* nota: mostramos admin con estilo 'user' para distinguir de bot */
         div.textContent = texto || '';
         stackEl.appendChild(div);
       }
 
       function setSwitchState(enabled){
         botEnabled = !!enabled;
-        if (switchEl){
-          switchEl.classList.toggle('on', enabled);
-          switchEl.setAttribute('aria-pressed', String(!!enabled));
-        }
-        if (switchText) switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
+        switchEl.classList.toggle('on', enabled);
+        switchEl.setAttribute('aria-pressed', String(!!enabled));
+        switchText.textContent = enabled ? 'BOT ON' : 'BOT OFF';
       }
 
       async function tick(){
@@ -354,7 +362,6 @@
           if(!res.ok) return;
           const data = await res.json();
 
-          // Si tu /api/chat devuelve { bot_enabled: true/false }, lo usamos. Si no, ignoramos.
           if (typeof data.bot_enabled === 'boolean') setSwitchState(data.bot_enabled);
 
           if (bootstrap){
@@ -370,7 +377,8 @@
           if (data && Array.isArray(data.mensajes) && data.mensajes.length > 0){
             data.mensajes.sort((a,b)=> (a.ts||0) - (b.ts||0));
             for (const m of data.mensajes){
-              appendMessage(m.tipo === 'user' ? 'user' : 'bot', m.texto);
+              const tipo = (m.tipo === 'user') ? 'user' : (m.tipo === 'admin' ? 'user' : 'bot');
+              appendMessage(tipo, m.texto);
             }
             if (userNearBottom) scrollToBottom(true);
 
@@ -384,7 +392,7 @@
         }catch(e){ /* silencio */ }
       }
 
-      // Toggle del switch (opcional si ya tienes /api/conversation_bot)
+      // Toggle del switch (si usas el endpoint)
       async function toggleClick(){
         try{
           const newVal = !botEnabled;
@@ -392,29 +400,53 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ bot: decodeURIComponent(bot), numero: decodeURIComponent(numero), enabled: newVal })
+            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, enabled: newVal })
           });
           if (!res.ok){ setSwitchState(botEnabled); return; }
           const out = await res.json().catch(()=>({}));
-          if (out && typeof out.enabled === 'boolean'){
-            setSwitchState(out.enabled);
-          }else{
-            // si el backend no responde con enabled, asumimos el value pedido
-            setSwitchState(newVal);
-          }
-        }catch(_){
-          // revertimos visual si hay error
-          setSwitchState(botEnabled);
-        }
+          if (out && typeof out.enabled === 'boolean'){ setSwitchState(out.enabled); }
+          else { setSwitchState(newVal); }
+        }catch(_){ setSwitchState(botEnabled); }
       }
-      if (switchEl){
-        switchEl.addEventListener('click', toggleClick);
-        switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+      switchEl.addEventListener('click', toggleClick);
+      switchEl.addEventListener('keypress', (ev)=>{ if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggleClick(); } });
+
+      // Enviar manual como admin
+      composerEl.addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const texto = (inputEl.value || '').trim();
+        if (!texto) return;
+        btnSend.disabled = true;
+        try{
+          const res = await fetch(apiManual, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ bot: botRaw, numero: numeroRaw, texto })
+          });
+          if (!res.ok){ showToast('Error al enviar'); btnSend.disabled = false; return; }
+          const out = await res.json().catch(()=>({}));
+          if (out && out.ok){
+            appendMessage('admin', texto);
+            inputEl.value = '';
+            scrollToBottom(true);
+            showToast('Enviado');
+          }else{
+            showToast('Fallo al enviar');
+          }
+        }catch(_){ showToast('Error de red'); }
+        finally{ btnSend.disabled = false; }
+      });
+
+      function showToast(text){
+        if (!toastEl) return;
+        toastEl.textContent = text || 'Listo';
+        toastEl.style.display = 'block';
+        setTimeout(()=> toastEl.style.display = 'none', 1400);
       }
 
       tick();
       setInterval(tick, 3000);
-
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && userNearBottom) setTimeout(() => scrollToBottom(false), 40);
       });
