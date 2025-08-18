@@ -1037,6 +1037,73 @@ def push_token():
         print(f"❌ Error FCM token: {e}")
         return jsonify({"success": False, "message": "FCM error"}), 500
 
+# --- Health simple para probar rutas ---
+@app.route("/push/health", methods=["GET"])
+def push_health():
+    return jsonify({"ok": True, "service": "push"})
+
+# --- Adaptador universal: acepta /push, /api/push, /push/send, /api/push/send ---
+@app.route("/push", methods=["POST", "OPTIONS"])
+@app.route("/api/push", methods=["POST", "OPTIONS"])
+@app.route("/push/send", methods=["POST", "OPTIONS"])
+@app.route("/api/push/send", methods=["POST", "OPTIONS"])
+def push_universal():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not _bearer_ok(request):
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+
+    body = request.get_json(silent=True) or {}
+
+    title = (body.get("title") or body.get("titulo") or "").strip()
+    body_text = (body.get("body") or body.get("descripcion") or "").strip()
+
+    # acepta topic/segmento; token único o tokens[]
+    topic = (body.get("topic") or body.get("segmento") or "").strip()
+    token = (body.get("token") or "").strip()
+    tokens = body.get("tokens") if isinstance(body.get("tokens"), list) else None
+
+    data = _push_common_data({
+        "link": body.get("link") or "",
+        "screen": body.get("screen") or "",
+        "empresaId": body.get("empresaId") or "",
+        "categoria": body.get("categoria") or ""
+    })
+
+    if not title or not body_text:
+        return jsonify({"success": False, "message": "title/body requeridos"}), 400
+
+    try:
+        if topic:
+            msg = fcm.Message(
+                topic=topic or "todos",
+                notification=fcm.Notification(title=title, body=body_text),
+                data=data
+            )
+            msg_id = fcm.send(msg)
+            return jsonify({"success": True, "mode": "topic", "id": msg_id})
+        elif tokens and len(tokens) > 0:
+            multi = fcm.MulticastMessage(
+                tokens=[str(t) for t in tokens if str(t).strip()],
+                notification=fcm.Notification(title=title, body=body_text),
+                data=data
+            )
+            resp = fcm.send_multicast(multi)
+            return jsonify({"success": True, "mode": "tokens", "sent": resp.success_count, "failed": resp.failure_count})
+        elif token:
+            msg = fcm.Message(
+                token=token,
+                notification=fcm.Notification(title=title, body=body_text),
+                data=data
+            )
+            msg_id = fcm.send(msg)
+            return jsonify({"success": True, "mode": "token", "id": msg_id})
+        else:
+            return jsonify({"success": False, "message": "Falta topic o token(s)"}), 400
+    except Exception as e:
+        print(f"❌ Error FCM universal: {e}")
+        return jsonify({"success": False, "message": "FCM error"}), 500
+
 # =======================
 #  Webhook WhatsApp
 # =======================
