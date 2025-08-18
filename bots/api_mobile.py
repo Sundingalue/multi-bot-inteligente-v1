@@ -16,9 +16,9 @@ from flask import Blueprint, request, jsonify
 from firebase_admin import db
 
 # --------------------------------------------------------------------
-# Blueprint
+# Blueprint  (SIN url_prefix: lo aporta main.py al registrar)
 # --------------------------------------------------------------------
-mobile_bp = Blueprint("mobile_bp", __name__, url_prefix="/api/mobile")
+mobile_bp = Blueprint("mobile_bp", __name__)
 
 # --------------------------------------------------------------------
 # Cache / Sesiones in-memory
@@ -48,8 +48,8 @@ def _build_accounts_from_bots() -> Dict[str, Dict[str, Any]]:
     {
       "username": {
         "password": "...",
-        "bots": ["Sara","Camila"]  # lista de cfg["name"] (NO business_name)
-        "admin": bool              # si alguno trae "panel":"panel" => admin
+        "bots": ["Sara","Camila"],  # lista de cfg["name"] (NO business_name)
+        "admin": bool               # si alguno trae "panel":"panel" => admin
       }
     }
     """
@@ -65,7 +65,7 @@ def _build_accounts_from_bots() -> Dict[str, Dict[str, Any]]:
         if not username or not password:
             continue
 
-        bot_name = (cfg.get("name") or "").strip()  # << IMPORTANTE: usamos "name" para empatar Firebase
+        bot_name = (cfg.get("name") or "").strip()  # usamos "name" para empatar Firebase
         if not bot_name:
             continue
 
@@ -196,7 +196,6 @@ def _delete_lead(bot_name: str, numero: str) -> bool:
 def mobile_health():
     return jsonify({"ok": True, "service": "mobile"})
 
-
 @mobile_bp.route("/login", methods=["POST"])
 def mobile_login():
     """
@@ -222,7 +221,6 @@ def mobile_login():
     # Asegura que "bots" sea serializable (lista o '*')
     bots_payload = allowed if allowed == "*" else list(allowed)
     return jsonify({"ok": True, "token": token, "bots": bots_payload})
-
 
 @mobile_bp.route("/leads", methods=["GET"])
 def mobile_leads():
@@ -251,7 +249,6 @@ def mobile_leads():
         print(f"❌ Error leyendo leads: {e}")
         return jsonify({"leads": []}), 500
 
-
 @mobile_bp.route("/lead", methods=["POST"])
 def mobile_update_lead():
     """
@@ -277,7 +274,6 @@ def mobile_update_lead():
 
     ok = _update_lead(bot_name, numero, estado=estado, nota=nota)
     return jsonify({"ok": bool(ok)})
-
 
 @mobile_bp.route("/delete", methods=["POST"])
 def mobile_delete_lead():
