@@ -40,7 +40,7 @@ TWILIO_AUTH_TOKEN  = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
 BOOKING_URL_FALLBACK = (os.environ.get("BOOKING_URL", "").strip())
 APP_DOWNLOAD_URL_FALLBACK = (os.environ.get("APP_DOWNLOAD_URL", "").strip())
 
-# 🔐 NEW (opcional): Bearer para proteger endpoints /push/*
+# 🔐 NEW (opcional): Bearer para proteger endpoints /push/* y (ahora) API móvil
 API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
 
 def _valid_url(u: str) -> bool:
@@ -63,7 +63,7 @@ app.config.update({
     "SESSION_COOKIE_SECURE": False if os.getenv("DEV_HTTP", "").lower() == "true" else True
 })
 
-# 🌐 NEW: CORS básico para llamadas desde WordPress
+# 🌐 NEW: CORS básico para llamadas desde WordPress / app
 @app.after_request
 def add_cors_headers(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
@@ -869,15 +869,19 @@ def api_delete_chat():
     return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
 
 # =======================
-#  ✅ NUEVO: API para responder MANUALMENTE desde el panel
+#  ✅ API para responder MANUALMENTE desde el panel o la APP (Bearer)
 # =======================
-@app.route("/api/send_manual", methods=["POST"])
+@app.route("/api/send_manual", methods=["POST", "OPTIONS"])
 def api_send_manual():
     """
     JSON esperado: { "bot": "Sara", "numero": "whatsapp:+1786...", "texto": "Tu mensaje" }
     Envía un mensaje por WhatsApp usando Twilio REST, lo guarda en Firebase como tipo "admin".
     """
-    if not session.get("autenticado"):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    # ✅ Permitir acceso si hay sesión O si el Authorization Bearer es válido
+    if not session.get("autenticado") and not _bearer_ok(request):
         return jsonify({"error": "No autenticado"}), 401
 
     data = request.json or {}
@@ -889,7 +893,7 @@ def api_send_manual():
         return jsonify({"error": "Parámetros inválidos (bot, numero, texto)"}), 400
 
     bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
-    if not _user_can_access_bot(bot_normalizado):
+    if session.get("autenticado") and not _user_can_access_bot(bot_normalizado):
         return jsonify({"error": "No autorizado para este bot"}), 403
 
     from_number = _get_bot_number_by_name(bot_normalizado)  # ej: "whatsapp:+1346..."
@@ -915,15 +919,19 @@ def api_send_manual():
         return jsonify({"error": "Fallo enviando el mensaje"}), 500
 
 # =======================
-#  ✅ NUEVO: API para ON/OFF por conversación (botón en chat)
+#  ✅ API para ON/OFF por conversación (panel o APP con Bearer)
 # =======================
-@app.route("/api/conversation_bot", methods=["POST"])
+@app.route("/api/conversation_bot", methods=["POST", "OPTIONS"])
 def api_conversation_bot():
     """
     JSON: { "bot": "Sara", "numero": "whatsapp:+1786...", "enabled": true/false }
     Guarda el flag 'bot_enabled' en Firebase por conversación.
     """
-    if not session.get("autenticado"):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    # ✅ Permitir sesión o Bearer
+    if not session.get("autenticado") and not _bearer_ok(request):
         return jsonify({"error": "No autenticado"}), 401
 
     data = request.json or {}
@@ -935,7 +943,7 @@ def api_conversation_bot():
         return jsonify({"error": "Parámetros inválidos (bot, numero, enabled)"}), 400
 
     bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
-    if not _user_can_access_bot(bot_normalizado):
+    if session.get("autenticado") and not _user_can_access_bot(bot_normalizado):
         return jsonify({"error": "No autorizado para este bot"}), 403
 
     ok = fb_set_conversation_on(bot_normalizado, numero, bool(enabled))
@@ -1372,16 +1380,21 @@ def chat_bot(bot, numero):
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 # =======================
-#  API de polling (leen Firebase)
+#  API de polling (leen Firebase) — ahora permite Bearer
 # =======================
-@app.route("/api/chat/<bot>/<numero>", methods=["GET"])
+@app.route("/api/chat/<bot>/<numero>", methods=["GET", "OPTIONS"])
 def api_chat(bot, numero):
-    if not session.get("autenticado"):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    # ✅ Permitir sesión o Bearer
+    if not session.get("autenticado") and not _bearer_ok(request):
         return jsonify({"error": "No autenticado"}), 401
+
     bot_normalizado = _normalize_bot_name(bot)
     if not bot_normalizado:
         return jsonify({"error": "Bot no encontrado"}), 404
-    if not _user_can_access_bot(bot_normalizado):
+    if session.get("autenticado") and not _user_can_access_bot(bot_normalizado):
         return jsonify({"error": "No autorizado"}), 403
 
     since_param = request.args.get("since", "").strip()
