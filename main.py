@@ -21,6 +21,8 @@ from twilio.rest import Client as TwilioClient
 # 🔹 Firebase
 import firebase_admin
 from firebase_admin import credentials, db
+# 🔹 NEW: FCM (para notificaciones push)
+from firebase_admin import messaging as fcm  # <-- añadido
 
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
@@ -37,6 +39,9 @@ TWILIO_AUTH_TOKEN  = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
 # Fallbacks globales (se usan SOLO si el bot no trae link en su JSON ni hay variable de entorno)
 BOOKING_URL_FALLBACK = (os.environ.get("BOOKING_URL", "").strip())
 APP_DOWNLOAD_URL_FALLBACK = (os.environ.get("APP_DOWNLOAD_URL", "").strip())
+
+# 🔐 NEW (opcional): Bearer para proteger endpoints /push/*
+API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
 
 def _valid_url(u: str) -> bool:
     return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
@@ -57,6 +62,21 @@ app.config.update({
     # Pon en True si sirves por HTTPS (recomendado en producción)
     "SESSION_COOKIE_SECURE": False if os.getenv("DEV_HTTP", "").lower() == "true" else True
 })
+
+# 🌐 NEW: CORS básico para llamadas desde WordPress
+@app.after_request
+def add_cors_headers(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return resp
+
+def _bearer_ok(req) -> bool:
+    """Devuelve True si no hay token configurado o si el header Authorization coincide."""
+    if not API_BEARER_TOKEN:
+        return True
+    auth = (req.headers.get("Authorization") or "").strip()
+    return auth == f"Bearer {API_BEARER_TOKEN}"
 
 # =======================
 #  Inicializar Firebase
@@ -920,6 +940,102 @@ def api_conversation_bot():
 
     ok = fb_set_conversation_on(bot_normalizado, numero, bool(enabled))
     return jsonify({"ok": bool(ok), "enabled": bool(enabled)})
+
+# =======================
+#  🔔 NEW: Endpoints PUSH (evitan HTTP 404)
+# =======================
+
+def _push_common_data(payload: dict) -> dict:
+    """Sanitiza 'data' para FCM (todos valores deben ser str)."""
+    data = {}
+    for k, v in (payload or {}).items():
+        if v is None:
+            continue
+        data[str(k)] = str(v)
+    return data
+
+@app.route("/push/topic", methods=["POST", "OPTIONS"])
+@app.route("/api/push/topic", methods=["POST", "OPTIONS"])  # alias de compatibilidad
+def push_topic():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not _bearer_ok(request):
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or body.get("titulo") or "").strip()
+    body_text = (body.get("body") or body.get("descripcion") or "").strip()
+    topic = (body.get("topic") or body.get("segmento") or "todos").strip() or "todos"
+
+    # Datos opcionales para deep-link en la app
+    data = _push_common_data({
+        "link": body.get("link") or "",
+        "screen": body.get("screen") or "",
+        "empresaId": body.get("empresaId") or "",
+        "categoria": body.get("categoria") or ""
+    })
+
+    if not title or not body_text:
+        return jsonify({"success": False, "message": "title/body requeridos"}), 400
+
+    try:
+        message = fcm.Message(
+            topic=topic,
+            notification=fcm.Notification(title=title, body=body_text),
+            data=data
+        )
+        msg_id = fcm.send(message)
+        return jsonify({"success": True, "id": msg_id})
+    except Exception as e:
+        print(f"❌ Error FCM topic: {e}")
+        return jsonify({"success": False, "message": "FCM error"}), 500
+
+@app.route("/push/token", methods=["POST", "OPTIONS"])
+@app.route("/api/push/token", methods=["POST", "OPTIONS"])  # alias
+def push_token():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not _bearer_ok(request):
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or body.get("titulo") or "").strip()
+    body_text = (body.get("body") or body.get("descripcion") or "").strip()
+    token = (body.get("token") or "").strip()
+    tokens = body.get("tokens") if isinstance(body.get("tokens"), list) else None
+
+    data = _push_common_data({
+        "link": body.get("link") or "",
+        "screen": body.get("screen") or "",
+        "empresaId": body.get("empresaId") or "",
+        "categoria": body.get("categoria") or ""
+    })
+
+    if not title or not body_text:
+        return jsonify({"success": False, "message": "title/body requeridos"}), 400
+
+    try:
+        if tokens and isinstance(tokens, list) and len(tokens) > 0:
+            multicast = fcm.MulticastMessage(
+                tokens=[str(t) for t in tokens if str(t).strip()],
+                notification=fcm.Notification(title=title, body=body_text),
+                data=data
+            )
+            resp = fcm.send_multicast(multicast)
+            return jsonify({"success": True, "sent": resp.success_count, "failed": resp.failure_count})
+        elif token:
+            message = fcm.Message(
+                token=token,
+                notification=fcm.Notification(title=title, body=body_text),
+                data=data
+            )
+            msg_id = fcm.send(message)
+            return jsonify({"success": True, "id": msg_id})
+        else:
+            return jsonify({"success": False, "message": "token(s) requerido(s)"}), 400
+    except Exception as e:
+        print(f"❌ Error FCM token: {e}")
+        return jsonify({"success": False, "message": "FCM error"}), 500
 
 # =======================
 #  Webhook WhatsApp
