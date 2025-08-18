@@ -1,201 +1,304 @@
 # bots/api_mobile.py
-from flask import Blueprint, request, jsonify, current_app
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+# Blueprint de API móvil para el panel dentro de la app.
+# - Login leyendo credenciales desde bots/*.json ("auth": {...})
+# - Listado/actualización/borrado de leads en Firebase
+# - Filtro por alcance (allowed bots) usando Authorization: Bearer <token>
+
+from __future__ import annotations
+
+import os
+import json
+import glob
+import secrets
+from typing import Any, Dict, List
+
+from flask import Blueprint, request, jsonify
 from firebase_admin import db
-import glob, os, json
-from functools import wraps
 
-mobile_bp = Blueprint("mobile", __name__)
+# --------------------------------------------------------------------
+# Blueprint
+# --------------------------------------------------------------------
+mobile_bp = Blueprint("mobile_bp", __name__, url_prefix="/api/mobile")
 
-# ====== Token firmado (sin dependencias extras) ======
-def _serializer():
-    return URLSafeTimedSerializer(current_app.secret_key, salt="mobile-api")
+# --------------------------------------------------------------------
+# Cache / Sesiones in-memory
+# --------------------------------------------------------------------
+_ACCOUNTS_CACHE: Dict[str, Dict[str, Any]] | None = None
+_SESSION_TOKENS: Dict[str, Dict[str, Any]] = {}  # token -> {"allowed": "*"/[bot_name,...]}
 
-def _issue_token(payload: dict):
-    s = _serializer()
-    return s.dumps(payload)  # caduca al verificar (max_age)
-
-def _verify_token(token):
-    s = _serializer()
-    try:
-        # Validez: 60 días
-        return s.loads(token, max_age=60*24*60*60)
-    except (BadSignature, SignatureExpired):
-        return None
-
-def _auth_required(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        auth = (request.headers.get("Authorization") or "").strip()
-        if auth.startswith("Bearer "):
-            data = _verify_token(auth[7:])
-            if data:
-                request.mobile_user = data  # {'username':..., 'bots':[...]}
-                return f(*args, **kwargs)
-        return jsonify({"error": "Unauthorized"}), 401
-    return wrapper
-
-# ====== Usuarios (mismo esquema que tus bots/*.json) ======
-def _normalize_bot_name(name: str):
-    return (name or "").strip()
-
-def _load_users():
-    users = {}
-    # Lee credenciales desde bots/*.json  (login / logins / auth)
+# --------------------------------------------------------------------
+# Carga de bots desde ./bots/*.json
+# --------------------------------------------------------------------
+def _load_bots_folder() -> Dict[str, Any]:
+    bots: Dict[str, Any] = {}
     for path in glob.glob(os.path.join("bots", "*.json")):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if not isinstance(data, dict): 
-                continue
-            for _, cfg in data.items():
-                if not isinstance(cfg, dict): 
-                    continue
-                bot_name = (cfg.get("name") or "").strip()
-                entries = []
-                if isinstance(cfg.get("login"), dict): entries.append(cfg["login"])
-                if isinstance(cfg.get("logins"), list): entries += [x for x in cfg["logins"] if isinstance(x, dict)]
-                if isinstance(cfg.get("auth"), dict): entries.append(cfg["auth"])
-                for e in entries:
-                    u = (e.get("username") or "").strip()
-                    p = (e.get("password") or "").strip()
-                    scope = e.get("scope", bot_name)
-                    if not u or not p:
-                        continue
-                    if scope == "*":
-                        allowed = ["*"]
-                    elif isinstance(scope, list):
-                        allowed = [ _normalize_bot_name(s) for s in scope if str(s).strip() ] or [bot_name]
-                    else:
-                        allowed = [_normalize_bot_name(scope)]
-                    if u in users:
-                        prev = users[u]["bots"]
-                        users[u]["bots"] = ["*"] if ("*" in prev or "*" in allowed) else list(dict.fromkeys(prev + allowed))
-                    else:
-                        users[u] = {"password": p, "bots": allowed}
-        except Exception:
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    bots[k] = v
+        except Exception as e:
+            print(f"⚠️ No se pudo cargar {path}: {e}")
+    return bots
+
+def _build_accounts_from_bots() -> Dict[str, Dict[str, Any]]:
+    """
+    Construye usuarios a partir de los JSON de /bots:
+    {
+      "username": {
+        "password": "...",
+        "bots": ["Sara","Camila"]  # lista de cfg["name"] (NO business_name)
+        "admin": bool              # si alguno trae "panel":"panel" => admin
+      }
+    }
+    """
+    accounts: Dict[str, Dict[str, Any]] = {}
+    bots_cfg = _load_bots_folder()
+
+    for _num_key, cfg in bots_cfg.items():
+        if not isinstance(cfg, dict):
+            continue
+        auth = (cfg.get("auth") or {}) if isinstance(cfg.get("auth"), dict) else {}
+        username = (auth.get("username") or "").strip()
+        password = (auth.get("password") or "").strip()
+        if not username or not password:
             continue
 
-    # Soporte ENV legacy (opcional)
-    for key, val in os.environ.items():
-        if not key.startswith("USER_"): 
+        bot_name = (cfg.get("name") or "").strip()  # << IMPORTANTE: usamos "name" para empatar Firebase
+        if not bot_name:
             continue
-        alias = key[len("USER_"):]
-        username = (val or "").strip()
-        password = (os.environ.get(f"PASS_{alias}", "") or "").strip()
-        panel = (os.environ.get(f"PANEL_{alias}", "") or "").strip()
-        if not username or not password or not panel:
-            continue
-        if panel.lower() == "panel":
-            bots_list = ["*"]
-        elif panel.lower().startswith("panel-bot/"):
-            bots_list = [panel.split("/",1)[1].strip()]
+
+        acc = accounts.setdefault(username, {"password": password, "bots": set(), "admin": False})
+        acc["bots"].add(bot_name)
+
+        # Si en alguno de los bots del mismo usuario aparece "panel":"panel" => admin (ve todo)
+        if str(auth.get("panel", "")).strip().lower() == "panel":
+            acc["admin"] = True
+
+    # Normaliza a listas / '*' si admin
+    for u, a in accounts.items():
+        if a.get("admin"):
+            a["bots"] = "*"
         else:
-            bots_list = []
-        if bots_list:
-            users[username] = {"password": password, "bots": bots_list}
+            a["bots"] = sorted(list(a["bots"]))
+    return accounts
 
-    if not users:
-        users["sundin"] = {"password": "inhouston2025", "bots": ["*"]}
-    return users
+def _get_accounts() -> Dict[str, Dict[str, Any]]:
+    global _ACCOUNTS_CACHE
+    if _ACCOUNTS_CACHE is None:
+        _ACCOUNTS_CACHE = _build_accounts_from_bots()
+        print(f"[api_mobile] Cuentas cargadas desde /bots: {list(_ACCOUNTS_CACHE.keys())}")
+    return _ACCOUNTS_CACHE
 
-def _user_can_access(user_bots, bot_name):
-    return ("*" in (user_bots or [])) or ((bot_name or "") in (user_bots or []))
+def _issue_token(allowed):
+    """Genera token y guarda alcance ('*' o lista de bot names)."""
+    tok = secrets.token_urlsafe(32)
+    _SESSION_TOKENS[tok] = {"allowed": allowed}
+    return tok
 
-# ====== Firebase helpers (solo lo que usa el móvil) ======
-def _leads_all():
+def _allowed_from_request(req) -> Any:
+    """Devuelve '*' o lista de bot names a partir del header Authorization."""
+    auth = (req.headers.get("Authorization") or "").strip()
+    if auth.startswith("Bearer "):
+        tok = auth[7:].strip()
+        entry = _SESSION_TOKENS.get(tok)
+        if entry:
+            return entry.get("allowed", "*")
+    # si no hay token devolver '*' (compatibilidad), pero lo normal es exigir token
+    return "*"
+
+def _is_allowed(bot_name: str, allowed) -> bool:
+    if allowed == "*":
+        return True
+    if isinstance(allowed, list):
+        return bot_name in allowed
+    return True
+
+# --------------------------------------------------------------------
+# Firebase helpers (leads)
+# Estructura en RTDB: leads/<bot_name>/<numero> => {...}
+# donde <bot_name> coincide con cfg["name"] del bot (p.ej. "Sara")
+# --------------------------------------------------------------------
+def _lead_ref(bot_name: str, numero: str):
+    return db.reference(f"leads/{bot_name}/{numero}")
+
+def _list_leads_all() -> List[Dict[str, Any]]:
     root = db.reference("leads").get() or {}
-    out = []
-    if not isinstance(root, dict): return out
-    for bot, nums in root.items():
-        if not isinstance(nums, dict): continue
-        for numero, data in nums.items():
-            out.append({
-                "bot": bot,
+    leads: List[Dict[str, Any]] = []
+    if not isinstance(root, dict):
+        return leads
+    for bot_name, numeros in root.items():
+        if not isinstance(numeros, dict):
+            continue
+        for numero, data in numeros.items():
+            leads.append({
+                "bot": bot_name,
                 "numero": numero,
-                "first_seen": data.get("first_seen",""),
-                "last_message": data.get("last_message",""),
-                "last_seen": data.get("last_seen",""),
-                "messages": int(data.get("messages",0)),
-                "status": data.get("status","nuevo"),
-                "notes": data.get("notes",""),
+                "first_seen": (data or {}).get("first_seen", ""),
+                "last_message": (data or {}).get("last_message", ""),
+                "last_seen": (data or {}).get("last_seen", ""),
+                "messages": int((data or {}).get("messages", 0) or 0),
+                "status": (data or {}).get("status", "nuevo") or "nuevo",
+                "notes": (data or {}).get("notes", "") or "",
             })
-    return out
+    # Ordena por last_seen descendente si hay string comparable
+    leads.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
+    return leads
 
-def _leads_by_bot(bot):
-    nums = db.reference(f"leads/{bot}").get() or {}
-    out = []
-    if not isinstance(nums, dict): return out
-    for numero, data in nums.items():
-        out.append({
-            "bot": bot,
+def _list_leads_by_bot(bot_name: str) -> List[Dict[str, Any]]:
+    numeros = db.reference(f"leads/{bot_name}").get() or {}
+    leads: List[Dict[str, Any]] = []
+    if not isinstance(numeros, dict):
+        return leads
+    for numero, data in numeros.items():
+        leads.append({
+            "bot": bot_name,
             "numero": numero,
-            "first_seen": data.get("first_seen",""),
-            "last_message": data.get("last_message",""),
-            "last_seen": data.get("last_seen",""),
-            "messages": int(data.get("messages",0)),
-            "status": data.get("status","nuevo"),
-            "notes": data.get("notes",""),
+            "first_seen": (data or {}).get("first_seen", ""),
+            "last_message": (data or {}).get("last_message", ""),
+            "last_seen": (data or {}).get("last_seen", ""),
+            "messages": int((data or {}).get("messages", 0) or 0),
+            "status": (data or {}).get("status", "nuevo") or "nuevo",
+            "notes": (data or {}).get("notes", "") or "",
         })
-    return out
+    leads.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
+    return leads
 
-# ====== Endpoints ======
+def _update_lead(bot_name: str, numero: str, estado: str | None = None, nota: str | None = None) -> bool:
+    try:
+        ref = _lead_ref(bot_name, numero)
+        cur = ref.get() or {}
+        if estado is not None and estado != "":
+            cur["status"] = estado
+        if nota is not None:
+            cur["notes"] = nota
+        cur.setdefault("bot", bot_name)
+        cur.setdefault("numero", numero)
+        ref.set(cur)
+        return True
+    except Exception as e:
+        print(f"❌ Error actualizando lead {bot_name}/{numero}: {e}")
+        return False
+
+def _delete_lead(bot_name: str, numero: str) -> bool:
+    try:
+        _lead_ref(bot_name, numero).delete()
+        return True
+    except Exception as e:
+        print(f"❌ Error eliminando lead {bot_name}/{numero}: {e}")
+        return False
+
+# --------------------------------------------------------------------
+# Endpoints
+# --------------------------------------------------------------------
+@mobile_bp.route("/health", methods=["GET"])
+def mobile_health():
+    return jsonify({"ok": True, "service": "mobile"})
+
+
 @mobile_bp.route("/login", methods=["POST"])
 def mobile_login():
-    body = request.get_json(silent=True) or {}
-    u = (body.get("username") or "").strip()
-    p = (body.get("password") or "").strip()
-    users = _load_users()
-    rec = users.get(u)
-    if rec and rec.get("password") == p:
-        bots = rec.get("bots", [])
-        token = _issue_token({"username": u, "bots": bots})
-        return jsonify({"ok": True, "token": token, "bots": bots, "user": u})
-    return jsonify({"ok": False, "error": "Credenciales inválidas"}), 401
+    """
+    Valida usuario/clave contra los JSON de /bots.
+    Respuesta:
+      { ok: true, token: "...", bots: ["Sara","Camila"] }  # o bots: "*" si admin
+    """
+    try:
+        body = request.get_json(force=True) or {}
+    except Exception:
+        body = {}
+    username = (body.get("username") or "").strip()
+    password = (body.get("password") or "").strip()
+
+    accounts = _get_accounts()
+    acc = accounts.get(username)
+    if not acc or password != acc.get("password"):
+        return jsonify({"ok": False, "error": "bad_credentials"}), 401
+
+    allowed = acc.get("bots", "*")  # '*' o lista de bot "name"
+    token = _issue_token(allowed)
+
+    # Asegura que "bots" sea serializable (lista o '*')
+    bots_payload = allowed if allowed == "*" else list(allowed)
+    return jsonify({"ok": True, "token": token, "bots": bots_payload})
+
 
 @mobile_bp.route("/leads", methods=["GET"])
-@_auth_required
 def mobile_leads():
-    user_bots = (getattr(request, "mobile_user", {}) or {}).get("bots", [])
-    q_bot = (request.args.get("bot") or "").strip()
-    if q_bot:
-        if not _user_can_access(user_bots, q_bot):
-            return jsonify({"leads": []})
-        out = _leads_by_bot(q_bot)
-    else:
-        out = _leads_all() if "*" in user_bots else sum([_leads_by_bot(b) for b in user_bots], [])
-    out.sort(key=lambda x: x.get("last_seen",""), reverse=True)
-    return jsonify({"leads": out})
+    """
+    Lista leads visibles para el usuario según su token.
+    Query opcional: ?bot=<bot_name>
+    """
+    allowed = _allowed_from_request(request)  # "*" o lista de bot names
+    bot_q = (request.args.get("bot") or "").strip()
+
+    try:
+        if bot_q:
+            # filtra por bot + permisos
+            if not _is_allowed(bot_q, allowed):
+                return jsonify({"leads": []})
+            leads = _list_leads_by_bot(bot_q)
+        else:
+            # todos (luego aplicamos filtro de permisos)
+            leads = _list_leads_all()
+            if allowed != "*":
+                allowed_set = set(allowed) if isinstance(allowed, list) else set()
+                leads = [l for l in leads if l.get("bot") in allowed_set]
+
+        return jsonify({"leads": leads})
+    except Exception as e:
+        print(f"❌ Error leyendo leads: {e}")
+        return jsonify({"leads": []}), 500
+
 
 @mobile_bp.route("/lead", methods=["POST"])
-@_auth_required
 def mobile_update_lead():
-    body = request.get_json(silent=True) or {}
-    bot = (body.get("bot") or "").strip()
+    """
+    Actualiza estado y/o nota (alias visible) de un lead.
+    Body JSON: { "bot": "Sara", "numero": "whatsapp:+1...", "estado": "en espera", "nota": "Carlos" }
+    Requiere permiso sobre ese bot vía token.
+    """
+    try:
+        body = request.get_json(force=True) or {}
+    except Exception:
+        body = {}
+    bot_name = (body.get("bot") or "").strip()
     numero = (body.get("numero") or "").strip()
-    if not _user_can_access(request.mobile_user.get("bots", []), bot):
-        return jsonify({"ok": False, "error":"forbidden"}), 403
-    estado = (body.get("estado") or "").strip()
-    nota = body.get("nota")
-    ref = db.reference(f"leads/{bot}/{numero}")
-    cur = ref.get() or {}
-    if estado: cur["status"] = estado
-    if nota is not None: cur["notes"] = nota
-    cur.setdefault("bot", bot)
-    cur.setdefault("numero", numero)
-    ref.set(cur)
-    return jsonify({"ok": True})
+    estado = body.get("estado", None)
+    nota = body.get("nota", None)
+
+    if not bot_name or not numero:
+        return jsonify({"ok": False, "error": "params"}), 400
+
+    allowed = _allowed_from_request(request)
+    if not _is_allowed(bot_name, allowed):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    ok = _update_lead(bot_name, numero, estado=estado, nota=nota)
+    return jsonify({"ok": bool(ok)})
+
 
 @mobile_bp.route("/delete", methods=["POST"])
-@_auth_required
-def mobile_delete():
-    body = request.get_json(silent=True) or {}
-    bot = (body.get("bot") or "").strip()
-    numero = (body.get("numero") or "").strip()
-    if not _user_can_access(request.mobile_user.get("bots", []), bot):
-        return jsonify({"ok": False, "error":"forbidden"}), 403
+def mobile_delete_lead():
+    """
+    Elimina completamente una conversación.
+    Body JSON: { "bot": "Sara", "numero": "whatsapp:+1..." }
+    Requiere permiso sobre ese bot vía token.
+    """
     try:
-        db.reference(f"leads/{bot}/{numero}").delete()
-        return jsonify({"ok": True})
+        body = request.get_json(force=True) or {}
     except Exception:
-        return jsonify({"ok": False}), 500
+        body = {}
+    bot_name = (body.get("bot") or "").strip()
+    numero = (body.get("numero") or "").strip()
+
+    if not bot_name or not numero:
+        return jsonify({"ok": False, "error": "params"}), 400
+
+    allowed = _allowed_from_request(request)
+    if not _is_allowed(bot_name, allowed):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    ok = _delete_lead(bot_name, numero)
+    return jsonify({"ok": bool(ok)})
