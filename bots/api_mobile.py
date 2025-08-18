@@ -1,237 +1,201 @@
 # bots/api_mobile.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from firebase_admin import db
-from twilio.rest import Client as TwilioClient
-import os, glob, json
-from datetime import datetime
+import glob, os, json
+from functools import wraps
 
-mobile_bp = Blueprint("mobile_bp", __name__)
+mobile_bp = Blueprint("mobile", __name__)
 
-# ===== Cargar bots (igual que main, pero local para evitar import circular) =====
-def load_bots_folder():
-    bots = {}
+# ====== Token firmado (sin dependencias extras) ======
+def _serializer():
+    return URLSafeTimedSerializer(current_app.secret_key, salt="mobile-api")
+
+def _issue_token(payload: dict):
+    s = _serializer()
+    return s.dumps(payload)  # caduca al verificar (max_age)
+
+def _verify_token(token):
+    s = _serializer()
+    try:
+        # Validez: 60 días
+        return s.loads(token, max_age=60*24*60*60)
+    except (BadSignature, SignatureExpired):
+        return None
+
+def _auth_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth = (request.headers.get("Authorization") or "").strip()
+        if auth.startswith("Bearer "):
+            data = _verify_token(auth[7:])
+            if data:
+                request.mobile_user = data  # {'username':..., 'bots':[...]}
+                return f(*args, **kwargs)
+        return jsonify({"error": "Unauthorized"}), 401
+    return wrapper
+
+# ====== Usuarios (mismo esquema que tus bots/*.json) ======
+def _normalize_bot_name(name: str):
+    return (name or "").strip()
+
+def _load_users():
+    users = {}
+    # Lee credenciales desde bots/*.json  (login / logins / auth)
     for path in glob.glob(os.path.join("bots", "*.json")):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        bots[k] = v
-        except Exception as e:
-            print(f"⚠️ No se pudo cargar {path}: {e}")
-    return bots
+            if not isinstance(data, dict): 
+                continue
+            for _, cfg in data.items():
+                if not isinstance(cfg, dict): 
+                    continue
+                bot_name = (cfg.get("name") or "").strip()
+                entries = []
+                if isinstance(cfg.get("login"), dict): entries.append(cfg["login"])
+                if isinstance(cfg.get("logins"), list): entries += [x for x in cfg["logins"] if isinstance(x, dict)]
+                if isinstance(cfg.get("auth"), dict): entries.append(cfg["auth"])
+                for e in entries:
+                    u = (e.get("username") or "").strip()
+                    p = (e.get("password") or "").strip()
+                    scope = e.get("scope", bot_name)
+                    if not u or not p:
+                        continue
+                    if scope == "*":
+                        allowed = ["*"]
+                    elif isinstance(scope, list):
+                        allowed = [ _normalize_bot_name(s) for s in scope if str(s).strip() ] or [bot_name]
+                    else:
+                        allowed = [_normalize_bot_name(scope)]
+                    if u in users:
+                        prev = users[u]["bots"]
+                        users[u]["bots"] = ["*"] if ("*" in prev or "*" in allowed) else list(dict.fromkeys(prev + allowed))
+                    else:
+                        users[u] = {"password": p, "bots": allowed}
+        except Exception:
+            continue
 
-bots_config = load_bots_folder()
+    # Soporte ENV legacy (opcional)
+    for key, val in os.environ.items():
+        if not key.startswith("USER_"): 
+            continue
+        alias = key[len("USER_"):]
+        username = (val or "").strip()
+        password = (os.environ.get(f"PASS_{alias}", "") or "").strip()
+        panel = (os.environ.get(f"PANEL_{alias}", "") or "").strip()
+        if not username or not password or not panel:
+            continue
+        if panel.lower() == "panel":
+            bots_list = ["*"]
+        elif panel.lower().startswith("panel-bot/"):
+            bots_list = [panel.split("/",1)[1].strip()]
+        else:
+            bots_list = []
+        if bots_list:
+            users[username] = {"password": password, "bots": bots_list}
 
-def _normalize_bot_name(name: str):
-    for cfg in bots_config.values():
-        if cfg.get("name", "").lower() == (name or "").lower():
-            return cfg.get("name")
-    return None
+    if not users:
+        users["sundin"] = {"password": "inhouston2025", "bots": ["*"]}
+    return users
 
-def _get_bot_number_by_name(bot_name: str) -> str:
-    for number_key, cfg in bots_config.items():
-        if isinstance(cfg, dict) and cfg.get("name", "").strip().lower() == (bot_name or "").strip().lower():
-            return number_key
-    return ""
+def _user_can_access(user_bots, bot_name):
+    return ("*" in (user_bots or [])) or ((bot_name or "") in (user_bots or []))
 
-def _lead_ref(bot_nombre, numero):
-    return db.reference(f"leads/{bot_nombre}/{numero}")
+# ====== Firebase helpers (solo lo que usa el móvil) ======
+def _leads_all():
+    root = db.reference("leads").get() or {}
+    out = []
+    if not isinstance(root, dict): return out
+    for bot, nums in root.items():
+        if not isinstance(nums, dict): continue
+        for numero, data in nums.items():
+            out.append({
+                "bot": bot,
+                "numero": numero,
+                "first_seen": data.get("first_seen",""),
+                "last_message": data.get("last_message",""),
+                "last_seen": data.get("last_seen",""),
+                "messages": int(data.get("messages",0)),
+                "status": data.get("status","nuevo"),
+                "notes": data.get("notes",""),
+            })
+    return out
 
-def _hora_to_epoch_ms(hora_str: str) -> int:
-    try:
-        dt = datetime.strptime(hora_str, "%Y-%m-%d %H:%M:%S")
-        return int(dt.timestamp() * 1000)
-    except Exception:
-        return 0
+def _leads_by_bot(bot):
+    nums = db.reference(f"leads/{bot}").get() or {}
+    out = []
+    if not isinstance(nums, dict): return out
+    for numero, data in nums.items():
+        out.append({
+            "bot": bot,
+            "numero": numero,
+            "first_seen": data.get("first_seen",""),
+            "last_message": data.get("last_message",""),
+            "last_seen": data.get("last_seen",""),
+            "messages": int(data.get("messages",0)),
+            "status": data.get("status","nuevo"),
+            "notes": data.get("notes",""),
+        })
+    return out
 
-def _append_historial(bot_nombre, numero, entrada):
-    ref = _lead_ref(bot_nombre, numero)
-    lead = ref.get() or {}
-    historial = lead.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-    historial.append(entrada)
-    lead["historial"]   = historial
-    lead["last_message"] = entrada.get("texto", "")
-    lead["last_seen"]    = entrada.get("hora", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    lead["messages"]     = int(lead.get("messages", 0)) + 1
-    lead.setdefault("bot", bot_nombre)
-    lead.setdefault("numero", numero)
-    lead.setdefault("status", "nuevo")
-    lead.setdefault("notes", "")
-    ref.set(lead)
-
-# ===== Twilio REST (para enviar manual desde la app) =====
-TWILIO_ACCOUNT_SID = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
-TWILIO_AUTH_TOKEN  = (os.environ.get("TWILIO_AUTH_TOKEN")  or "").strip()
-_twilio_client = None
-if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
-    try:
-        _twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        print("[MOBILE] Twilio REST listo.")
-    except Exception as e:
-        print(f"⚠️ Twilio REST no disponible: {e}")
-
-# =========================
-#         ENDPOINTS
-# =========================
+# ====== Endpoints ======
+@mobile_bp.route("/login", methods=["POST"])
+def mobile_login():
+    body = request.get_json(silent=True) or {}
+    u = (body.get("username") or "").strip()
+    p = (body.get("password") or "").strip()
+    users = _load_users()
+    rec = users.get(u)
+    if rec and rec.get("password") == p:
+        bots = rec.get("bots", [])
+        token = _issue_token({"username": u, "bots": bots})
+        return jsonify({"ok": True, "token": token, "bots": bots, "user": u})
+    return jsonify({"ok": False, "error": "Credenciales inválidas"}), 401
 
 @mobile_bp.route("/leads", methods=["GET"])
+@_auth_required
 def mobile_leads():
-    bot = (request.args.get("bot") or "").strip()
-    if bot:
-        bot_norm = _normalize_bot_name(bot) or bot
-        data = db.reference(f"leads/{bot_norm}").get() or {}
-        items = []
-        if isinstance(data, dict):
-            for numero, d in data.items():
-                items.append({
-                    "bot": bot_norm,
-                    "numero": numero,
-                    "first_seen": d.get("first_seen", ""),
-                    "last_message": d.get("last_message", ""),
-                    "last_seen": d.get("last_seen", ""),
-                    "messages": int(d.get("messages", 0)),
-                    "status": d.get("status", "nuevo"),
-                    "notes": d.get("notes", "")
-                })
-        return jsonify({"leads": items})
+    user_bots = (getattr(request, "mobile_user", {}) or {}).get("bots", [])
+    q_bot = (request.args.get("bot") or "").strip()
+    if q_bot:
+        if not _user_can_access(user_bots, q_bot):
+            return jsonify({"leads": []})
+        out = _leads_by_bot(q_bot)
     else:
-        root = db.reference("leads").get() or {}
-        items = []
-        if isinstance(root, dict):
-            for bot_nombre, numeros in root.items():
-                if not isinstance(numeros, dict):
-                    continue
-                for numero, d in numeros.items():
-                    items.append({
-                        "bot": bot_nombre,
-                        "numero": numero,
-                        "first_seen": d.get("first_seen", ""),
-                        "last_message": d.get("last_message", ""),
-                        "last_seen": d.get("last_seen", ""),
-                        "messages": int(d.get("messages", 0)),
-                        "status": d.get("status", "nuevo"),
-                        "notes": d.get("notes", "")
-                    })
-        return jsonify({"leads": items})
+        out = _leads_all() if "*" in user_bots else sum([_leads_by_bot(b) for b in user_bots], [])
+    out.sort(key=lambda x: x.get("last_seen",""), reverse=True)
+    return jsonify({"leads": out})
 
-@mobile_bp.route("/chat", methods=["GET"])
-def mobile_chat():
-    bot = (request.args.get("bot") or "").strip()
-    numero = (request.args.get("numero") or "").strip()
-    since = int((request.args.get("since") or "0").strip() or 0)
-
-    bot_norm = _normalize_bot_name(bot) or bot
-    lead = _lead_ref(bot_norm, numero).get() or {}
-    historial = lead.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-
-    nuevos, last_ts = [], since
-    for reg in historial:
-        ts = _hora_to_epoch_ms(reg.get("hora", ""))
-        if ts > since:
-            nuevos.append({
-                "texto": reg.get("texto", ""),
-                "hora": reg.get("hora", ""),
-                "tipo": reg.get("tipo", "user"),
-                "ts": ts
-            })
-        if ts > last_ts:
-            last_ts = ts
-
-    # Si since=0, devolvemos TODO el historial
-    if since == 0 and historial:
-        nuevos = [{
-            "texto": reg.get("texto", ""),
-            "hora": reg.get("hora", ""),
-            "tipo": reg.get("tipo", "user"),
-            "ts": _hora_to_epoch_ms(reg.get("hora", "")),
-        } for reg in historial]
-        last_ts = max((m["ts"] for m in nuevos), default=0)
-
-    bot_enabled = lead.get("bot_enabled", True)
-    return jsonify({"mensajes": nuevos, "last_ts": last_ts, "bot_enabled": bool(bot_enabled)})
-
-@mobile_bp.route("/send_manual", methods=["POST"])
-def mobile_send_manual():
-    body = request.get_json(silent=True) or {}
-    bot_nombre = (body.get("bot") or "").strip()
-    numero = (body.get("numero") or "").strip()
-    texto  = (body.get("texto") or "").strip()
-    if not bot_nombre or not numero or not texto:
-        return jsonify({"error": "Parámetros inválidos"}), 400
-
-    bot_norm = _normalize_bot_name(bot_nombre) or bot_nombre
-    from_number = _get_bot_number_by_name(bot_norm)
-
-    if not _twilio_client or not from_number:
-        return jsonify({"error": "Twilio no configurado o bot sin número"}), 500
-
-    try:
-        _twilio_client.messages.create(from_=from_number, to=numero, body=texto)
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        _append_historial(bot_norm, numero, {"tipo": "admin", "texto": texto, "hora": ahora})
-        return jsonify({"ok": True})
-    except Exception as e:
-        print(f"❌ Error Twilio (mobile): {e}")
-        return jsonify({"error": "Fallo enviando el mensaje"}), 500
-
-@mobile_bp.route("/conversation_bot", methods=["POST"])
-def mobile_conv_switch():
-    body = request.get_json(silent=True) or {}
-    bot_nombre = (body.get("bot") or "").strip()
-    numero = (body.get("numero") or "").strip()
-    enabled = body.get("enabled", None)
-    if enabled is None or not bot_nombre or not numero:
-        return jsonify({"error": "Parámetros inválidos"}), 400
-
-    bot_norm = _normalize_bot_name(bot_nombre) or bot_nombre
-    ref = _lead_ref(bot_norm, numero)
-    cur = ref.get() or {}
-    cur["bot_enabled"] = bool(enabled)
-    ref.set(cur)
-    return jsonify({"ok": True, "enabled": bool(enabled)})
-
-# ✅ NEW: actualizar estado y/o alias (notes)
 @mobile_bp.route("/lead", methods=["POST"])
+@_auth_required
 def mobile_update_lead():
     body = request.get_json(silent=True) or {}
-    bot_nombre = (body.get("bot") or "").strip()
+    bot = (body.get("bot") or "").strip()
     numero = (body.get("numero") or "").strip()
+    if not _user_can_access(request.mobile_user.get("bots", []), bot):
+        return jsonify({"ok": False, "error":"forbidden"}), 403
     estado = (body.get("estado") or "").strip()
-    nota   = body.get("nota", None)
-
-    if not bot_nombre or not numero:
-        return jsonify({"error": "Parámetros inválidos"}), 400
-
-    bot_norm = _normalize_bot_name(bot_nombre) or bot_nombre
-    ref = _lead_ref(bot_norm, numero)
+    nota = body.get("nota")
+    ref = db.reference(f"leads/{bot}/{numero}")
     cur = ref.get() or {}
-    if estado:
-        cur["status"] = estado
-    if nota is not None:
-        cur["notes"] = (nota or "").strip()
-    cur.setdefault("bot", bot_norm)
+    if estado: cur["status"] = estado
+    if nota is not None: cur["notes"] = nota
+    cur.setdefault("bot", bot)
     cur.setdefault("numero", numero)
     ref.set(cur)
     return jsonify({"ok": True})
 
-# ✅ NEW: borrar conversación completa
 @mobile_bp.route("/delete", methods=["POST"])
-def mobile_delete_lead():
+@_auth_required
+def mobile_delete():
     body = request.get_json(silent=True) or {}
-    bot_nombre = (body.get("bot") or "").strip()
-    numero     = (body.get("numero") or "").strip()
-    if not bot_nombre or not numero:
-        return jsonify({"error": "Parámetros inválidos"}), 400
-
-    bot_norm = _normalize_bot_name(bot_nombre) or bot_nombre
+    bot = (body.get("bot") or "").strip()
+    numero = (body.get("numero") or "").strip()
+    if not _user_can_access(request.mobile_user.get("bots", []), bot):
+        return jsonify({"ok": False, "error":"forbidden"}), 403
     try:
-        _lead_ref(bot_norm, numero).delete()
+        db.reference(f"leads/{bot}/{numero}").delete()
         return jsonify({"ok": True})
-    except Exception as e:
-        print(f"❌ Error eliminando lead {bot_norm}/{numero}: {e}")
+    except Exception:
         return jsonify({"ok": False}), 500
