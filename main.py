@@ -144,6 +144,11 @@ if not bots_config:
 from billing_api import billing_bp, record_openai_usage
 app.register_blueprint(billing_bp, url_prefix="/billing")
 
+# 💡 API móvil (JSON público para la app)
+from api_mobile import mobile_bp
+app.register_blueprint(mobile_bp, url_prefix="/api/mobile")
+
+
 # =======================
 #  Memorias por sesión (runtime)
 # =======================
