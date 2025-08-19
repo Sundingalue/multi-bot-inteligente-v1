@@ -17,6 +17,8 @@ import hashlib
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
+# 🔹 NEW (VOZ): TwiML para llamadas
+from twilio.twiml.voice_response import VoiceResponse, Gather  # <-- añadido (solo para VOZ)
 
 # 🔹 Firebase
 import firebase_admin
@@ -184,6 +186,26 @@ def _get_bot_cfg_by_name(name: str):
 
 def _get_bot_cfg_by_number(to_number: str):
     return bots_config.get(to_number)
+
+# ✅ NEW (VOZ): encuentra bot por número E.164 (+1...) o clave WhatsApp (whatsapp:+1...)
+def _get_bot_cfg_by_any_number(to_number: str):
+    if not to_number:
+        return None
+    # Coincidencia directa
+    bot = bots_config.get(to_number)
+    if bot:
+        return bot
+    # Si viene como +1..., probar whatsapp:+1...
+    if to_number.startswith("+"):
+        cand = f"whatsapp:{to_number}"
+        if cand in bots_config:
+            return bots_config.get(cand)
+    # Si viene como whatsapp:+1..., probar +1...
+    if to_number.startswith("whatsapp:"):
+        cand = to_number[len("whatsapp:"):]
+        if cand in bots_config:
+            return bots_config.get(cand)
+    return None
 
 def _get_bot_number_by_name(bot_name: str) -> str:
     """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
@@ -1338,6 +1360,138 @@ def whatsapp_bot():
         msg.body("Error generando la respuesta.")
 
     return str(response)
+
+# =======================
+#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice
+# =======================
+@app.route("/voice", methods=["GET", "POST"])
+def voice_bot():
+    """
+    Maneja llamadas entrantes al número de Twilio.
+    - Usa <Gather input="speech"> para transcribir voz a texto en español (Twilio STT).
+    - Pasa el texto al mismo motor GPT del bot.
+    - Responde con <Say> en español (voz 'alice').
+    - Si el usuario pide 'enlace' o 'agendar', se envía un SMS con el link.
+    """
+    # Números
+    from_number = (request.values.get("From") or "").strip()      # ej: +1786...
+    to_number   = (request.values.get("To") or "").strip()        # ej: +1346...
+    call_sid    = (request.values.get("CallSid") or "").strip()
+
+    vr = VoiceResponse()
+
+    # Detectar bot por número de destino (acepta +1... o whatsapp:+1...)
+    bot = _get_bot_cfg_by_any_number(to_number)
+    if not bot:
+        vr.say("Este número no está asignado a ningún asistente.", voice="alice", language="es-MX")
+        return str(vr)
+
+    bot_name = (bot.get("name") or "").strip()
+    if bot_name and not fb_is_bot_on(bot_name):
+        vr.say("El asistente no está disponible en este momento. Gracias.", voice="alice", language="es-MX")
+        return str(vr)
+
+    # Sesión de llamada (clave por CallSid)
+    clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
+    if clave_sesion not in session_history:
+        sysmsg = _make_system_message(bot)
+        session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
+
+    # Primer turno (no hay SpeechResult aún)
+    speech_result = (request.values.get("SpeechResult") or "").strip()
+    if not speech_result:
+        # Saludo (usa voice_greeting si existe; si no, greeting o fallback)
+        greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or "Hola, te habla el asistente. ¿En qué puedo ayudarte?").strip()
+        gather = Gather(input="speech", action="/voice", method="POST", language="es-MX", speechTimeout="auto")
+        gather.say(greeting_text, voice="alice", language="es-MX")
+        vr.append(gather)
+        vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", voice="alice", language="es-MX")
+        return str(vr)
+
+    # Tenemos texto del usuario transcrito por Twilio
+    user_text = speech_result
+    try:
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fb_append_historial(bot_name, from_number, {"tipo": "user", "texto": user_text, "hora": ahora})
+    except Exception as e:
+        print(f"⚠️ No se pudo guardar user voice: {e}")
+
+    # Construir prompt y llamar GPT
+    session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
+
+    try:
+        model_name = (bot.get("model") or "gpt-4o").strip()
+        temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
+
+        completion = client.chat.completions.create(
+            model=model_name,
+            temperature=temperature,
+            messages=session_history[clave_sesion]
+        )
+
+        respuesta = (completion.choices[0].message.content or "").strip()
+        respuesta = _apply_style(bot, respuesta)
+        must_ask = bool((bot.get("style") or {}).get("always_question", False))
+        respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
+
+        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
+
+        # Registrar tokens (billing)
+        try:
+            usage = getattr(completion, "usage", None)
+            if usage:
+                input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            else:
+                usage_dict = getattr(completion, "to_dict", lambda: {})()
+                input_tokens = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
+                output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
+            record_openai_usage(bot_name, model_name, input_tokens, output_tokens)
+        except Exception as e:
+            print(f"⚠️ No se pudo registrar tokens (voz): {e}")
+
+        try:
+            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot_name, from_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar bot voice: {e}")
+
+        # Decidir si enviamos SMS con enlaces (si el usuario lo pidió)
+        try:
+            if twilio_client:
+                # Enviar link de agenda si el usuario lo solicita
+                if _wants_link(user_text):
+                    booking = _effective_booking_url(bot)
+                    if _valid_url(booking):
+                        # from_ debe ser un número SMS-capable. Usamos el número de la llamada (E.164)
+                        twilio_client.messages.create(
+                            from_=to_number,
+                            to=from_number,
+                            body=f"Enlace para agendar: {booking}"
+                        )
+                # Enviar link de app si lo solicita
+                if _wants_app_download(user_text):
+                    app_url = _effective_app_url(bot)
+                    if _valid_url(app_url):
+                        twilio_client.messages.create(
+                            from_=to_number,
+                            to=from_number,
+                            body=f"Link de la app: {app_url}"
+                        )
+        except Exception as e:
+            print(f"⚠️ No se pudo enviar SMS post-llamada: {e}")
+
+        # Responder por voz y seguir escuchando (con Gather)
+        gather = Gather(input="speech", action="/voice", method="POST", language="es-MX", speechTimeout="auto")
+        gather.say(respuesta, voice="alice", language="es-MX")
+        vr.append(gather)
+        vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.", voice="alice", language="es-MX")
+        return str(vr)
+
+    except Exception as e:
+        print(f"❌ Error GPT en voz: {e}")
+        vr.say("Lo siento. Hubo un error procesando tu solicitud.", voice="alice", language="es-MX")
+        return str(vr)
 
 # =======================
 #  Vistas de conversación (leen Firebase)
