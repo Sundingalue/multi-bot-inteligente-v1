@@ -3,6 +3,8 @@ from flask import Flask, request, session, redirect, url_for, send_file, jsonify
 from twilio.twiml.messaging_response import MessagingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
+from flask import Response
+from twilio.twiml.voice_response import VoiceResponse, Gather
 import os
 import json
 import time
@@ -1364,8 +1366,6 @@ def whatsapp_bot():
 # =======================
 #  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice
 # =======================
-from flask import Response
-from twilio.twiml.voice_response import VoiceResponse, Gather
 
 @app.route("/voice", methods=["GET", "POST"])
 def voice_bot():
@@ -1384,8 +1384,8 @@ def voice_bot():
     print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
 
     # Voz/idioma compatibles (sin tocar prompts)
-    voice_name = "Polly.Lupe"   # Español (México), natural
-    lang_code  = "es-MX"
+    voice_name = "alice"   # Español (México), natural
+    lang_code  = "es-ES"
 
     vr = VoiceResponse()
 
