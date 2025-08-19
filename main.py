@@ -1364,54 +1364,70 @@ def whatsapp_bot():
 # =======================
 #  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice
 # =======================
+from flask import Response
+from twilio.twiml.voice_response import VoiceResponse, Gather
+
 @app.route("/voice", methods=["GET", "POST"])
 def voice_bot():
     """
-    Maneja llamadas entrantes al número de Twilio.
-    - Usa <Gather input="speech"> para transcribir voz a texto en español (Twilio STT).
-    - Pasa el texto al mismo motor GPT del bot.
-    - Responde con <Say> en español (voz 'alice').
-    - Si el usuario pide 'enlace' o 'agendar', se envía un SMS con el link.
+    VOZ genérica para todos los bots:
+    - Detecta el bot por número (E.164 o whatsapp:+).
+    - Usa Twilio STT (<Gather input="speech">) en español.
+    - Usa el MISMO motor GPT y estilo definidos en el JSON del bot (system_prompt, style, etc).
+    - Responde con voz (Polly.Lupe es-MX). SIN hardcodear prompts aquí.
     """
-    # Números
-    from_number = (request.values.get("From") or "").strip()      # ej: +1786...
-    to_number   = (request.values.get("To") or "").strip()        # ej: +1346...
+    from_number = (request.values.get("From") or "").strip()
+    to_number   = (request.values.get("To") or "").strip()
     call_sid    = (request.values.get("CallSid") or "").strip()
+    speech_result = (request.values.get("SpeechResult") or "").strip()
+
+    print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
+
+    # Voz/idioma compatibles (sin tocar prompts)
+    voice_name = "Polly.Lupe"   # Español (México), natural
+    lang_code  = "es-MX"
 
     vr = VoiceResponse()
 
-    # Detectar bot por número de destino (acepta +1... o whatsapp:+1...)
+    # Buscar el bot por número (soporta +1... y whatsapp:+1...)
     bot = _get_bot_cfg_by_any_number(to_number)
     if not bot:
-        vr.say("Este número no está asignado a ningún asistente.", voice="alice", language="es-MX")
+        vr.say("Este número no está asignado a ningún asistente.", voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
-
 
     bot_name = (bot.get("name") or "").strip()
     if bot_name and not fb_is_bot_on(bot_name):
-        vr.say("El asistente no está disponible en este momento. Gracias.", voice="alice", language="es-MX")
+        vr.say("El asistente no está disponible en este momento. Gracias.", voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
 
-
-    # Sesión de llamada (clave por CallSid)
+    # Clave de sesión por llamada (no mezcla con WhatsApp)
     clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
     if clave_sesion not in session_history:
-        sysmsg = _make_system_message(bot)
+        sysmsg = _make_system_message(bot)  # viene del JSON del bot
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
 
-    # Primer turno (no hay SpeechResult aún)
-    speech_result = (request.values.get("SpeechResult") or "").strip()
+    # Si NO hay texto aún (primer turno), solo saludar y escuchar
     if not speech_result:
-        # Saludo (usa voice_greeting si existe; si no, greeting o fallback)
-        greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or "Hola, te habla el asistente. ¿En qué puedo ayudarte?").strip()
-        gather = Gather(input="speech", action="/voice", method="POST", language="es-MX", speechTimeout="auto")
-        gather.say(greeting_text, voice="alice", language="es-MX")
+        # El saludo sale del JSON del bot (voice_greeting o greeting). SIN emojis ni raros.
+        greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
+        greeting_text = greeting_text.encode("utf-8", "ignore").decode("utf-8")
+        greeting_text = greeting_text.replace("“","\"").replace("”","\"").replace("’","'").replace("—","-")
+
+        gather = Gather(
+            input="speech",
+            action="https://multi-bot-inteligente-v1.onrender.com/voice",
+            method="POST",
+            language=lang_code,
+            speechTimeout="auto",
+            actionOnEmptyResult=True,
+            timeout=5
+        )
+        gather.say(greeting_text, voice=voice_name, language=lang_code)
         vr.append(gather)
-        vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", voice="alice", language="es-MX")
+        vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
 
-
-    # Tenemos texto del usuario transcrito por Twilio
+    # Tenemos texto del usuario (STT de Twilio)
     user_text = speech_result
     try:
         ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1419,7 +1435,7 @@ def voice_bot():
     except Exception as e:
         print(f"⚠️ No se pudo guardar user voice: {e}")
 
-    # Construir prompt y llamar GPT
+    # Pasamos el turno al mismo motor GPT/estilo del bot (definidos en su JSON)
     session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
 
     try:
@@ -1433,13 +1449,13 @@ def voice_bot():
         )
 
         respuesta = (completion.choices[0].message.content or "").strip()
-        respuesta = _apply_style(bot, respuesta)
+        respuesta = _apply_style(bot, respuesta)  # respeta style.short_replies, etc.
         must_ask = bool((bot.get("style") or {}).get("always_question", False))
         respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
 
         session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
 
-        # Registrar tokens (billing)
+        # Facturación de tokens por bot
         try:
             usage = getattr(completion, "usage", None)
             if usage:
@@ -1459,20 +1475,17 @@ def voice_bot():
         except Exception as e:
             print(f"⚠️ No se pudo guardar bot voice: {e}")
 
-        # Decidir si enviamos SMS con enlaces (si el usuario lo pidió)
+        # Enviar SMS con links si el usuario lo pidió (agenda/app)
         try:
             if twilio_client:
-                # Enviar link de agenda si el usuario lo solicita
                 if _wants_link(user_text):
                     booking = _effective_booking_url(bot)
                     if _valid_url(booking):
-                        # from_ debe ser un número SMS-capable. Usamos el número de la llamada (E.164)
                         twilio_client.messages.create(
                             from_=to_number,
                             to=from_number,
                             body=f"Enlace para agendar: {booking}"
                         )
-                # Enviar link de app si lo solicita
                 if _wants_app_download(user_text):
                     app_url = _effective_app_url(bot)
                     if _valid_url(app_url):
@@ -1484,17 +1497,24 @@ def voice_bot():
         except Exception as e:
             print(f"⚠️ No se pudo enviar SMS post-llamada: {e}")
 
-        # Responder por voz y seguir escuchando (con Gather)
-        gather = Gather(input="speech", action="/voice", method="POST", language="es-MX", speechTimeout="auto")
-        gather.say(respuesta, voice="alice", language="es-MX")
+        # Responder por voz y continuar escuchando
+        gather = Gather(
+            input="speech",
+            action="https://multi-bot-inteligente-v1.onrender.com/voice",
+            method="POST",
+            language=lang_code,
+            speechTimeout="auto",
+            actionOnEmptyResult=True,
+            timeout=5
+        )
+        gather.say(respuesta, voice=voice_name, language=lang_code)
         vr.append(gather)
-        vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.", voice="alice", language="es-MX")
+        vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.", voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
-
 
     except Exception as e:
         print(f"❌ Error GPT en voz: {e}")
-        vr.say("Lo siento. Hubo un error procesando tu solicitud.", voice="alice", language="es-MX")
+        vr.say("Lo siento. Hubo un error procesando tu solicitud.", voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
 
 
