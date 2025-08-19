@@ -1384,12 +1384,14 @@ def voice_bot():
     bot = _get_bot_cfg_by_any_number(to_number)
     if not bot:
         vr.say("Este número no está asignado a ningún asistente.", voice="alice", language="es-MX")
-        return str(vr)
+        return str(vr), 200, {"Content-Type": "text/xml"}
+
 
     bot_name = (bot.get("name") or "").strip()
     if bot_name and not fb_is_bot_on(bot_name):
         vr.say("El asistente no está disponible en este momento. Gracias.", voice="alice", language="es-MX")
-        return str(vr)
+        return str(vr), 200, {"Content-Type": "text/xml"}
+
 
     # Sesión de llamada (clave por CallSid)
     clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
@@ -1406,7 +1408,8 @@ def voice_bot():
         gather.say(greeting_text, voice="alice", language="es-MX")
         vr.append(gather)
         vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", voice="alice", language="es-MX")
-        return str(vr)
+        return str(vr), 200, {"Content-Type": "text/xml"}
+
 
     # Tenemos texto del usuario transcrito por Twilio
     user_text = speech_result
@@ -1486,12 +1489,14 @@ def voice_bot():
         gather.say(respuesta, voice="alice", language="es-MX")
         vr.append(gather)
         vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.", voice="alice", language="es-MX")
-        return str(vr)
+        return str(vr), 200, {"Content-Type": "text/xml"}
+
 
     except Exception as e:
         print(f"❌ Error GPT en voz: {e}")
         vr.say("Lo siento. Hubo un error procesando tu solicitud.", voice="alice", language="es-MX")
-        return str(vr)
+        return str(vr), 200, {"Content-Type": "text/xml"}
+
 
 # =======================
 #  Vistas de conversación (leen Firebase)
