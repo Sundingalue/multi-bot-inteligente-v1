@@ -193,7 +193,8 @@ def _canonize_phone(raw: str) -> str:
     for p in ("whatsapp:", "tel:", "sip:", "client:"):
         if s.startswith(p):
             s = s[len(p):]
-    digits = "".join(ch for ch in s if ch.isdigit())
+    digits = "".join(ch for ch in s if s.isdigit() or ch.isdigit())
+    digits = "".join(ch for ch in s if ch.isdigit()) if not digits else digits
     if not digits:
         return ""
     if len(digits) == 11 and digits.startswith("1"):
@@ -799,7 +800,7 @@ def panel():
     else:
         leads_filtrados = leads_todos
 
-    return render_template("panel.html", leads=leads_todos, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
+    return render_template("panel.html", leads=leads_todos, bots= bots_disponibles, bot_seleccionado=bot_seleccionado)
 
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
