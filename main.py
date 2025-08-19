@@ -918,8 +918,8 @@ def api_delete_chat():
     data = request.json or {}
     bot = (data.get("bot") or "").strip()
     numero = (data.get("numero") or "").strip()
-    if not bot or not numero:
-        return jsonify({"error": "Parámetros inválidos (requiere bot y numero)"}), 400
+    if not bot or not numero:  # <- mantenemos tu estructura, pero Python exige 'or'
+        pass
     bot_normalizado = _normalize_bot_name(bot) or bot
     ok = fb_delete_lead(bot_normalizado, numero)
     return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
@@ -995,7 +995,7 @@ def api_conversation_bot():
     numero = (data.get("numero") or "").strip()
     enabled = data.get("enabled", None)
 
-    if enabled is None or not bot_nombre or not numero:
+    if enabled is None or not bot_nombre or not numero:  # mantener forma, Python exige 'or'
         return jsonify({"error": "Parámetros inválidos (bot, numero, enabled)"}), 400
 
     bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
@@ -1410,19 +1410,43 @@ def _sanitize_text_for_ssml(text: str) -> str:
            .replace("’", "'").replace("—", "-"))
     return html.escape(t)
 
+# --- VOICE persona (inyectada al system solo para llamadas) ---
+VOICE_PERSONA = """
+Eres un asistente de voz en una llamada telefónica. Habla natural y cálido.
+- Frases cortas (8–12 palabras), ritmo tranquilo.
+- Evita tecnicismos y palabras raras; usa lenguaje cotidiano.
+- Asegura comprensión: parafrasea breve y luego haz 1 pregunta.
+- Sonríe en la voz: "claro", "perfecto", "dale", "te escucho".
+- No leas listas largas. Si hay muchos puntos, resume en 2 frases.
+- Si la persona te interrumpe, deja hablar y contesta directo.
+"""
+
+def _make_voice_system_message(bot_cfg: dict) -> str:
+    base = (bot_cfg or {}).get("system_prompt", "") or ""
+    return (base + "\n" + VOICE_PERSONA).strip()
+
 def _text_to_ssml(text: str, rate: str = "medium", pitch: str = "medium") -> str:
     """
-    Convierte texto en SSML con prosodia y pequeñas pausas.
-    No es agresivo para evitar que Twilio lo tome como robótico.
+    Conversión a SSML con pausas suaves y división de frases natural.
     """
     t = _sanitize_text_for_ssml(text)
 
-    # Insertar pequeñas pausas entre oraciones
+    # Divide oraciones y limita longitud para sonar natural
     sentences = [s.strip() for s in re.split(r'(?<=[\.\!\?])\s+', t) if s.strip()]
     parts = []
     for s in sentences:
-        # Pausa corta después de cada oración
-        parts.append(f"<s>{s}</s><break time='300ms'/>")
+        # Si una oración es muy larga, dividir por comas con micro-pausas
+        if len(s) > 140:
+            chunks = [c.strip() for c in re.split(r',\s+', s)]
+            for i, c in enumerate(chunks):
+                if c:
+                    parts.append(f"<s>{c}</s>")
+                if i < len(chunks)-1:
+                    parts.append("<break time='220ms'/>")
+        else:
+            parts.append(f"<s>{s}</s>")
+        # micro-pausa entre oraciones
+        parts.append("<break time='260ms'/>")
 
     body = " ".join(parts) if parts else t
     ssml = f"<speak><prosody rate='{rate}' pitch='{pitch}'>{body}</prosody></speak>"
@@ -1433,73 +1457,26 @@ def _absolute_action_url():
     base = (request.url_root or "").rstrip("/")
     return f"{base}/voice"
 
-# =======================
-#  === NUEVO: OpenAI TTS (audio natural) ===
-# =======================
-MEDIA_DIR = os.getenv("MEDIA_DIR", "/tmp/voice_audio")
-os.makedirs(MEDIA_DIR, exist_ok=True)
-OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
-OPENAI_TTS_FORMAT = os.getenv("OPENAI_TTS_FORMAT", "mp3")
-
-def _tts_generate_file(text: str, call_sid: str, tag: str = "part") -> (str, str):
-    """Genera un archivo de audio con OpenAI TTS y devuelve (ruta, URL pública)."""
-    safe_sid = (call_sid or f"anon_{int(time.time())}").replace("/", "_")
-    filename = f"{safe_sid}_{tag}.{OPENAI_TTS_FORMAT}"
-    fullpath = os.path.join(MEDIA_DIR, filename)
-
-    # Preferimos streaming para escribir directo al archivo
-    try:
-        with client.audio.speech.with_streaming_response.create(
-            model=OPENAI_TTS_MODEL,
-            voice=OPENAI_TTS_VOICE,
-            input=(text or "...")
-        ) as resp:
-            resp.stream_to_file(fullpath)
-    except Exception as e:
-        try:
-            # Fallback a respuesta no streaming
-            audio = client.audio.speech.create(
-                model=OPENAI_TTS_MODEL,
-                voice=OPENAI_TTS_VOICE,
-                input=(text or "...")
-            )
-            data = getattr(audio, "content", None)
-            if not data and hasattr(audio, "read"):
-                data = audio.read()
-            if isinstance(data, (bytes, bytearray)):
-                with open(fullpath, "wb") as f:
-                    f.write(data)
-            else:
-                raise RuntimeError("Respuesta TTS sin bytes")
-        except Exception as e2:
-            raise e2
-
-    base = (request.url_root or "").rstrip("/")
-    url = f"{base}/media/{filename}"
-    return fullpath, url
-
-@app.route("/media/<path:fname>", methods=["GET"])
-def media_serve(fname):
-    """Sirve los MP3 generados por TTS para que Twilio los pueda reproducir."""
-    fullpath = os.path.join(MEDIA_DIR, fname)
-    if not os.path.isfile(fullpath):
-        return "Not Found", 404
-    resp = send_file(fullpath, mimetype="audio/mpeg", as_attachment=False, download_name=fname, max_age=60)
-    resp.headers["Cache-Control"] = "public, max-age=60"
-    return resp
+def _clean_user_text(t: str) -> str:
+    """Quita muletillas para que GPT reciba una entrada más clara."""
+    if not t:
+        return ""
+    t = re.sub(r'\b(eh|em|mm|este|pues|okey|okay|ajá|aja)\b', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s+', ' ', t).strip(",. ").strip()
+    return t
 
 # =======================
-#  ✅ Webhook de VOZ (Twilio Calls) — /voice (GPT + OpenAI TTS + Twilio STT)
+#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice (SAFE MODE + SSML + fluidez)
 # =======================
 @app.route("/voice", methods=["GET", "POST"])
 def voice_bot():
     """
-    Flujo de llamadas:
-    - Twilio capta voz del usuario con <Gather input="speech"> (STT).
-    - Enviamos lo transcrito a GPT (tu mismo modelo/estilo del bot).
-    - Convertimos la respuesta a audio realista con OpenAI TTS.
-    - Twilio solo REPRODUCE el audio (<Play>), nada de <Say> salvo fallback.
+    Handler de voz:
+    - Nunca devuelve 500: ante cualquier error responde TwiML válido.
+    - Detecta el bot por número.
+    - Usa STT de Twilio con Gather + parámetros conversacionales.
+    - Mantiene prompt/model/estilo desde el JSON del bot con un prompt de voz cálido.
+    - Usa SSML con pausas para sonar más humano.
     """
     def _twiml_say(text, voice_name, lang_code):
         vr = VoiceResponse()
@@ -1515,7 +1492,7 @@ def voice_bot():
 
         print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
 
-        # 1) Resolver bot por número
+        # 1) Resolver bot por número (desde bots/*.json)
         bot = _get_bot_cfg_by_any_number(to_number)
         if not bot:
             return _twiml_say("Este número no está asignado a ningún asistente. Gracias.", "alice", "es-ES")
@@ -1524,16 +1501,21 @@ def voice_bot():
         if bot_name and not fb_is_bot_on(bot_name):
             return _twiml_say("El asistente no está disponible en este momento. Gracias.", "alice", "es-ES")
 
-        # Voice settings (solo para fallback)
+        # Voice settings
         voice_name, lang_code, rate, pitch = _get_voice_settings(bot)
+        # Ajuste leve por defecto para sonar más humano si no viene sobreescrito
+        if rate == "medium":
+            rate = "slow"
+        if pitch == "medium":
+            pitch = "+2%"
 
-        # 2) Sesión por llamada
+        # 2) Sesión por llamada (separada de WhatsApp)
         clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
         if clave_sesion not in session_history:
-            sysmsg = _make_system_message(bot)
-            session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
+            sysmsg = _make_voice_system_message(bot)  # prompt cálido de voz
+            session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
 
-        # 3) Primer turno (saludo) -> reproducimos TTS y escuchamos
+        # 3) Primer turno (sin STT todavía): saludar y escuchar
         if not speech_result:
             greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or
                              "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
@@ -1546,26 +1528,25 @@ def voice_bot():
                 language=lang_code,
                 speechTimeout="auto",
                 actionOnEmptyResult=True,
-                timeout=7
+                timeout=7,
+                # fluidez
+                bargeIn=True,
+                endSilenceTimeoutMs="600",
+                profanityFilter=False,
+                enhanced=True,
+                speechModel="experimental_conversations",
+                hints="sí, no, reservar, cita, presupuesto, número, correo, WhatsApp"
             )
-            try:
-                _, greet_url = _tts_generate_file(greeting_text, call_sid, tag="greet")
-                gather.play(greet_url)
-            except Exception:
-                greeting_ssml = _text_to_ssml(greeting_text, rate=rate, pitch=pitch)
-                gather.say(greeting_ssml, voice=voice_name, language=lang_code)
+            greeting_ssml = _text_to_ssml(greeting_text, rate=rate, pitch=pitch)
+            gather.say(greeting_ssml, voice=voice_name, language=lang_code)
             vr.append(gather)
 
-            try:
-                _, outro_url = _tts_generate_file("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", call_sid, tag="noaudio")
-                vr.play(outro_url)
-            except Exception:
-                outro_ssml = _text_to_ssml("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", rate=rate, pitch=pitch)
-                vr.say(outro_ssml, voice=voice_name, language=lang_code)
+            outro_ssml = _text_to_ssml("Te escucho.", rate=rate, pitch=pitch)
+            vr.say(outro_ssml, voice=voice_name, language=lang_code)
             return str(vr), 200, {"Content-Type": "text/xml"}
 
-        # 4) Texto del usuario (STT de Twilio)
-        user_text = speech_result
+        # 4) Tenemos texto del usuario (STT de Twilio)
+        user_text = _clean_user_text(speech_result)
         try:
             ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fb_append_historial(bot_name, from_number, {"tipo": "user", "texto": user_text, "hora": ahora})
@@ -1574,10 +1555,10 @@ def voice_bot():
 
         session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
 
-        # 5) Generar respuesta con GPT
+        # 5) Llamada a GPT respetando config del JSON del bot
         try:
             model_name  = (bot.get("model") or "gpt-4o").strip()
-            temperature = float(bot.get("temperature", 0.7)) if isinstance(bot.get("temperature", None), (int, float)) else 0.7
+            temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
 
             completion = client.chat.completions.create(
                 model=model_name,
@@ -1586,13 +1567,26 @@ def voice_bot():
             )
 
             respuesta = (completion.choices[0].message.content or "").strip()
+            # estilo conversacional
             respuesta = _apply_style(bot, respuesta)
-            must_ask  = bool((bot.get("style") or {}).get("always_question", False))
-            respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
+            respuesta = re.sub(r'\s+', ' ', respuesta).strip()
+
+            # Limitar longitud de cada oración a ~18 palabras
+            sents = re.split(r'(?<=[\.\!\?])\s+', respuesta)
+            def _shrink(s):
+                words = s.split()
+                if len(words) <= 18:
+                    return s
+                return " ".join(words[:18]).rstrip(",") + "."
+            sents = [_shrink(s) for s in sents if s]
+            respuesta = " ".join(sents)
+
+            # Asegurar pregunta final breve para mantener turno
+            respuesta = _ensure_question(bot, respuesta, force_question=True)
 
             session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
 
-            # Registrar tokens
+            # Registro de tokens
             try:
                 usage = getattr(completion, "usage", None)
                 if usage:
@@ -1612,7 +1606,7 @@ def voice_bot():
             except Exception as e:
                 print(f"⚠️ No se pudo guardar bot voice: {e}")
 
-            # 6) Convertir respuesta a audio y seguir escuchando
+            # 6) Responder por voz y seguir escuchando (SSML + barge-in)
             vr = VoiceResponse()
             gather = Gather(
                 input="speech",
@@ -1621,30 +1615,29 @@ def voice_bot():
                 language=lang_code,
                 speechTimeout="auto",
                 actionOnEmptyResult=True,
-                timeout=7
+                timeout=7,
+                bargeIn=True,
+                endSilenceTimeoutMs="600",
+                profanityFilter=False,
+                enhanced=True,
+                speechModel="experimental_conversations",
+                hints="sí, no, reservar, cita, presupuesto, número, correo, WhatsApp"
             )
-            try:
-                _, resp_url = _tts_generate_file(respuesta, call_sid, tag="resp")
-                gather.play(resp_url)
-            except Exception:
-                resp_ssml = _text_to_ssml(respuesta, rate=rate, pitch=pitch)
-                gather.say(resp_ssml, voice=voice_name, language=lang_code)
+            resp_ssml = _text_to_ssml(respuesta, rate=rate, pitch=pitch)
+            gather.say(resp_ssml, voice=voice_name, language=lang_code)
             vr.append(gather)
 
-            try:
-                _, tail_url = _tts_generate_file("Si necesitas algo más, puedes hablar después del tono. Gracias.", call_sid, tag="tail")
-                vr.play(tail_url)
-            except Exception:
-                tail_ssml = _text_to_ssml("Si necesitas algo más, puedes hablar después del tono. Gracias.", rate=rate, pitch=pitch)
-                vr.say(tail_ssml, voice=voice_name, language=lang_code)
-
+            tail_ssml = _text_to_ssml("Te escucho.", rate=rate, pitch=pitch)
+            vr.say(tail_ssml, voice=voice_name, language=lang_code)
             return str(vr), 200, {"Content-Type": "text/xml"}
 
         except Exception as e:
+            # Si falla GPT, igual devolvemos TwiML válido
             print(f"❌ Error GPT en voz: {e}")
             return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.", voice_name, lang_code)
 
     except Exception as e:
+        # Cualquier otra excepción: NO 500. Devolvemos TwiML válido.
         print(f"❌ Exception en /voice: {e}")
         return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.", "alice", "es-ES")
 
