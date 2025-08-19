@@ -1,10 +1,9 @@
 # main.py — core genérico (sin conocimiento de marca en el core)
-from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response
+from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
 from dotenv import load_dotenv
-from flask import Response
-from twilio.twiml.voice_response import VoiceResponse, Gather
 import os
 import json
 import time
@@ -19,8 +18,6 @@ import hashlib
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
-# 🔹 NEW (VOZ): TwiML para llamadas
-from twilio.twiml.voice_response import VoiceResponse, Gather  # <-- añadido (solo para VOZ)
 
 # 🔹 Firebase
 import firebase_admin
@@ -189,24 +186,52 @@ def _get_bot_cfg_by_name(name: str):
 def _get_bot_cfg_by_number(to_number: str):
     return bots_config.get(to_number)
 
-# ✅ NEW (VOZ): encuentra bot por número E.164 (+1...) o clave WhatsApp (whatsapp:+1...)
+# ✅ VOICE helper: canonizar número a E.164 (+1...)
+def _canonize_phone(raw: str) -> str:
+    s = str(raw or "").strip()
+    for p in ("whatsapp:", "tel:", "sip:", "client:"):
+        if s.startswith(p):
+            s = s[len(p):]
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if not digits:
+        return ""
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    if len(digits) == 10:
+        digits = "1" + digits
+    return "+" + digits
+
+# ✅ VOICE helper: encuentra bot por número (E.164 o whatsapp:+)
 def _get_bot_cfg_by_any_number(to_number: str):
     if not to_number:
         return None
-    # Coincidencia directa
-    bot = bots_config.get(to_number)
-    if bot:
-        return bot
-    # Si viene como +1..., probar whatsapp:+1...
-    if to_number.startswith("+"):
-        cand = f"whatsapp:{to_number}"
-        if cand in bots_config:
-            return bots_config.get(cand)
-    # Si viene como whatsapp:+1..., probar +1...
-    if to_number.startswith("whatsapp:"):
-        cand = to_number[len("whatsapp:"):]
-        if cand in bots_config:
-            return bots_config.get(cand)
+
+    target = _canonize_phone(to_number)
+
+    # 1) Coincidencias directas
+    if to_number in bots_config:
+        return bots_config.get(to_number)
+    cand_whatsapp = f"whatsapp:{target}"
+    if cand_whatsapp in bots_config:
+        return bots_config.get(cand_whatsapp)
+    if target in bots_config:
+        return bots_config.get(target)
+
+    # 2) Normalizando TODAS las claves del JSON
+    for key, cfg in bots_config.items():
+        try:
+            if _canonize_phone(key) == target:
+                return cfg
+        except Exception:
+            continue
+
+    # 3) Fallback: si solo hay un bot cargado
+    try:
+        if len(bots_config) == 1:
+            return list(bots_config.values())[0]
+    except Exception:
+        pass
+
     return None
 
 def _get_bot_number_by_name(bot_name: str) -> str:
@@ -773,7 +798,7 @@ def panel():
     else:
         leads_filtrados = leads_todos
 
-    return render_template("panel.html", leads=leads_filtrados, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
+    return render_template("panel.html", leads=leads_todos, bots=bots_disponibles, bot_seleccionado=bot_seleccionado)
 
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
@@ -1509,6 +1534,52 @@ def voice_bot():
         # Cualquier otra excepción: NO 500. Devolvemos TwiML válido.
         print(f"❌ Exception en /voice: {e}")
         return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.")
+
+# =======================
+#  Vistas de conversación (leen Firebase)
+# =======================
+@app.route("/conversacion_general/<bot>/<numero>")
+def chat_general(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+@app.route("/conversacion_bot/<bot>/<numero>")
+def chat_bot(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
 
 
 # =======================
