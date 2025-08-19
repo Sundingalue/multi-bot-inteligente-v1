@@ -3,6 +3,7 @@
 # - Login leyendo credenciales desde bots/*.json ("auth": {...})
 # - Listado/actualización/borrado de leads en Firebase
 # - Filtro por alcance (allowed bots) usando Authorization: Bearer <token>
+# - NUEVO: /bot_info para resolver business_name por bot (global)
 
 from __future__ import annotations
 
@@ -190,6 +191,25 @@ def _delete_lead(bot_name: str, numero: str) -> bool:
         return False
 
 # --------------------------------------------------------------------
+# Helpers de metadatos de bots (business_name, etc.)
+# --------------------------------------------------------------------
+def _bot_display_map() -> Dict[str, str]:
+    """
+    Devuelve { cfg['name'] : cfg['business_name'] || cfg['name'] } para todos los bots.
+    """
+    mapping: Dict[str, str] = {}
+    bots_cfg = _load_bots_folder()
+    for _num_key, cfg in bots_cfg.items():
+        if not isinstance(cfg, dict):
+            continue
+        name = (cfg.get("name") or "").strip()
+        if not name:
+            continue
+        business = (cfg.get("business_name") or "").strip() or name
+        mapping[name] = business
+    return mapping
+
+# --------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------
 @mobile_bp.route("/health", methods=["GET"])
@@ -298,3 +318,37 @@ def mobile_delete_lead():
 
     ok = _delete_lead(bot_name, numero)
     return jsonify({"ok": bool(ok)})
+
+# --------------------------------------------------------------------
+# NUEVO: Info de bots (business_name por bot)
+# --------------------------------------------------------------------
+@mobile_bp.route("/bot_info", methods=["GET"])
+def mobile_bot_info():
+    """
+    Devuelve el 'business_name' real para cada bot.
+    - GET /api/mobile/bot_info?bot=Sara  -> { ok:true, bot:"Sara", business_name:"IN HOUSTON TEXAS" }
+    - GET /api/mobile/bot_info           -> { ok:true, bots:[ {bot:"Sara", business_name:"..."}, ... ] } (filtrado por permisos)
+    Respeta los permisos del token Bearer: si el token tiene lista de bots, se filtra.
+    """
+    allowed = _allowed_from_request(request)  # "*" o lista de bot-names
+    requested = (request.args.get("bot") or "").strip()
+
+    mapping = _bot_display_map()
+
+    def _allowed_filter(name: str) -> bool:
+        return _is_allowed(name, allowed)
+
+    if requested:
+        # Responder solo ese bot (si existe y está permitido)
+        if requested in mapping and _allowed_filter(requested):
+            return jsonify({"ok": True, "bot": requested, "business_name": mapping[requested]})
+        # Bot inexistente o no permitido
+        return jsonify({"ok": False, "error": "not_found_or_forbidden"}), 404
+
+    # Responder todos los bots visibles por permisos
+    items = [
+        {"bot": name, "business_name": mapping[name]}
+        for name in sorted(mapping.keys())
+        if _allowed_filter(name)
+    ]
+    return jsonify({"ok": True, "bots": items})
