@@ -1430,22 +1430,76 @@ def _text_to_ssml(text: str, rate: str = "medium", pitch: str = "medium") -> str
 
 def _absolute_action_url():
     """Construye URL absoluta para el action de Gather (evita hardcodes)."""
-    # request.url_root ya trae http(s)://host/
     base = (request.url_root or "").rstrip("/")
     return f"{base}/voice"
 
 # =======================
-#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice (SAFE MODE + SSML)
+#  === NUEVO: OpenAI TTS (audio natural) ===
+# =======================
+MEDIA_DIR = os.getenv("MEDIA_DIR", "/tmp/voice_audio")
+os.makedirs(MEDIA_DIR, exist_ok=True)
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy")
+OPENAI_TTS_FORMAT = os.getenv("OPENAI_TTS_FORMAT", "mp3")
+
+def _tts_generate_file(text: str, call_sid: str, tag: str = "part") -> (str, str):
+    """Genera un archivo de audio con OpenAI TTS y devuelve (ruta, URL pública)."""
+    safe_sid = (call_sid or f"anon_{int(time.time())}").replace("/", "_")
+    filename = f"{safe_sid}_{tag}.{OPENAI_TTS_FORMAT}"
+    fullpath = os.path.join(MEDIA_DIR, filename)
+
+    # Preferimos streaming para escribir directo al archivo
+    try:
+        with client.audio.speech.with_streaming_response.create(
+            model=OPENAI_TTS_MODEL,
+            voice=OPENAI_TTS_VOICE,
+            input=(text or "...")
+        ) as resp:
+            resp.stream_to_file(fullpath)
+    except Exception as e:
+        try:
+            # Fallback a respuesta no streaming
+            audio = client.audio.speech.create(
+                model=OPENAI_TTS_MODEL,
+                voice=OPENAI_TTS_VOICE,
+                input=(text or "...")
+            )
+            data = getattr(audio, "content", None)
+            if not data and hasattr(audio, "read"):
+                data = audio.read()
+            if isinstance(data, (bytes, bytearray)):
+                with open(fullpath, "wb") as f:
+                    f.write(data)
+            else:
+                raise RuntimeError("Respuesta TTS sin bytes")
+        except Exception as e2:
+            raise e2
+
+    base = (request.url_root or "").rstrip("/")
+    url = f"{base}/media/{filename}"
+    return fullpath, url
+
+@app.route("/media/<path:fname>", methods=["GET"])
+def media_serve(fname):
+    """Sirve los MP3 generados por TTS para que Twilio los pueda reproducir."""
+    fullpath = os.path.join(MEDIA_DIR, fname)
+    if not os.path.isfile(fullpath):
+        return "Not Found", 404
+    resp = send_file(fullpath, mimetype="audio/mpeg", as_attachment=False, download_name=fname, max_age=60)
+    resp.headers["Cache-Control"] = "public, max-age=60"
+    return resp
+
+# =======================
+#  ✅ Webhook de VOZ (Twilio Calls) — /voice (GPT + OpenAI TTS + Twilio STT)
 # =======================
 @app.route("/voice", methods=["GET", "POST"])
 def voice_bot():
     """
-    Handler de voz genérico y a prueba de fallos:
-    - Nunca devuelve 500: ante cualquier error responde TwiML válido.
-    - Detecta el bot por número (soporta +1... y whatsapp:+1...).
-    - Usa STT de Twilio con Gather (idioma desde JSON o fallback).
-    - Mantiene prompt/model/estilo desde el JSON del bot.
-    - Usa SSML (prosody + breaks) para que suene más humano.
+    Flujo de llamadas:
+    - Twilio capta voz del usuario con <Gather input="speech"> (STT).
+    - Enviamos lo transcrito a GPT (tu mismo modelo/estilo del bot).
+    - Convertimos la respuesta a audio realista con OpenAI TTS.
+    - Twilio solo REPRODUCE el audio (<Play>), nada de <Say> salvo fallback.
     """
     def _twiml_say(text, voice_name, lang_code):
         vr = VoiceResponse()
@@ -1461,7 +1515,7 @@ def voice_bot():
 
         print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
 
-        # 1) Resolver bot por número (desde bots/*.json)
+        # 1) Resolver bot por número
         bot = _get_bot_cfg_by_any_number(to_number)
         if not bot:
             return _twiml_say("Este número no está asignado a ningún asistente. Gracias.", "alice", "es-ES")
@@ -1470,16 +1524,16 @@ def voice_bot():
         if bot_name and not fb_is_bot_on(bot_name):
             return _twiml_say("El asistente no está disponible en este momento. Gracias.", "alice", "es-ES")
 
-        # Voice settings
+        # Voice settings (solo para fallback)
         voice_name, lang_code, rate, pitch = _get_voice_settings(bot)
 
-        # 2) Sesión por llamada (separada de WhatsApp)
+        # 2) Sesión por llamada
         clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
         if clave_sesion not in session_history:
-            sysmsg = _make_system_message(bot)  # viene del JSON del bot
+            sysmsg = _make_system_message(bot)
             session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
 
-        # 3) Primer turno (sin STT todavía): saludar y escuchar
+        # 3) Primer turno (saludo) -> reproducimos TTS y escuchamos
         if not speech_result:
             greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or
                              "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
@@ -1494,15 +1548,23 @@ def voice_bot():
                 actionOnEmptyResult=True,
                 timeout=7
             )
-            greeting_ssml = _text_to_ssml(greeting_text, rate=rate, pitch=pitch)
-            gather.say(greeting_ssml, voice=voice_name, language=lang_code)
+            try:
+                _, greet_url = _tts_generate_file(greeting_text, call_sid, tag="greet")
+                gather.play(greet_url)
+            except Exception:
+                greeting_ssml = _text_to_ssml(greeting_text, rate=rate, pitch=pitch)
+                gather.say(greeting_ssml, voice=voice_name, language=lang_code)
             vr.append(gather)
 
-            outro_ssml = _text_to_ssml("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", rate=rate, pitch=pitch)
-            vr.say(outro_ssml, voice=voice_name, language=lang_code)
+            try:
+                _, outro_url = _tts_generate_file("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", call_sid, tag="noaudio")
+                vr.play(outro_url)
+            except Exception:
+                outro_ssml = _text_to_ssml("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", rate=rate, pitch=pitch)
+                vr.say(outro_ssml, voice=voice_name, language=lang_code)
             return str(vr), 200, {"Content-Type": "text/xml"}
 
-        # 4) Tenemos texto del usuario (STT de Twilio)
+        # 4) Texto del usuario (STT de Twilio)
         user_text = speech_result
         try:
             ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1512,10 +1574,10 @@ def voice_bot():
 
         session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
 
-        # 5) Llamada a GPT respetando config del JSON del bot
+        # 5) Generar respuesta con GPT
         try:
             model_name  = (bot.get("model") or "gpt-4o").strip()
-            temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
+            temperature = float(bot.get("temperature", 0.7)) if isinstance(bot.get("temperature", None), (int, float)) else 0.7
 
             completion = client.chat.completions.create(
                 model=model_name,
@@ -1530,7 +1592,7 @@ def voice_bot():
 
             session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
 
-            # Registro de tokens
+            # Registrar tokens
             try:
                 usage = getattr(completion, "usage", None)
                 if usage:
@@ -1550,7 +1612,7 @@ def voice_bot():
             except Exception as e:
                 print(f"⚠️ No se pudo guardar bot voice: {e}")
 
-            # 6) Responder por voz y seguir escuchando (SSML)
+            # 6) Convertir respuesta a audio y seguir escuchando
             vr = VoiceResponse()
             gather = Gather(
                 input="speech",
@@ -1561,21 +1623,28 @@ def voice_bot():
                 actionOnEmptyResult=True,
                 timeout=7
             )
-            resp_ssml = _text_to_ssml(respuesta, rate=rate, pitch=pitch)
-            gather.say(resp_ssml, voice=voice_name, language=lang_code)
+            try:
+                _, resp_url = _tts_generate_file(respuesta, call_sid, tag="resp")
+                gather.play(resp_url)
+            except Exception:
+                resp_ssml = _text_to_ssml(respuesta, rate=rate, pitch=pitch)
+                gather.say(resp_ssml, voice=voice_name, language=lang_code)
             vr.append(gather)
 
-            tail_ssml = _text_to_ssml("Si necesitas algo más, puedes hablar después del tono. Gracias.", rate=rate, pitch=pitch)
-            vr.say(tail_ssml, voice=voice_name, language=lang_code)
+            try:
+                _, tail_url = _tts_generate_file("Si necesitas algo más, puedes hablar después del tono. Gracias.", call_sid, tag="tail")
+                vr.play(tail_url)
+            except Exception:
+                tail_ssml = _text_to_ssml("Si necesitas algo más, puedes hablar después del tono. Gracias.", rate=rate, pitch=pitch)
+                vr.say(tail_ssml, voice=voice_name, language=lang_code)
+
             return str(vr), 200, {"Content-Type": "text/xml"}
 
         except Exception as e:
-            # Si falla GPT, igual devolvemos TwiML válido
             print(f"❌ Error GPT en voz: {e}")
             return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.", voice_name, lang_code)
 
     except Exception as e:
-        # Cualquier otra excepción: NO 500. Devolvemos TwiML válido.
         print(f"❌ Exception en /voice: {e}")
         return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.", "alice", "es-ES")
 
