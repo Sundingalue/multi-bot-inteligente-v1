@@ -3,7 +3,7 @@
 # - Login leyendo credenciales desde bots/*.json ("auth": {...})
 # - Listado/actualización/borrado de leads en Firebase
 # - Filtro por alcance (allowed bots) usando Authorization: Bearer <token>
-# - NUEVO: /bot_info para resolver business_name por bot (global)
+# - ⬆️ Ahora también expone el "company" (business_name) de cada bot, tomado de bots/*.json
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ mobile_bp = Blueprint("mobile_bp", __name__)
 # Cache / Sesiones in-memory
 # --------------------------------------------------------------------
 _ACCOUNTS_CACHE: Dict[str, Dict[str, Any]] | None = None
+_BOT_COMPANY_CACHE: Dict[str, str] | None = None  # name -> company
 _SESSION_TOKENS: Dict[str, Dict[str, Any]] = {}  # token -> {"allowed": "*"/[bot_name,...]}
 
 # --------------------------------------------------------------------
@@ -42,6 +43,38 @@ def _load_bots_folder() -> Dict[str, Any]:
         except Exception as e:
             print(f"⚠️ No se pudo cargar {path}: {e}")
     return bots
+
+def _build_bot_company_map() -> Dict[str, str]:
+    """
+    Mapea cfg['name'] -> company (business_name / company / business).
+    Fallback: company = name en mayúsculas.
+    """
+    company: Dict[str, str] = {}
+    bots_cfg = _load_bots_folder()
+    for _k, cfg in bots_cfg.items():
+        if not isinstance(cfg, dict):
+            continue
+        name = (cfg.get("name") or "").strip()
+        if not name:
+            continue
+        comp = (
+            cfg.get("business_name")
+            or cfg.get("company")
+            or cfg.get("business")
+            or ""
+        )
+        comp = str(comp).strip()
+        if not comp:
+            comp = name.upper()
+        company[name] = comp
+    return company
+
+def _get_bot_company_map() -> Dict[str, str]:
+    global _BOT_COMPANY_CACHE
+    if _BOT_COMPANY_CACHE is None:
+        _BOT_COMPANY_CACHE = _build_bot_company_map()
+        print(f"[api_mobile] Company map: {_BOT_COMPANY_CACHE}")
+    return _BOT_COMPANY_CACHE
 
 def _build_accounts_from_bots() -> Dict[str, Dict[str, Any]]:
     """
@@ -125,6 +158,7 @@ def _lead_ref(bot_name: str, numero: str):
     return db.reference(f"leads/{bot_name}/{numero}")
 
 def _list_leads_all() -> List[Dict[str, Any]]:
+    company = _get_bot_company_map()
     root = db.reference("leads").get() or {}
     leads: List[Dict[str, Any]] = []
     if not isinstance(root, dict):
@@ -135,6 +169,7 @@ def _list_leads_all() -> List[Dict[str, Any]]:
         for numero, data in numeros.items():
             leads.append({
                 "bot": bot_name,
+                "company": company.get(bot_name, bot_name.upper()),
                 "numero": numero,
                 "first_seen": (data or {}).get("first_seen", ""),
                 "last_message": (data or {}).get("last_message", ""),
@@ -148,6 +183,7 @@ def _list_leads_all() -> List[Dict[str, Any]]:
     return leads
 
 def _list_leads_by_bot(bot_name: str) -> List[Dict[str, Any]]:
+    company = _get_bot_company_map()
     numeros = db.reference(f"leads/{bot_name}").get() or {}
     leads: List[Dict[str, Any]] = []
     if not isinstance(numeros, dict):
@@ -155,6 +191,7 @@ def _list_leads_by_bot(bot_name: str) -> List[Dict[str, Any]]:
     for numero, data in numeros.items():
         leads.append({
             "bot": bot_name,
+            "company": company.get(bot_name, bot_name.upper()),
             "numero": numero,
             "first_seen": (data or {}).get("first_seen", ""),
             "last_message": (data or {}).get("last_message", ""),
@@ -189,25 +226,6 @@ def _delete_lead(bot_name: str, numero: str) -> bool:
     except Exception as e:
         print(f"❌ Error eliminando lead {bot_name}/{numero}: {e}")
         return False
-
-# --------------------------------------------------------------------
-# Helpers de metadatos de bots (business_name, etc.)
-# --------------------------------------------------------------------
-def _bot_display_map() -> Dict[str, str]:
-    """
-    Devuelve { cfg['name'] : cfg['business_name'] || cfg['name'] } para todos los bots.
-    """
-    mapping: Dict[str, str] = {}
-    bots_cfg = _load_bots_folder()
-    for _num_key, cfg in bots_cfg.items():
-        if not isinstance(cfg, dict):
-            continue
-        name = (cfg.get("name") or "").strip()
-        if not name:
-            continue
-        business = (cfg.get("business_name") or "").strip() or name
-        mapping[name] = business
-    return mapping
 
 # --------------------------------------------------------------------
 # Endpoints
@@ -247,6 +265,8 @@ def mobile_leads():
     """
     Lista leads visibles para el usuario según su token.
     Query opcional: ?bot=<bot_name>
+    Devuelve, por lead:
+      bot, company, numero, first_seen, last_message, last_seen, messages, status, notes
     """
     allowed = _allowed_from_request(request)  # "*" o lista de bot names
     bot_q = (request.args.get("bot") or "").strip()
@@ -268,6 +288,16 @@ def mobile_leads():
     except Exception as e:
         print(f"❌ Error leyendo leads: {e}")
         return jsonify({"leads": []}), 500
+
+@mobile_bp.route("/bots_meta", methods=["GET"])
+def mobile_bots_meta():
+    """
+    Devuelve metadatos de los bots:
+      { "bots": [ {"name":"Sara","company":"IN HOUSTON TEXAS"}, ... ] }
+    """
+    comp = _get_bot_company_map()
+    arr = [{"name": k, "company": v} for k, v in sorted(comp.items())]
+    return jsonify({"bots": arr})
 
 @mobile_bp.route("/lead", methods=["POST"])
 def mobile_update_lead():
@@ -318,37 +348,3 @@ def mobile_delete_lead():
 
     ok = _delete_lead(bot_name, numero)
     return jsonify({"ok": bool(ok)})
-
-# --------------------------------------------------------------------
-# NUEVO: Info de bots (business_name por bot)
-# --------------------------------------------------------------------
-@mobile_bp.route("/bot_info", methods=["GET"])
-def mobile_bot_info():
-    """
-    Devuelve el 'business_name' real para cada bot.
-    - GET /api/mobile/bot_info?bot=Sara  -> { ok:true, bot:"Sara", business_name:"IN HOUSTON TEXAS" }
-    - GET /api/mobile/bot_info           -> { ok:true, bots:[ {bot:"Sara", business_name:"..."}, ... ] } (filtrado por permisos)
-    Respeta los permisos del token Bearer: si el token tiene lista de bots, se filtra.
-    """
-    allowed = _allowed_from_request(request)  # "*" o lista de bot-names
-    requested = (request.args.get("bot") or "").strip()
-
-    mapping = _bot_display_map()
-
-    def _allowed_filter(name: str) -> bool:
-        return _is_allowed(name, allowed)
-
-    if requested:
-        # Responder solo ese bot (si existe y está permitido)
-        if requested in mapping and _allowed_filter(requested):
-            return jsonify({"ok": True, "bot": requested, "business_name": mapping[requested]})
-        # Bot inexistente o no permitido
-        return jsonify({"ok": False, "error": "not_found_or_forbidden"}), 404
-
-    # Responder todos los bots visibles por permisos
-    items = [
-        {"bot": name, "business_name": mapping[name]}
-        for name in sorted(mapping.keys())
-        if _allowed_filter(name)
-    ]
-    return jsonify({"ok": True, "bots": items})
