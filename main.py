@@ -1370,15 +1370,14 @@ def whatsapp_bot():
 def voice_bot():
     """
     Handler de voz genérico y a prueba de fallos:
-    - Nunca devuelve 500. Ante cualquier error, responde TwiML válido.
-    - Detecta bot por número (soporta +1... y whatsapp:+1...).
+    - Nunca devuelve 500: ante cualquier error responde TwiML válido.
+    - Detecta el bot por número (soporta +1... y whatsapp:+1...).
     - Usa STT de Twilio con Gather (idioma español).
-    - Usa el mismo prompt/model/estilo del JSON del bot.
+    - Mantiene prompt/model/estilo desde el JSON del bot.
     """
-
-    # --- Config de voz 100% soportada por Twilio ---
-    voice_name = "alice"     # voz estable
-    lang_code  = "es-ES"     # español soportado por 'alice'
+    # --- Voz/idioma 100% soportados por Twilio ---
+    voice_name = "alice"      # voz estable
+    lang_code  = "es-ES"      # español soportado por 'alice'
 
     def _twiml_say(text):
         vr = VoiceResponse()
@@ -1386,14 +1385,14 @@ def voice_bot():
         return str(vr), 200, {"Content-Type": "text/xml"}
 
     try:
-        from_number  = (request.values.get("From") or "").strip()
-        to_number    = (request.values.get("To") or "").strip()
-        call_sid     = (request.values.get("CallSid") or "").strip()
-        speech_result= (request.values.get("SpeechResult") or "").strip()
+        from_number   = (request.values.get("From") or "").strip()
+        to_number     = (request.values.get("To") or "").strip()
+        call_sid      = (request.values.get("CallSid") or "").strip()
+        speech_result = (request.values.get("SpeechResult") or "").strip()
 
         print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
 
-        # 1) Resolver bot por número (JSON). Si falla, igual respondemos TwiML.
+        # 1) Resolver bot por número (desde bots/*.json)
         bot = _get_bot_cfg_by_any_number(to_number)
         if not bot:
             return _twiml_say("Este número no está asignado a ningún asistente. Gracias.")
@@ -1402,21 +1401,21 @@ def voice_bot():
         if bot_name and not fb_is_bot_on(bot_name):
             return _twiml_say("El asistente no está disponible en este momento. Gracias.")
 
-        # 2) Preparar sesión por llamada (separada de WhatsApp)
+        # 2) Sesión por llamada (separada de WhatsApp)
         clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
         if clave_sesion not in session_history:
-            sysmsg = _make_system_message(bot)  # sale del JSON del bot
+            sysmsg = _make_system_message(bot)  # viene del JSON del bot
             session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
 
-        # 3) Si es el primer turno (sin texto del usuario), saluda y escucha
+        # 3) Primer turno (sin STT todavía): saludar y escuchar
         if not speech_result:
             greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or
                              "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
-            # limpia comillas raras / emojis
+            # Limpieza básica de caracteres “raros”
             greeting_text = greeting_text.encode("utf-8", "ignore").decode("utf-8")
             greeting_text = (greeting_text
-                             .replace("“","\"").replace("”","\"")
-                             .replace("’","'").replace("—","-"))
+                             .replace("“", "\"").replace("”", "\"")
+                             .replace("’", "'").replace("—", "-"))
 
             vr = VoiceResponse()
             gather = Gather(
@@ -1445,9 +1444,9 @@ def voice_bot():
 
         session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
 
-        # 5) Llamada a GPT con config del JSON del bot
+        # 5) Llamada a GPT respetando config del JSON del bot
         try:
-            model_name = (bot.get("model") or "gpt-4o").strip()
+            model_name  = (bot.get("model") or "gpt-4o").strip()
             temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
 
             completion = client.chat.completions.create(
@@ -1463,7 +1462,7 @@ def voice_bot():
 
             session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
 
-            # registro de tokens
+            # Registro de tokens
             try:
                 usage = getattr(completion, "usage", None)
                 if usage:
@@ -1502,61 +1501,15 @@ def voice_bot():
             return str(vr), 200, {"Content-Type": "text/xml"}
 
         except Exception as e:
-            # Si falla GPT, igual respondemos TwiML válido
+            # Si falla GPT, igual devolvemos TwiML válido
             print(f"❌ Error GPT en voz: {e}")
             return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.")
 
     except Exception as e:
-        # Cualquier otra excepción del handler: NO 500. Devolvemos TwiML válido.
+        # Cualquier otra excepción: NO 500. Devolvemos TwiML válido.
         print(f"❌ Exception en /voice: {e}")
         return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.")
 
-
-
-# =======================
-#  Vistas de conversación (leen Firebase)
-# =======================
-@app.route("/conversacion_general/<bot>/<numero>")
-def chat_general(bot, numero):
-    if not session.get("autenticado"):
-        return redirect(url_for("panel"))
-    bot_normalizado = _normalize_bot_name(bot)
-    if not bot_normalizado:
-        return "Bot no encontrado", 404
-    if not _user_can_access_bot(bot_normalizado):
-        return "No autorizado para este bot", 403
-
-    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
-    company_name = bot_cfg.get("business_name", bot_normalizado)
-
-    data = fb_get_lead(bot_normalizado, numero)
-    historial = data.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
-
-    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
-
-@app.route("/conversacion_bot/<bot>/<numero>")
-def chat_bot(bot, numero):
-    if not session.get("autenticado"):
-        return redirect(url_for("panel"))
-    bot_normalizado = _normalize_bot_name(bot)
-    if not bot_normalizado:
-        return "Bot no encontrado", 404
-    if not _user_can_access_bot(bot_normalizado):
-        return "No autorizado para este bot", 403
-
-    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
-    company_name = bot_cfg.get("business_name", bot_normalizado)
-
-    data = fb_get_lead(bot_normalizado, numero)
-    historial = data.get("historial", [])
-    if isinstance(historial, dict):
-        historial = [historial[k] for k in sorted(historial.keys())]
-    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
-
-    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 # =======================
 #  API de polling (leen Firebase) — ahora permite Bearer
