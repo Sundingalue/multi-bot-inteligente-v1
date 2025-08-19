@@ -15,6 +15,7 @@ import re
 import glob
 import random
 import hashlib
+import html
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
@@ -242,8 +243,8 @@ def _get_bot_number_by_name(bot_name: str) -> str:
     return ""
 
 def _split_sentences(text: str):
-    parts = re.split(r'(?<=[\.\!\?])\s+', text.strip())
-    if len(parts) == 1 and len(text) > 280:
+    parts = re.split(r'(?<=[\.\!\?])\s+', (text or "").strip())
+    if len(parts) == 1 and len(text or "") > 280:
         parts = [text[:200].strip(), text[200:].strip()]
     return [p for p in parts if p]
 
@@ -1389,7 +1390,51 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice (SAFE MODE)
+#  🔊 Helpers de VOZ (SSML + settings por bot)
+# =======================
+def _get_voice_settings(bot_cfg: dict):
+    """Lee ajustes de voz del JSON del bot. Fallbacks seguros."""
+    voice_cfg = (bot_cfg or {}).get("voice") or {}
+    twilio_voice = (voice_cfg.get("twilio_voice") or "").strip() or "alice"
+    language = (voice_cfg.get("language") or "").strip() or "es-ES"
+    rate = (voice_cfg.get("rate") or "").strip() or "medium"   # x-slow|slow|medium|fast|x-fast|NN%
+    pitch = (voice_cfg.get("pitch") or "").strip() or "medium" # e.g. "+2%", "-1st", "medium"
+    return twilio_voice, language, rate, pitch
+
+def _sanitize_text_for_ssml(text: str) -> str:
+    # Escapar caracteres peligrosos, limpiar comillas raras
+    t = (text or "").strip()
+    t = t.encode("utf-8", "ignore").decode("utf-8")
+    t = (t.replace("“", '"').replace("”", '"')
+           .replace("’", "'").replace("—", "-"))
+    return html.escape(t)
+
+def _text_to_ssml(text: str, rate: str = "medium", pitch: str = "medium") -> str:
+    """
+    Convierte texto en SSML con prosodia y pequeñas pausas.
+    No es agresivo para evitar que Twilio lo tome como robótico.
+    """
+    t = _sanitize_text_for_ssml(text)
+
+    # Insertar pequeñas pausas entre oraciones
+    sentences = [s.strip() for s in re.split(r'(?<=[\.\!\?])\s+', t) if s.strip()]
+    parts = []
+    for s in sentences:
+        # Pausa corta después de cada oración
+        parts.append(f"<s>{s}</s><break time='300ms'/>")
+
+    body = " ".join(parts) if parts else t
+    ssml = f"<speak><prosody rate='{rate}' pitch='{pitch}'>{body}</prosody></speak>"
+    return ssml
+
+def _absolute_action_url():
+    """Construye URL absoluta para el action de Gather (evita hardcodes)."""
+    # request.url_root ya trae http(s)://host/
+    base = (request.url_root or "").rstrip("/")
+    return f"{base}/voice"
+
+# =======================
+#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice (SAFE MODE + SSML)
 # =======================
 @app.route("/voice", methods=["GET", "POST"])
 def voice_bot():
@@ -1397,16 +1442,14 @@ def voice_bot():
     Handler de voz genérico y a prueba de fallos:
     - Nunca devuelve 500: ante cualquier error responde TwiML válido.
     - Detecta el bot por número (soporta +1... y whatsapp:+1...).
-    - Usa STT de Twilio con Gather (idioma español).
+    - Usa STT de Twilio con Gather (idioma desde JSON o fallback).
     - Mantiene prompt/model/estilo desde el JSON del bot.
+    - Usa SSML (prosody + breaks) para que suene más humano.
     """
-    # --- Voz/idioma 100% soportados por Twilio ---
-    voice_name = "alice"      # voz estable
-    lang_code  = "es-ES"      # español soportado por 'alice'
-
-    def _twiml_say(text):
+    def _twiml_say(text, voice_name, lang_code):
         vr = VoiceResponse()
-        vr.say((text or "Gracias por llamar."), voice=voice_name, language=lang_code)
+        ssml = _text_to_ssml(text)
+        vr.say(ssml, voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
 
     try:
@@ -1420,11 +1463,14 @@ def voice_bot():
         # 1) Resolver bot por número (desde bots/*.json)
         bot = _get_bot_cfg_by_any_number(to_number)
         if not bot:
-            return _twiml_say("Este número no está asignado a ningún asistente. Gracias.")
+            return _twiml_say("Este número no está asignado a ningún asistente. Gracias.", "alice", "es-ES")
 
         bot_name = (bot.get("name") or "").strip()
         if bot_name and not fb_is_bot_on(bot_name):
-            return _twiml_say("El asistente no está disponible en este momento. Gracias.")
+            return _twiml_say("El asistente no está disponible en este momento. Gracias.", "alice", "es-ES")
+
+        # Voice settings
+        voice_name, lang_code, rate, pitch = _get_voice_settings(bot)
 
         # 2) Sesión por llamada (separada de WhatsApp)
         clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
@@ -1436,27 +1482,23 @@ def voice_bot():
         if not speech_result:
             greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or
                              "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
-            # Limpieza básica de caracteres “raros”
-            greeting_text = greeting_text.encode("utf-8", "ignore").decode("utf-8")
-            greeting_text = (greeting_text
-                             .replace("“", "\"").replace("”", "\"")
-                             .replace("’", "'").replace("—", "-"))
 
             vr = VoiceResponse()
             gather = Gather(
                 input="speech",
-                action="https://multi-bot-inteligente-v1.onrender.com/voice",
+                action=_absolute_action_url(),
                 method="POST",
                 language=lang_code,
                 speechTimeout="auto",
                 actionOnEmptyResult=True,
                 timeout=7
             )
-            gather.say(greeting_text, voice=voice_name, language=lang_code)
+            greeting_ssml = _text_to_ssml(greeting_text, rate=rate, pitch=pitch)
+            gather.say(greeting_ssml, voice=voice_name, language=lang_code)
             vr.append(gather)
 
-            vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.",
-                   voice=voice_name, language=lang_code)
+            outro_ssml = _text_to_ssml("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", rate=rate, pitch=pitch)
+            vr.say(outro_ssml, voice=voice_name, language=lang_code)
             return str(vr), 200, {"Content-Type": "text/xml"}
 
         # 4) Tenemos texto del usuario (STT de Twilio)
@@ -1507,33 +1549,34 @@ def voice_bot():
             except Exception as e:
                 print(f"⚠️ No se pudo guardar bot voice: {e}")
 
-            # 6) Responder por voz y seguir escuchando
+            # 6) Responder por voz y seguir escuchando (SSML)
             vr = VoiceResponse()
             gather = Gather(
                 input="speech",
-                action="https://multi-bot-inteligente-v1.onrender.com/voice",
+                action=_absolute_action_url(),
                 method="POST",
                 language=lang_code,
                 speechTimeout="auto",
                 actionOnEmptyResult=True,
                 timeout=7
             )
-            gather.say(respuesta, voice=voice_name, language=lang_code)
+            resp_ssml = _text_to_ssml(respuesta, rate=rate, pitch=pitch)
+            gather.say(resp_ssml, voice=voice_name, language=lang_code)
             vr.append(gather)
 
-            vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.",
-                   voice=voice_name, language=lang_code)
+            tail_ssml = _text_to_ssml("Si necesitas algo más, puedes hablar después del tono. Gracias.", rate=rate, pitch=pitch)
+            vr.say(tail_ssml, voice=voice_name, language=lang_code)
             return str(vr), 200, {"Content-Type": "text/xml"}
 
         except Exception as e:
             # Si falla GPT, igual devolvemos TwiML válido
             print(f"❌ Error GPT en voz: {e}")
-            return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.")
+            return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.", voice_name, lang_code)
 
     except Exception as e:
         # Cualquier otra excepción: NO 500. Devolvemos TwiML válido.
         print(f"❌ Exception en /voice: {e}")
-        return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.")
+        return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.", "alice", "es-ES")
 
 # =======================
 #  Vistas de conversación (leen Firebase)
@@ -1579,8 +1622,6 @@ def chat_bot(bot, numero):
     mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
 
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
-
-
 
 # =======================
 #  API de polling (leen Firebase) — ahora permite Bearer
