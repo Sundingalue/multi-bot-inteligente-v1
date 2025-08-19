@@ -1364,158 +1364,153 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice
+#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice (SAFE MODE)
 # =======================
-
 @app.route("/voice", methods=["GET", "POST"])
 def voice_bot():
     """
-    VOZ genérica para todos los bots:
-    - Detecta el bot por número (E.164 o whatsapp:+).
-    - Usa Twilio STT (<Gather input="speech">) en español.
-    - Usa el MISMO motor GPT y estilo definidos en el JSON del bot (system_prompt, style, etc).
-    - Responde con voz (Polly.Lupe es-MX). SIN hardcodear prompts aquí.
+    Handler de voz genérico y a prueba de fallos:
+    - Nunca devuelve 500. Ante cualquier error, responde TwiML válido.
+    - Detecta bot por número (soporta +1... y whatsapp:+1...).
+    - Usa STT de Twilio con Gather (idioma español).
+    - Usa el mismo prompt/model/estilo del JSON del bot.
     """
-    from_number = (request.values.get("From") or "").strip()
-    to_number   = (request.values.get("To") or "").strip()
-    call_sid    = (request.values.get("CallSid") or "").strip()
-    speech_result = (request.values.get("SpeechResult") or "").strip()
 
-    print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
+    # --- Config de voz 100% soportada por Twilio ---
+    voice_name = "alice"     # voz estable
+    lang_code  = "es-ES"     # español soportado por 'alice'
 
-    # Voz/idioma compatibles (sin tocar prompts)
-    voice_name = "alice"   # Español (México), natural
-    lang_code  = "es-ES"
-
-    vr = VoiceResponse()
-
-    # Buscar el bot por número (soporta +1... y whatsapp:+1...)
-    bot = _get_bot_cfg_by_any_number(to_number)
-    if not bot:
-        vr.say("Este número no está asignado a ningún asistente.", voice=voice_name, language=lang_code)
+    def _twiml_say(text):
+        vr = VoiceResponse()
+        vr.say((text or "Gracias por llamar."), voice=voice_name, language=lang_code)
         return str(vr), 200, {"Content-Type": "text/xml"}
-
-    bot_name = (bot.get("name") or "").strip()
-    if bot_name and not fb_is_bot_on(bot_name):
-        vr.say("El asistente no está disponible en este momento. Gracias.", voice=voice_name, language=lang_code)
-        return str(vr), 200, {"Content-Type": "text/xml"}
-
-    # Clave de sesión por llamada (no mezcla con WhatsApp)
-    clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
-    if clave_sesion not in session_history:
-        sysmsg = _make_system_message(bot)  # viene del JSON del bot
-        session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
-
-    # Si NO hay texto aún (primer turno), solo saludar y escuchar
-    if not speech_result:
-        # El saludo sale del JSON del bot (voice_greeting o greeting). SIN emojis ni raros.
-        greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
-        greeting_text = greeting_text.encode("utf-8", "ignore").decode("utf-8")
-        greeting_text = greeting_text.replace("“","\"").replace("”","\"").replace("’","'").replace("—","-")
-
-        gather = Gather(
-            input="speech",
-            action="https://multi-bot-inteligente-v1.onrender.com/voice",
-            method="POST",
-            language=lang_code,
-            speechTimeout="auto",
-            actionOnEmptyResult=True,
-            timeout=5
-        )
-        gather.say(greeting_text, voice=voice_name, language=lang_code)
-        vr.append(gather)
-        vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.", voice=voice_name, language=lang_code)
-        return str(vr), 200, {"Content-Type": "text/xml"}
-
-    # Tenemos texto del usuario (STT de Twilio)
-    user_text = speech_result
-    try:
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        fb_append_historial(bot_name, from_number, {"tipo": "user", "texto": user_text, "hora": ahora})
-    except Exception as e:
-        print(f"⚠️ No se pudo guardar user voice: {e}")
-
-    # Pasamos el turno al mismo motor GPT/estilo del bot (definidos en su JSON)
-    session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
 
     try:
-        model_name = (bot.get("model") or "gpt-4o").strip()
-        temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
+        from_number  = (request.values.get("From") or "").strip()
+        to_number    = (request.values.get("To") or "").strip()
+        call_sid     = (request.values.get("CallSid") or "").strip()
+        speech_result= (request.values.get("SpeechResult") or "").strip()
 
-        completion = client.chat.completions.create(
-            model=model_name,
-            temperature=temperature,
-            messages=session_history[clave_sesion]
-        )
+        print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
 
-        respuesta = (completion.choices[0].message.content or "").strip()
-        respuesta = _apply_style(bot, respuesta)  # respeta style.short_replies, etc.
-        must_ask = bool((bot.get("style") or {}).get("always_question", False))
-        respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
+        # 1) Resolver bot por número (JSON). Si falla, igual respondemos TwiML.
+        bot = _get_bot_cfg_by_any_number(to_number)
+        if not bot:
+            return _twiml_say("Este número no está asignado a ningún asistente. Gracias.")
 
-        session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
+        bot_name = (bot.get("name") or "").strip()
+        if bot_name and not fb_is_bot_on(bot_name):
+            return _twiml_say("El asistente no está disponible en este momento. Gracias.")
 
-        # Facturación de tokens por bot
+        # 2) Preparar sesión por llamada (separada de WhatsApp)
+        clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
+        if clave_sesion not in session_history:
+            sysmsg = _make_system_message(bot)  # sale del JSON del bot
+            session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
+
+        # 3) Si es el primer turno (sin texto del usuario), saluda y escucha
+        if not speech_result:
+            greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or
+                             "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
+            # limpia comillas raras / emojis
+            greeting_text = greeting_text.encode("utf-8", "ignore").decode("utf-8")
+            greeting_text = (greeting_text
+                             .replace("“","\"").replace("”","\"")
+                             .replace("’","'").replace("—","-"))
+
+            vr = VoiceResponse()
+            gather = Gather(
+                input="speech",
+                action="https://multi-bot-inteligente-v1.onrender.com/voice",
+                method="POST",
+                language=lang_code,
+                speechTimeout="auto",
+                actionOnEmptyResult=True,
+                timeout=7
+            )
+            gather.say(greeting_text, voice=voice_name, language=lang_code)
+            vr.append(gather)
+
+            vr.say("No he recibido audio. Intenta de nuevo o cuelga cuando gustes.",
+                   voice=voice_name, language=lang_code)
+            return str(vr), 200, {"Content-Type": "text/xml"}
+
+        # 4) Tenemos texto del usuario (STT de Twilio)
+        user_text = speech_result
         try:
-            usage = getattr(completion, "usage", None)
-            if usage:
-                input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-                output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-            else:
-                usage_dict = getattr(completion, "to_dict", lambda: {})()
-                input_tokens = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
-                output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
-            record_openai_usage(bot_name, model_name, input_tokens, output_tokens)
+            ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            fb_append_historial(bot_name, from_number, {"tipo": "user", "texto": user_text, "hora": ahora})
         except Exception as e:
-            print(f"⚠️ No se pudo registrar tokens (voz): {e}")
+            print(f"⚠️ No se pudo guardar user voice: {e}")
 
+        session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
+
+        # 5) Llamada a GPT con config del JSON del bot
         try:
-            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot_name, from_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
-        except Exception as e:
-            print(f"⚠️ No se pudo guardar bot voice: {e}")
+            model_name = (bot.get("model") or "gpt-4o").strip()
+            temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
 
-        # Enviar SMS con links si el usuario lo pidió (agenda/app)
-        try:
-            if twilio_client:
-                if _wants_link(user_text):
-                    booking = _effective_booking_url(bot)
-                    if _valid_url(booking):
-                        twilio_client.messages.create(
-                            from_=to_number,
-                            to=from_number,
-                            body=f"Enlace para agendar: {booking}"
-                        )
-                if _wants_app_download(user_text):
-                    app_url = _effective_app_url(bot)
-                    if _valid_url(app_url):
-                        twilio_client.messages.create(
-                            from_=to_number,
-                            to=from_number,
-                            body=f"Link de la app: {app_url}"
-                        )
-        except Exception as e:
-            print(f"⚠️ No se pudo enviar SMS post-llamada: {e}")
+            completion = client.chat.completions.create(
+                model=model_name,
+                temperature=temperature,
+                messages=session_history[clave_sesion]
+            )
 
-        # Responder por voz y continuar escuchando
-        gather = Gather(
-            input="speech",
-            action="https://multi-bot-inteligente-v1.onrender.com/voice",
-            method="POST",
-            language=lang_code,
-            speechTimeout="auto",
-            actionOnEmptyResult=True,
-            timeout=5
-        )
-        gather.say(respuesta, voice=voice_name, language=lang_code)
-        vr.append(gather)
-        vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.", voice=voice_name, language=lang_code)
-        return str(vr), 200, {"Content-Type": "text/xml"}
+            respuesta = (completion.choices[0].message.content or "").strip()
+            respuesta = _apply_style(bot, respuesta)
+            must_ask  = bool((bot.get("style") or {}).get("always_question", False))
+            respuesta = _ensure_question(bot, respuesta, force_question=must_ask)
+
+            session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
+
+            # registro de tokens
+            try:
+                usage = getattr(completion, "usage", None)
+                if usage:
+                    input_tokens  = int(getattr(usage, "prompt_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                else:
+                    usage_dict = getattr(completion, "to_dict", lambda: {})()
+                    input_tokens  = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
+                    output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
+                record_openai_usage(bot_name, model_name, input_tokens, output_tokens)
+            except Exception as e:
+                print(f"⚠️ No se pudo registrar tokens (voz): {e}")
+
+            try:
+                ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                fb_append_historial(bot_name, from_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
+            except Exception as e:
+                print(f"⚠️ No se pudo guardar bot voice: {e}")
+
+            # 6) Responder por voz y seguir escuchando
+            vr = VoiceResponse()
+            gather = Gather(
+                input="speech",
+                action="https://multi-bot-inteligente-v1.onrender.com/voice",
+                method="POST",
+                language=lang_code,
+                speechTimeout="auto",
+                actionOnEmptyResult=True,
+                timeout=7
+            )
+            gather.say(respuesta, voice=voice_name, language=lang_code)
+            vr.append(gather)
+
+            vr.say("Si necesitas algo más, puedes hablar después del tono. Gracias.",
+                   voice=voice_name, language=lang_code)
+            return str(vr), 200, {"Content-Type": "text/xml"}
+
+        except Exception as e:
+            # Si falla GPT, igual respondemos TwiML válido
+            print(f"❌ Error GPT en voz: {e}")
+            return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.")
 
     except Exception as e:
-        print(f"❌ Error GPT en voz: {e}")
-        vr.say("Lo siento. Hubo un error procesando tu solicitud.", voice=voice_name, language=lang_code)
-        return str(vr), 200, {"Content-Type": "text/xml"}
+        # Cualquier otra excepción del handler: NO 500. Devolvemos TwiML válido.
+        print(f"❌ Exception en /voice: {e}")
+        return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.")
+
 
 
 # =======================
