@@ -29,6 +29,7 @@
     },
 
     "greeting": "¡Hola, Soy Sara, representante de ventas de In Houston Texas. ¿Con quién tengo el gusto? 😊",
+    "voice_greeting": "Hola, soy Sara de In Houston Texas. ¿Cómo puedo ayudarte hoy?",
     "intro_keywords": ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "quién eres", "hello", "hi", "hey"],
 
     "style": {
