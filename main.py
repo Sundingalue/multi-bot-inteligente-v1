@@ -1488,15 +1488,17 @@ def voice_entry():
         model = OPENAI_REALTIME_MODEL
         voice = OPENAI_REALTIME_VOICE
         bot_name = "default"
+        sysmsg = _make_system_message({}) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
     else:
         # Guardar la configuración en Firebase usando el CallSid
+        sysmsg = _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
         try:
             ref = db.reference(f"voice_sessions/{call_sid}")
             ref.set({
                 "bot_name": bot_name,
                 "model": model,
                 "voice": voice,
-                "system_prompt": _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
+                "system_prompt": sysmsg
             })
             print(f"[VOICE] Configuración guardada en Firebase para CallSid: {call_sid}")
         except Exception as e:
@@ -1505,6 +1507,7 @@ def voice_entry():
             model = OPENAI_REALTIME_MODEL
             voice = OPENAI_REALTIME_VOICE
             bot_name = "default"
+            sysmsg = _make_system_message({}) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
         
     # Creamos la URL del WebSocket sin parámetros (se usará el CallSid)
     stream_url = f"{_wss_base()}/twilio-media-stream"
@@ -1569,6 +1572,8 @@ if sock:
 
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+            # Log de depuración para ver los encabezados de la solicitud
+            print(f"[WS] Headers completos: {request.headers}")
         except Exception:
             pass
 
@@ -1600,6 +1605,7 @@ if sock:
             sysmsg = session_data["system_prompt"]
         
         print(f"[WS] Sesión recuperada -> bot: {bot_name}, model: {model}, voice: {voice}")
+        print(f"[WS] System Prompt cargado: {sysmsg[:100]}...")
 
         # 2) Conectar a OpenAI Realtime
         ws_ai = None
