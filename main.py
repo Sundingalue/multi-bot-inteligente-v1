@@ -1448,7 +1448,7 @@ except Exception as _e:
 def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     """
     Abre un websocket con OpenAI Realtime y devuelve el objeto ws ya configurado.
-    Configurado para g711_ulaw 8kHz (compat Twilio) y sin commits manuales.
+    Formato de audio: g711_ulaw (PCMU) 8kHz para coincidir con Twilio.
     """
     headers = [
         "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1459,15 +1459,15 @@ def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     ws = websocket.WebSocket()
     ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
 
+    # 👈 CAMBIO CLAVE: las propiedades de audio van como STRING, no objeto
     session_update = {
         "type": "session.update",
         "session": {
             "voice": voice,
             "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
-            # Formatos 8kHz u-law (1 canal), a juego con Twilio
-            "input_audio_format":  {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
-            "output_audio_format": {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
-            # VAD del servidor: NO usar commits manuales
+            "input_audio_format":  "g711_ulaw",  # antes enviábamos un objeto -> error
+            "output_audio_format": "g711_ulaw",
+            # Usamos VAD del servidor. No hacemos commits manuales.
             "turn_detection": {"type": "server_vad", "silence_duration_ms": 700},
         }
     }
@@ -1475,7 +1475,7 @@ def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     return ws
 
 def _send_twi_media(ws_twi, stream_sid, chunk_base64):
-    """Envía audio (base64 mulaw 8k) de vuelta a Twilio Media Streams."""
+    """Envía audio (base64 u-law 8k) de vuelta a Twilio Media Streams."""
     if not chunk_base64:
         return
     try:
@@ -1519,12 +1519,12 @@ if sock:
         stream_sid = None
         ai_reader_running = True
 
-        # Buffer local: ~1600 bytes ~ 200ms a 8kHz u-law (1 byte/muestra)
+        # Buffer local: ~1600 bytes ≈ 200ms a 8kHz u-law (1 byte / muestra)
         pending_bytes = bytearray()
         CHUNK_BYTES = 1600
 
         def _flush_append(force=False):
-            """Manda a OpenAI un 'append' si hay al menos ~200ms (o si force=True y hay algo)."""
+            """Manda a OpenAI un 'append' si hay ≥200ms (o si force=True y hay algo)."""
             nonlocal pending_bytes
             try:
                 if len(pending_bytes) >= CHUNK_BYTES or (force and len(pending_bytes) > 0):
@@ -1532,7 +1532,7 @@ if sock:
                     ws_ai.send(json.dumps({
                         "type": "input_audio_buffer.append",
                         "audio": b64
-                    }))
+                    }))  # 👈 ya NO mandamos mime_type aquí
                     print(f"[WS] append -> {len(pending_bytes)} bytes")
                     pending_bytes.clear()
             except Exception as e:
@@ -1597,7 +1597,7 @@ if sock:
                     _flush_append(force=True)   # último empujón
                     break
 
-                # OJO: ignoramos 'mark' y NO hacemos 'commit' para evitar el error de buffer vacío
+                # Ignoramos 'mark' y NO hacemos 'commit' (lo maneja server_vad)
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
