@@ -3,7 +3,8 @@
 # 💥💥 CORRECCIÓN FINAL 💥💥
 # Usar monkey_patch de eventlet en lugar de gevent
 import eventlet
-eventlet.monkey_patch()
+# Evita parchar 'os' para que el master de Gunicorn no entre en el hub verde
+eventlet.monkey_patch(os=False)
 
 # Resto de importaciones
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
