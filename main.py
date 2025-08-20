@@ -1524,27 +1524,34 @@ if sock:
         - En silencio (~900 ms) hace commit + response.create (modalidad audio)
         - Reenvía response.audio.delta a Twilio como media
         """
+        # Log del handshake para confirmar apertura de WS por Twilio
+        try:
+            print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+        except Exception:
+            print("[WS] handshake: (sin datos)")
+
+        # Resolver bot / modelo / voz
         args = request.args or {}
         bot_name = (args.get("bot") or "default").strip()
-        bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
+        bot_cfg  = _get_bot_cfg_by_name(bot_name) or {}
 
         sysmsg = _make_system_message(bot_cfg)
-        # soportar ambas formas: "realtime_model" o "realtime": {"model": ...}
-        model = (
-    (bot_cfg.get("realtime_model") or "")
-    or ((bot_cfg.get("realtime") or {}).get("model") or "")
-    or OPENAI_REALTIME_MODEL
-).strip()
-        # prioriza voice.openai_voice; si no, voice_name; si no, env var
-        voice = (
-    ((bot_cfg.get("voice") or {}).get("openai_voice") or "")
-    or ((bot_cfg.get("voice") or {}).get("voice_name") or "")
-    or OPENAI_REALTIME_VOICE
-        )
-        voice = str(voice).strip()
 
+        # Modelo Realtime: acepta "realtime_model" o "realtime": {"model": "..."}
+        model = str(
+            bot_cfg.get("realtime_model")
+            or (bot_cfg.get("realtime") or {}).get("model")
+            or OPENAI_REALTIME_MODEL
+        ).strip()
 
-        # 1) Conectar a OpenAI
+        # Voz: primero voice.openai_voice, si no voice.voice_name, si no variable de entorno
+        voice = str(
+            (bot_cfg.get("voice") or {}).get("openai_voice")
+            or (bot_cfg.get("voice") or {}).get("voice_name")
+            or OPENAI_REALTIME_VOICE
+        ).strip()
+
+        # 1) Conectar a OpenAI Realtime
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
         except Exception as e:
@@ -1610,14 +1617,6 @@ if sock:
                         payload = data.get("delta") or ""
                         if payload and stream_sid:
                             _send_twi_media(ws_twi, stream_sid, payload)
-                    elif t == "response.created":
-                        print("[WS][AI] response.created")
-                    elif t == "response.completed":
-                        print("[WS][AI] response.completed")
-                    elif t == "input_audio_buffer.speech_started":
-                        print("[WS][AI] speech_started")
-                    elif t == "input_audio_buffer.speech_stopped":
-                        print("[WS][AI] speech_stopped")
                     elif t == "error":
                         print("[WS][AI] ERROR:", data)
                 except Exception as e:
@@ -1636,11 +1635,8 @@ if sock:
                 except Exception:
                     time.sleep(0.2)
 
-        reader_thread = Thread(target=_ai_reader, daemon=True)
-        reader_thread.start()
-
-        silence_thread = Thread(target=_silence_watcher, daemon=True)
-        silence_thread.start()
+        Thread(target=_ai_reader, daemon=True).start()
+        Thread(target=_silence_watcher, daemon=True).start()
 
         # Loop Twilio -> AI
         try:
@@ -1659,7 +1655,7 @@ if sock:
                     stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
                     print(f"[WS] start streamSid={stream_sid}")
 
-                    # >>> SALUDO INICIAL (audio) PARA VERIFICAR FIN-A-FIN <<<
+                    # Saludo inicial (audio) para verificar fin-a-fin
                     try:
                         saludo = (bot_cfg.get("voice_greeting") or "").strip()
                         if not saludo:
@@ -1668,15 +1664,11 @@ if sock:
                             saludo = f"Hola, soy {nombre} de {empresa}. ¿Cómo estás?"
                         ws_ai.send(json.dumps({
                             "type": "response.create",
-                            "response": {
-                                "modalities": ["audio"],
-                                "instructions": saludo
-                            }
+                            "response": {"modalities": ["audio"], "instructions": saludo}
                         }))
                         print("[WS] greeting response.create")
                     except Exception as e:
                         print("[WS] error greeting:", e)
-                    # >>> FIN SALUDO INICIAL <<<
 
                 elif etype == "media":
                     # base64 u-law 8k desde Twilio
@@ -1711,6 +1703,7 @@ if sock:
                 print("[WS] conexión cerrada")
             except Exception:
                 pass
+
 
 
 # =======================
