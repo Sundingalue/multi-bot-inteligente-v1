@@ -1494,10 +1494,32 @@ if sock:
         - En silencio (~900 ms) hace commit + response.create (modalidad audio)
         - Reenvía response.audio.delta a Twilio como media
         """
+        # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+        # Mover esta función al scope de la conexión para evitar el 'not defined'
+        def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
+            headers = [
+                "Authorization: Bearer " + OPENAI_API_KEY,
+                "OpenAI-Beta: realtime=v1",
+            ]
+            url = f"wss://api.openai.com/v1/realtime?model={model}"
+            ws = websocket.WebSocket()
+            ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+            session_update = {
+                "type": "session.update",
+                "session": {
+                    "voice": voice,
+                    "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
+                    "input_audio_format":  "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "turn_detection": {"type": "server_vad", "silence_duration_ms": 700},
+                }
+            }
+            ws.send(json.dumps(session_update))
+            return ws
+        
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
-            # print(f"[WS] query args -> {dict(request.args)}")
         except Exception:
             pass
 
