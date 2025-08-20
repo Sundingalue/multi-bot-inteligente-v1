@@ -23,6 +23,7 @@ import glob
 import random
 import hashlib
 import html
+import uuid
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
@@ -181,6 +182,7 @@ last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
+voice_session_data = {}    # 💥💥 NEW: para compartir la configuración del bot entre rutas
 
 # =======================
 #  Helpers generales (neutros)
@@ -227,6 +229,9 @@ def _canonize_phone(raw: str) -> str:
 # ✅ VOICE helper: encuentra bot por número (E.164 o whatsapp:+)
 def _get_bot_cfg_by_any_number(to_number: str):
     if not to_number:
+        # Fallback a un bot si solo hay uno
+        if len(bots_config) == 1:
+            return list(bots_config.values())[0]
         return None
 
     target = _canonize_phone(to_number)
@@ -1474,16 +1479,20 @@ def voice_entry():
     model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
     voice = str(voice_config.get("openai_voice") or voice_config.get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
-    # Pasamos los parámetros de la llamada por la URL del WebSocket
-    query_params = {
-        "bot": bot_name,
+    # 💥💥 CORRECCIÓN DEFINITIVA 💥💥
+    # Crear un identificador de sesión único para pasar al WS
+    voice_session_id = str(uuid.uuid4())
+    voice_session_data[voice_session_id] = {
+        "bot_cfg": bot_cfg,
+        "bot_name": bot_name,
         "model": model,
         "voice": voice,
-        "from": _canonize_phone(request.values.get("From", "")),
-        "to": _canonize_phone(to_number)
+        "from_number": _canonize_phone(request.values.get("From", "")),
+        "to_number": _canonize_phone(to_number)
     }
-    
-    stream_url = f"{_wss_base()}/twilio-media-stream?{urllib.parse.urlencode(query_params)}"
+
+    # Creamos la URL del WebSocket solo con el ID de sesión
+    stream_url = f"{_wss_base()}/twilio-media-stream?session_id={voice_session_id}"
     
     vr = VoiceResponse()
     connect = Connect()
@@ -1522,8 +1531,6 @@ if sock:
         - En silencio (~900 ms) hace commit + response.create (modalidad audio)
         - Reenvía response.audio.delta a Twilio como media
         """
-        # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
-        # Todas las funciones auxiliares se definen aquí para asegurar el scope correcto.
         def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
             headers = [
                 "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1544,35 +1551,32 @@ if sock:
             }
             ws.send(json.dumps(session_update))
             return ws
-        
-        # Log del handshake para confirmar apertura de WS por Twilio
+
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
         except Exception:
             pass
 
-        # ✅ CORRECCIÓN IMPORTANTE: Leemos los parámetros de la URL
-        bot_name = (request.args.get("bot") or "default").strip()
-        from_number = (request.args.get("from") or "").strip()
-        to_number = (request.args.get("to") or "").strip()
+        # 💥💥 CORRECCIÓN DEFINITIVA 💥💥
+        # Obtenemos la configuración del bot desde la sesión de voz
+        session_id = request.args.get("session_id")
+        session_data = voice_session_data.pop(session_id, None)
+
+        if not session_data:
+            print(f"[WS] ❌ No se encontró la sesión para el ID '{session_id}'. Usando configuración por defecto.")
+            bot_cfg = {}
+            bot_name = "default"
+            model = OPENAI_REALTIME_MODEL
+            voice = OPENAI_REALTIME_VOICE
+        else:
+            bot_cfg = session_data["bot_cfg"]
+            bot_name = session_data["bot_name"]
+            model = session_data["model"]
+            voice = session_data["voice"]
         
-        print(f"[WS] Query params -> bot: {bot_name}, From: {from_number}, To: {to_number}")
-        
-        bot_cfg  = _get_bot_cfg_by_name(bot_name) or {}
-        
-        # 🚨 Pista de depuración para confirmar el bot
-        if not bot_cfg:
-            print(f"[WS] ⚠️ No se encontró bot para '{bot_name}'. Fallback a 'default'.")
+        print(f"[WS] Sesión recuperada -> bot: {bot_name}, model: {model}, voice: {voice}")
 
         sysmsg = _make_system_message(bot_cfg)
-
-        model = str(
-            request.args.get("model") or OPENAI_REALTIME_MODEL
-        ).strip()
-
-        voice = str(
-            request.args.get("voice") or OPENAI_REALTIME_VOICE
-        ).strip()
         
         # 2) Conectar a OpenAI Realtime
         ws_ai = None
