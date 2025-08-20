@@ -1447,16 +1447,13 @@ def _send_twi_media(ws_twi_conn, stream_sid, payload):
     Función auxiliar para enviar datos de audio a Twilio en el formato correcto.
     Ahora en el scope global para evitar problemas de hilos.
     """
-    try:
-        ws_twi_conn.send(json.dumps({
-            "event": "media",
-            "streamSid": stream_sid,
-            "media": {
-                "payload": payload,
-            },
-        }))
-    except Exception as e:
-        print(f"[WS] ⚠️ Error al enviar datos a Twilio: {e}")
+    ws_twi_conn.send(json.dumps({
+        "event": "media",
+        "streamSid": stream_sid,
+        "media": {
+            "payload": payload,
+        },
+    }))
 
 @app.route("/voice", methods=["POST", "GET"])
 def voice_entry():
