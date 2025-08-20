@@ -729,8 +729,8 @@ def panel_exclusivo_bot(bot_nombre):
     leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
-         for config in bots_config.values()
-         if config.get("name") == bot_normalizado),
+           for config in bots_config.values()
+           if config.get("name") == bot_normalizado),
         bot_normalizado
     )
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
@@ -1445,14 +1445,22 @@ def voice_entry():
     # Log de ayuda si no encontró bot
     if not bot_cfg:
         print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
+    
+    # ❌ Solución: Aquí es donde se establece la configuración del modelo y la voz
+    realtime_config = bot_cfg.get("realtime", {})
+    model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
+    voice = str((bot_cfg.get("voice") or {}).get("openai_voice") or (bot_cfg.get("voice") or {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
+    
+    # Se añade la configuración al URL del WebSocket
+    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}&model={model}&voice={voice}"
 
     vr = VoiceResponse()
-    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
     connect = Connect()
     connect.stream(url=stream_url)
     vr.append(connect)
     print(f"[VOICE] Respondiendo TwiML. bot={bot_name} stream_url={stream_url}")
     return str(vr), 200, {"Content-Type": "text/xml"}
+
 
 # ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
 @app.get("/voice_debug")
@@ -1704,7 +1712,6 @@ if sock:
                 print("[WS] conexión cerrada")
             except Exception:
                 pass
-
 
 
 # =======================
