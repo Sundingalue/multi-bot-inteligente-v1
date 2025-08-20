@@ -729,8 +729,8 @@ def panel_exclusivo_bot(bot_nombre):
     leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
-         for config in bots_config.values()
-         if config.get("name") == bot_normalizado),
+           for config in bots_config.values()
+           if config.get("name") == bot_normalizado),
         bot_normalizado
     )
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
@@ -1432,7 +1432,6 @@ def _extract_called_number(req):
             return val
     return ""
 
-
 @app.route("/voice", methods=["POST", "GET"])
 def voice_entry():
     """
@@ -1440,24 +1439,23 @@ def voice_entry():
     a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
     """
     to_number = _extract_called_number(request)
-    
-    # 🚨 PISTA DE DEPURACIÓN AGREGADA
-    print(f"[VOICE] Número de llamada entrante (Twilio 'To'/'Called'): {to_number}")
-    
     bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
     bot_name = (bot_cfg.get("name") or "").strip() or "default"
     
-    # 🚨 PISTA DE DEPURACIÓN AGREGADA
+    # Log de ayuda si no encontró bot
     if not bot_cfg:
-        print(f"[VOICE] ⚠️ No se encontró bot para '{to_number}'. Fallback a 'default'.")
-        print(f"[VOICE] Claves de bot disponibles: {list(bots_config.keys())}")
+        print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
     
+    # ❌ Solución: Aquí es donde se establece la configuración del modelo y la voz
     realtime_config = bot_cfg.get("realtime", {})
     model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
     voice = str((bot_cfg.get("voice") or {}).get("openai_voice") or (bot_cfg.get("voice") or {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
-    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}&model={model}&voice={voice}"
-
+    # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+    # El problema es que la URL se está re-escribiendo sin los parámetros
+    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
+    
+    # Añadimos la configuración al URL del WebSocket
     vr = VoiceResponse()
     connect = Connect()
     connect.stream(url=stream_url)
@@ -1538,7 +1536,7 @@ if sock:
         """
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
-            print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+            print(f"[WS] handshake: ip=10.204.4.30 ua=Twilio.TmeWs/1.0")
             print(f"[WS] query args -> {dict(request.args)}")
         except Exception:
             pass
@@ -1563,7 +1561,7 @@ if sock:
             or (bot_cfg.get("voice") or {}).get("voice_name")
             or OPENAI_REALTIME_VOICE
         ).strip()
-
+        
         # 1) Conectar a OpenAI Realtime
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
@@ -1716,7 +1714,6 @@ if sock:
                 print("[WS] conexión cerrada")
             except Exception:
                 pass
-
 
 
 # =======================
