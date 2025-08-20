@@ -2,7 +2,7 @@ flask
 twilio
 openai>=1.12.0
 python-dotenv
-gunicorn
+gunicorn>=21.2.0
 firebase-admin==6.5.0
 google-auth==2.31.0
 python-dotenv>=1.0.1,<2
@@ -13,3 +13,5 @@ google-auth-oauthlib
 stripe==10.10.0
 flask-sock==0.7.0 
 websocket-client==1.8.0
+gevent-websocket>=0.10.1
+gevent>=24.2.1
