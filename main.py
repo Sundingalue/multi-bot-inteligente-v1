@@ -1524,6 +1524,8 @@ def _send_twi_media(ws_twi, stream_sid, chunk_base64):
     except Exception as e:
         print("⚠️ Error enviando media a Twilio:", e)
 
+# ... (código existente del main.py) ...
+
 if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
@@ -1536,26 +1538,35 @@ if sock:
         """
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
-            print(f"[WS] handshake: ip=10.204.4.30 ua=Twilio.TmeWs/1.0")
-            print(f"[WS] query args -> {dict(request.args)}")
+            print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
         except Exception:
             pass
 
-        # Resolver bot / modelo / voz
-        args = request.args or {}
-        bot_name = (args.get("bot") or "default").strip()
-        bot_cfg  = _get_bot_cfg_by_name(bot_name) or {}
+        # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+        # En lugar de usar los query args, buscamos el bot directamente.
+        
+        # 1. Obtenemos el número de la llamada desde los headers de Twilio
+        # Esta es la forma más robusta de obtener el número de teléfono en una conexión WS de Twilio
+        from_number = request.headers.get('X-Twilio-From')
+        to_number = request.headers.get('X-Twilio-To')
+        
+        print(f"[WS] Headers Twilio -> From: {from_number}, To: {to_number}")
+        
+        bot_cfg  = _get_bot_cfg_by_any_number(to_number) or {}
+        bot_name = (bot_cfg.get("name") or "").strip() or "default"
+        
+        # 🚨 Pista de depuración para confirmar el bot
+        if not bot_cfg:
+            print(f"[WS] ⚠️ No se encontró bot para '{to_number}'. Fallback a 'default'.")
 
         sysmsg = _make_system_message(bot_cfg)
 
-        # Modelo Realtime: acepta "realtime_model" o "realtime": {"model": "..."}
         model = str(
             bot_cfg.get("realtime_model")
             or (bot_cfg.get("realtime") or {}).get("model")
             or OPENAI_REALTIME_MODEL
         ).strip()
 
-        # Voz: primero voice.openai_voice, si no voice.voice_name, si no variable de entorno
         voice = str(
             (bot_cfg.get("voice") or {}).get("openai_voice")
             or (bot_cfg.get("voice") or {}).get("voice_name")
@@ -1578,17 +1589,14 @@ if sock:
         stream_sid = None
         ai_reader_running = True
 
-        # Buffer local de entrada (~200ms = 1600 bytes @8kHz u-law)
         pending_bytes = bytearray()
         CHUNK_BYTES = 1600
 
-        # Silencio: si no llegan frames por ~0.9s => commit + respuesta
         SILENCE_MS = 900
         last_media_ts = time.time()
         silence_kill = Event()
 
         def _flush_append(force=False):
-            """Manda a OpenAI un 'append' si hay ≥200ms (o si force=True y hay algo)."""
             nonlocal pending_bytes
             try:
                 if len(pending_bytes) >= CHUNK_BYTES or (force and len(pending_bytes) > 0):
@@ -1603,7 +1611,6 @@ if sock:
                 print("[WS] error en append:", e)
 
         def _commit_and_ask():
-            """Cierra el buffer y pide respuesta en audio+texto (requerido por la API)."""
             try:
                 ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
                 ws_ai.send(json.dumps({
@@ -1614,7 +1621,6 @@ if sock:
             except Exception as e:
                 print("[WS] error commit/response.create:", e)
 
-        # Lector de eventos AI -> enviar audio TTS a Twilio
         def _ai_reader():
             nonlocal ai_reader_running, stream_sid
             while ai_reader_running:
@@ -1634,7 +1640,6 @@ if sock:
                     print("ℹ️ AI reader finalizado:", e)
                     break
 
-        # Watchdog de silencio
         def _silence_watcher():
             while not silence_kill.is_set():
                 try:
@@ -1649,7 +1654,6 @@ if sock:
         Thread(target=_ai_reader, daemon=True).start()
         Thread(target=_silence_watcher, daemon=True).start()
 
-        # Loop Twilio -> AI
         try:
             while True:
                 raw = ws_twi.receive()
@@ -1666,7 +1670,6 @@ if sock:
                     stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
                     print(f"[WS] start streamSid={stream_sid}")
 
-                    # Saludo inicial (audio) para verificar fin-a-fin
                     try:
                         saludo = (bot_cfg.get("voice_greeting") or "").strip()
                         if not saludo:
@@ -1682,7 +1685,6 @@ if sock:
                         print("[WS] error greeting:", e)
 
                 elif etype == "media":
-                    # base64 u-law 8k desde Twilio
                     chunk_b64 = ((evt.get("media") or {}).get("payload") or "")
                     if chunk_b64:
                         try:
@@ -1694,12 +1696,9 @@ if sock:
 
                 elif etype == "stop":
                     print("[WS] stop recibido de Twilio")
-                    # último empujón + pedir respuesta final
                     _flush_append(force=True)
                     _commit_and_ask()
                     break
-
-                # ignoramos 'mark'
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
