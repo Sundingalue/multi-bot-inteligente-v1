@@ -38,6 +38,7 @@ import base64
 import struct
 import ssl
 from threading import Event
+import urllib.parse
 try:
     from flask_sock import Sock
     import websocket  # websocket-client
@@ -1437,6 +1438,19 @@ def _extract_called_number(req):
             return val
     return ""
 
+def _send_twi_media(ws_twi_conn, stream_sid, payload):
+    """
+    Función auxiliar para enviar datos de audio a Twilio en el formato correcto.
+    Ahora en el scope global para evitar problemas de hilos.
+    """
+    ws_twi_conn.send(json.dumps({
+        "event": "media",
+        "streamSid": stream_sid,
+        "media": {
+            "payload": payload,
+        },
+    }))
+
 @app.route("/voice", methods=["POST", "GET"])
 def voice_entry():
     """
@@ -1455,8 +1469,16 @@ def voice_entry():
     model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
     voice = str((bot_cfg.get("voice") or {}).get("openai_voice") or (bot_cfg.get("voice") or {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
-    # Generamos la URL del WebSocket con los parámetros
-    stream_url = f"{_wss_base()}/twilio-media-stream"
+    # ✅ CORRECCIÓN IMPORTANTE: Pasamos los parámetros de la llamada por la URL del WebSocket
+    query_params = {
+        "bot": bot_name,
+        "model": model,
+        "voice": voice,
+        "from": _canonize_phone(request.values.get("From", "")),
+        "to": _canonize_phone(to_number)
+    }
+    
+    stream_url = f"{_wss_base()}/twilio-media-stream?{urllib.parse.urlencode(query_params)}"
     
     vr = VoiceResponse()
     connect = Connect()
@@ -1495,9 +1517,8 @@ if sock:
         - En silencio (~900 ms) hace commit + response.create (modalidad audio)
         - Reenvía response.audio.delta a Twilio como media
         """
-        # 💥💥 CORRECCIÓN IMPORTANTE �💥
-        # Todas las funciones auxiliares se definen dentro de este scope
-        # para evitar conflictos con el monkey-patching de eventlet.
+        # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+        # Todas las funciones auxiliares se definen aquí para asegurar el scope correcto.
         def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
             headers = [
                 "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1518,19 +1539,6 @@ if sock:
             }
             ws.send(json.dumps(session_update))
             return ws
-        
-        def _send_twi_media(ws_twi_conn, stream_sid, payload):
-            """
-            Función auxiliar para enviar datos de audio a Twilio en el formato correcto.
-            Definida aquí para asegurar el scope correcto.
-            """
-            ws_twi_conn.send(json.dumps({
-                "event": "media",
-                "streamSid": stream_sid,
-                "media": {
-                    "payload": payload,
-                },
-            }))
 
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
@@ -1538,31 +1546,27 @@ if sock:
         except Exception:
             pass
 
-        # 1. Obtenemos los números de la llamada desde los headers de Twilio
-        from_number = request.headers.get('X-Twilio-From')
-        to_number = request.headers.get('X-Twilio-To')
+        # ✅ CORRECCIÓN IMPORTANTE: Leemos los parámetros de la URL
+        bot_name = (request.args.get("bot") or "default").strip()
+        from_number = (request.args.get("from") or "").strip()
+        to_number = (request.args.get("to") or "").strip()
         
-        print(f"[WS] Headers Twilio -> From: {from_number}, To: {to_number}")
+        print(f"[WS] Query params -> bot: {bot_name}, From: {from_number}, To: {to_number}")
         
-        bot_cfg  = _get_bot_cfg_by_any_number(to_number) or {}
-        bot_name = (bot_cfg.get("name") or "").strip() or "default"
+        bot_cfg  = _get_bot_cfg_by_name(bot_name) or {}
         
         # 🚨 Pista de depuración para confirmar el bot
         if not bot_cfg:
-            print(f"[WS] ⚠️ No se encontró bot para '{to_number}'. Fallback a 'default'.")
+            print(f"[WS] ⚠️ No se encontró bot para '{bot_name}'. Fallback a 'default'.")
 
         sysmsg = _make_system_message(bot_cfg)
 
         model = str(
-            bot_cfg.get("realtime_model")
-            or (bot_cfg.get("realtime") or {}).get("model")
-            or OPENAI_REALTIME_MODEL
+            request.args.get("model") or OPENAI_REALTIME_MODEL
         ).strip()
 
         voice = str(
-            (bot_cfg.get("voice") or {}).get("openai_voice")
-            or (bot_cfg.get("voice") or {}).get("voice_name")
-            or OPENAI_REALTIME_VOICE
+            request.args.get("voice") or OPENAI_REALTIME_VOICE
         ).strip()
         
         # 2) Conectar a OpenAI Realtime
