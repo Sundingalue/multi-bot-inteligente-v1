@@ -26,7 +26,7 @@ from twilio.rest import Client as TwilioClient
 import firebase_admin
 from firebase_admin import credentials, db
 # 🔹 NEW: FCM (para notificaciones push)
-from firebase_admin import messaging as fcm  # <-- añadido
+from firebase_admin import messaging as fcm
 
 # 🔹 NEW (Realtime bridge) — dependencias WebSocket
 import base64
@@ -40,7 +40,7 @@ except Exception as _e:
     print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
 
 # =======================
-#  Cargar variables de entorno (Render -> Secret File)
+# Cargar variables de entorno (Render -> Secret File)
 # =======================
 load_dotenv("/etc/secrets/.env")
 load_dotenv()
@@ -49,7 +49,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or ""
 
 # Twilio REST creds (necesarias para enviar mensajes OUTBOUND)
 TWILIO_ACCOUNT_SID = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
-TWILIO_AUTH_TOKEN  = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+TWILIO_AUTH_TOKEN = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
 
 # Fallbacks globales (se usan SOLO si el bot no trae link en su JSON ni hay variable de entorno)
 BOOKING_URL_FALLBACK = (os.environ.get("BOOKING_URL", "").strip())
@@ -60,7 +60,7 @@ API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
 
 # 🔹 NEW (Realtime): ajustes por defecto del modelo/voz
 OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17").strip()
-OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()  # voces humanas de OpenAI (p.ej. alloy, verse, aria)
+OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip() # voces humanas de OpenAI (p.ej. alloy, verse, aria)
 
 def _valid_url(u: str) -> bool:
     return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
@@ -98,7 +98,7 @@ def _bearer_ok(req) -> bool:
     return auth == f"Bearer {API_BEARER_TOKEN}"
 
 # =======================
-#  Inicializar Firebase
+# Inicializar Firebase
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
 firebase_db_url = (os.getenv("FIREBASE_DB_URL") or "").strip()
@@ -125,7 +125,7 @@ if not firebase_admin._apps:
         print("⚠️ Firebase inicializado sin databaseURL (db.reference fallará hasta configurar FIREBASE_DB_URL).")
 
 # =======================
-#  Twilio REST Client (para respuestas manuales)
+# Twilio REST Client (para respuestas manuales)
 # =======================
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
@@ -138,7 +138,7 @@ else:
     print("⚠️ TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN no configurados. El envío manual desde panel no funcionará hasta configurarlos.")
 
 # =======================
-#  Cargar bots desde carpeta bots/
+# Cargar bots desde carpeta bots/
 # =======================
 def load_bots_folder():
     bots = {}
@@ -158,7 +158,7 @@ if not bots_config:
     print("⚠️ No se encontraron bots en ./bots/*.json")
 
 # =======================
-#  💡 Registrar la API de facturación (Blueprint)
+# 💡 Registrar la API de facturación (Blueprint)
 # =======================
 from billing_api import billing_bp, record_openai_usage
 app.register_blueprint(billing_bp, url_prefix="/billing")
@@ -169,7 +169,7 @@ app.register_blueprint(mobile_bp, url_prefix="/api/mobile")
 
 
 # =======================
-#  Memorias por sesión (runtime)
+# Memorias por sesión (runtime)
 # =======================
 session_history = {}       # clave_sesion -> mensajes para OpenAI (texto)
 last_message_time = {}     # clave_sesion -> timestamp último mensaje
@@ -178,7 +178,7 @@ agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status"
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 
 # =======================
-#  Helpers generales (neutros)
+# Helpers generales (neutros)
 # =======================
 def _hora_to_epoch_ms(hora_str: str) -> int:
     try:
@@ -299,7 +299,7 @@ def _make_system_message(bot_cfg: dict) -> str:
     return (bot_cfg or {}).get("system_prompt", "") or ""
 
 # =======================
-#  Helpers de links por BOT
+# Helpers de links por BOT
 # =======================
 def _drill_get(d: dict, path: str):
     cur = d
@@ -342,7 +342,7 @@ def _effective_app_url(bot_cfg: dict) -> str:
     return APP_DOWNLOAD_URL_FALLBACK if _valid_url(APP_DOWNLOAD_URL_FALLBACK) else ""
 
 # =======================
-#  Intenciones
+# Intenciones
 # =======================
 SCHEDULE_OFFER_PAT = re.compile(
     r"\b(enlace|link|calendar|calendario|agendar|agenda|reservar|reserva|cita|schedule|book|appointment|meeting|call)\b",
@@ -404,7 +404,7 @@ def _can_send_link(clave, cooldown_min=10):
     return True
 
 # =======================
-#  Firebase: helpers de leads
+# Firebase: helpers de leads
 # =======================
 def _lead_ref(bot_nombre, numero):
     return db.reference(f"leads/{bot_nombre}/{numero}")
@@ -469,7 +469,7 @@ def fb_list_leads_by_bot(bot_nombre):
                 "messages": int(data.get("messages", 0)),
                 "status": data.get("status", "nuevo"),
                 "notes": data.get("notes", "")
-        }
+            }
     return leads
 
 # ✅ NUEVO: eliminar lead completo
@@ -501,7 +501,7 @@ def fb_clear_historial(bot_nombre, numero):
         return False
 
 # =======================
-#  ✅ Kill-Switch GLOBAL por bot
+# ✅ Kill-Switch GLOBAL por bot
 # =======================
 def fb_is_bot_on(bot_name: str) -> bool:
     try:
@@ -515,7 +515,7 @@ def fb_is_bot_on(bot_name: str) -> bool:
     return True  # si no hay dato, asumimos ON
 
 # =======================
-#  ✅ NUEVO: Kill-Switch por conversación (ON/OFF individual)
+# ✅ NUEVO: Kill-Switch por conversación (ON/OFF individual)
 # =======================
 def fb_is_conversation_on(bot_nombre: str, numero: str) -> bool:
     """Devuelve True si la conversación tiene el bot activado; si no existe el flag, asume ON."""
@@ -543,7 +543,7 @@ def fb_set_conversation_on(bot_nombre: str, numero: str, enabled: bool):
         return False
 
 # =======================
-#  🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
+# 🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
 # =======================
 def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_number: str):
     if clave_sesion in session_history:
@@ -574,7 +574,7 @@ def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_numb
         follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
 # =======================
-#  Rutas UI: Paneles
+# Rutas UI: Paneles
 # =======================
 def _load_users():
     """
@@ -729,8 +729,8 @@ def panel_exclusivo_bot(bot_nombre):
     leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
-         for config in bots_config.values()
-         if config.get("name") == bot_normalizado),
+           for config in bots_config.values()
+           if config.get("name") == bot_normalizado),
         bot_normalizado
     )
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
@@ -830,7 +830,7 @@ def logout():
     return resp
 
 # =======================
-#  Guardar/Exportar
+# Guardar/Exportar
 # =======================
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -883,7 +883,7 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 # =======================
-#  ✅ NUEVO: Borrar / Vaciar conversaciones (protegido)
+# ✅ NUEVO: Borrar / Vaciar conversaciones (protegido)
 # =======================
 @app.route("/borrar-conversacion", methods=["POST"])
 def borrar_conversacion_post():
@@ -942,7 +942,7 @@ def api_delete_chat():
     return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
 
 # =======================
-#  ✅ API para responder MANUALMENTE desde el panel o la APP (Bearer)
+# ✅ API para responder MANUALMENTE desde el panel o la APP (Bearer)
 # =======================
 @app.route("/api/send_manual", methods=["POST", "OPTIONS"])
 def api_send_manual():
@@ -992,7 +992,7 @@ def api_send_manual():
         return jsonify({"error": "Fallo enviando el mensaje"}), 500
 
 # =======================
-#  ✅ API para ON/OFF por conversación (panel o APP con Bearer)
+# ✅ API para ON/OFF por conversación (panel o APP con Bearer)
 # =======================
 @app.route("/api/conversation_bot", methods=["POST", "OPTIONS"])
 def api_conversation_bot():
@@ -1023,7 +1023,7 @@ def api_conversation_bot():
     return jsonify({"ok": bool(ok), "enabled": bool(enabled)})
 
 # =======================
-#  🔔 NEW: Endpoints PUSH (evitan HTTP 404)
+# 🔔 NEW: Endpoints PUSH (evitan HTTP 404)
 # =======================
 
 def _push_common_data(payload: dict) -> dict:
@@ -1186,7 +1186,7 @@ def push_universal():
         return jsonify({"success": False, "message": "FCM error"}), 500
 
 # =======================
-#  Webhook WhatsApp
+# Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
@@ -1206,9 +1206,9 @@ def _compose_with_link(prefix: str, link: str) -> str:
 
 @app.route("/webhook", methods=["POST"])
 def whatsapp_bot():
-    incoming_msg  = (request.values.get("Body", "") or "").strip()
+    incoming_msg = (request.values.get("Body", "") or "").strip()
     sender_number = request.values.get("From", "")
-    bot_number    = request.values.get("To", "")
+    bot_number = request.values.get("To", "")
 
     clave_sesion = f"{bot_number}|{sender_number}"
     bot = _get_bot_cfg_by_number(bot_number)
@@ -1282,7 +1282,7 @@ def whatsapp_bot():
     closing_default = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("closing_message") or ""), flags=re.IGNORECASE)
 
     if _is_scheduled_confirmation(incoming_msg):
-        texto = closing_default or"Agendado."
+        texto = closing_default or "Agendado."
         msg.body(texto)
         _set_agenda(clave_sesion, status="confirmed")
         agenda_state[clave_sesion]["closed"] = True
@@ -1408,7 +1408,7 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔊 VOZ con OpenAI Realtime + Twilio Media Streams
+# 🔊 VOZ con OpenAI Realtime + Twilio Media Streams
 # =======================
 
 def _wss_base():
@@ -1449,7 +1449,7 @@ def voice_entry():
     vr = VoiceResponse()
     connect = Connect()
 
-    # ⚠️ Enviar el bot por <Parameter>, Twilio no pasa querystring al WS
+    # Usamos <Stream> para enviar el nombre del bot como un <Parameter>
     stream = Stream(url=f"{_wss_base()}/twilio-media-stream", track="inbound_audio")
     stream.parameter(name="bot", value=bot_name)
 
@@ -1539,7 +1539,7 @@ if sock:
         # Resolver bot inicial (por query, si llegara) — luego se corrige con customParameters
         args = request.args or {}
         bot_name = (args.get("bot") or "default").strip()
-        bot_cfg  = _get_bot_cfg_by_name(bot_name) or {}
+        bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
 
         sysmsg = _make_system_message(bot_cfg)
 
@@ -1661,7 +1661,7 @@ if sock:
                     start_info = evt.get("start") or {}
                     stream_sid = start_info.get("streamSid") or stream_sid
 
-                    # 👉 Leer customParameters enviados por <Parameter>
+                    # Leer customParameters enviados por <Parameter>
                     cp = start_info.get("customParameters") or {}
                     got_bot = (cp.get("bot") or "").strip()
                     if got_bot:
@@ -1737,9 +1737,8 @@ if sock:
                 pass
 
 
-
 # =======================
-#  Vistas de conversación (leen Firebase)
+# Vistas de conversación (leen Firebase)
 # =======================
 @app.route("/conversacion_general/<bot>/<numero>")
 def chat_general(bot, numero):
@@ -1784,7 +1783,7 @@ def chat_bot(bot, numero):
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 # =======================
-#  API de polling (leen Firebase) — ahora permite Bearer
+# API de polling (leen Firebase) — ahora permite Bearer
 # =======================
 @app.route("/api/chat/<bot>/<numero>", methods=["GET", "OPTIONS"])
 def api_chat(bot, numero):
@@ -1834,7 +1833,7 @@ def api_chat(bot, numero):
     return jsonify({"mensajes": nuevos, "last_ts": last_ts, "bot_enabled": bool(bot_enabled)})
 
 # =======================
-#  Run
+# Run
 # =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
