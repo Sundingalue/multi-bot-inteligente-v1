@@ -174,7 +174,7 @@ app.register_blueprint(mobile_bp, url_prefix="/api/mobile")
 session_history = {}       # clave_sesion -> mensajes para OpenAI (texto)
 last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
-agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": str, "closed": bool}
+agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 
 # =======================
@@ -384,7 +384,8 @@ def _is_polite_closure(texto: str) -> bool:
 
 def _now(): return int(time.time())
 def _minutes_since(ts): return (_now() - int(ts or 0)) / 60.0
-def _hash_text(s: str) -> str: return hashlib.md5((s or "").strip().lower().encode("utf-8")).md5().hexdigest() if False else hashlib.md5((s or "").strip().lower().encode("utf-8")).hexdigest()
+def _hash_text(s: str) -> str:
+    return hashlib.md5((s or "").strip().lower().encode("utf-8")).hexdigest()
 
 def _get_agenda(clave):
     return agenda_state.get(clave) or {"awaiting_confirm": False, "status": "none", "last_update": 0, "last_link_time": 0, "last_bot_hash": "", "closed": False}
@@ -618,7 +619,7 @@ def _load_users():
         if isinstance(cfg.get("login"), dict):
             logins.append(cfg["login"])
         if isinstance(cfg.get("logins"), list):
-            logins.extend([x for x in cfg["logins"] if isinstance(x, dict)])
+            logins.extend([x para x in cfg["logins"] if isinstance(x, dict)])
         if isinstance(cfg.get("auth"), dict):  # 🔹 alias compatible
             logins.append(cfg["auth"])
 
@@ -1247,7 +1248,7 @@ def whatsapp_bot():
             links_cfg = bot.get("links") or {}
             app_msg = (links_cfg.get("app_message") or "").strip() if isinstance(links_cfg, dict) else ""
             if app_msg:
-                texto = app_msg if ("http://" in app_msg or "https://" in app_msg) else _compose_with_link(app_msg, url_app)
+                texto = app_msg si ("http://" in app_msg or "https://" in app_msg) else _compose_with_link(app_msg, url_app)
             else:
                 texto = _compose_with_link("Aquí tienes:", url_app)
             msg.body(texto)
@@ -1281,7 +1282,7 @@ def whatsapp_bot():
     closing_default = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("closing_message") or ""), flags=re.IGNORECASE)
 
     if _is_scheduled_confirmation(incoming_msg):
-        texto = closing_default or "Agendado."
+        texto = closing_default o "Agendado."
         msg.body(texto)
         _set_agenda(clave_sesion, status="confirmed")
         agenda_state[clave_sesion]["closed"] = True
@@ -1520,7 +1521,7 @@ if sock:
         Bridge WS con commits por silencio:
         - Recibe audio (u-law 8k) de Twilio
         - Envía append a OpenAI
-        - En silencio (~900 ms) hace commit + response.create
+        - En silencio (~900 ms) hace commit + response.create (modalidad audio)
         - Reenvía response.audio.delta a Twilio como media
         """
         args = request.args or {}
@@ -1528,8 +1529,18 @@ if sock:
         bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
 
         sysmsg = _make_system_message(bot_cfg)
-        model = (bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
-        voice = (bot_cfg.get("voice", {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
+        # soportar ambas formas: "realtime_model" o "realtime": {"model": ...}
+        model = (
+            bot_cfg.get("realtime_model")
+            or (bot_cfg.get("realtime") or {}).get("model")
+            or OPENAI_REALTIME_MODEL
+        ).strip()
+        # prioriza voice.openai_voice; si no, voice_name; si no, env var
+        voice = (
+            (bot_cfg.get("voice") or {}).get("openai_voice")
+            or (bot_cfg.get("voice") or {}).get("voice_name")
+            or OPENAI_REALTIME_VOICE
+        ).strip()
 
         # 1) Conectar a OpenAI
         try:
@@ -1551,7 +1562,7 @@ if sock:
         pending_bytes = bytearray()
         CHUNK_BYTES = 1600
 
-        # Silencio: si no llegan frames por ~0.9s => commit + response
+        # Silencio: si no llegan frames por ~0.9s => commit + respuesta
         SILENCE_MS = 900
         last_media_ts = time.time()
         silence_kill = Event()
@@ -1572,10 +1583,13 @@ if sock:
                 print("[WS] error en append:", e)
 
         def _commit_and_ask():
-            """Cierra el buffer y pide respuesta."""
+            """Cierra el buffer y pide respuesta en audio."""
             try:
                 ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                ws_ai.send(json.dumps({"type": "response.create"}))
+                ws_ai.send(json.dumps({
+                    "type": "response.create",
+                    "response": {"modalities": ["audio"]}
+                }))
                 print("[WS] commit + response.create")
             except Exception as e:
                 print("[WS] error commit/response.create:", e)
@@ -1642,6 +1656,25 @@ if sock:
                 if etype == "start":
                     stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
                     print(f"[WS] start streamSid={stream_sid}")
+
+                    # >>> SALUDO INICIAL (audio) PARA VERIFICAR FIN-A-FIN <<<
+                    try:
+                        saludo = (bot_cfg.get("voice_greeting") or "").strip()
+                        if not saludo:
+                            empresa = (bot_cfg.get("business_name") or "").strip()
+                            nombre = (bot_cfg.get("name") or "nuestro asistente").strip()
+                            saludo = f"Hola, soy {nombre} de {empresa}. ¿Cómo estás?"
+                        ws_ai.send(json.dumps({
+                            "type": "response.create",
+                            "response": {
+                                "modalities": ["audio"],
+                                "instructions": saludo
+                            }
+                        }))
+                        print("[WS] greeting response.create")
+                    except Exception as e:
+                        print("[WS] error greeting:", e)
+                    # >>> FIN SALUDO INICIAL <<<
 
                 elif etype == "media":
                     # base64 u-law 8k desde Twilio
@@ -1761,7 +1794,7 @@ def api_chat(bot, numero):
         if ts > last_ts:
             last_ts = ts
 
-    if since_ms == 0 and not nuevos and historial:
+    if since_ms == 0 and not nuevos y historial:
         for reg in historial:
             ts = _hora_to_epoch_ms(reg.get("hora", ""))
             if ts > last_ts:
