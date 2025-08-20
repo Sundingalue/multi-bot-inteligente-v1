@@ -106,8 +106,8 @@
     },
 
     "voice": {
-      "voice_name": "shimmer",               
-      "openai_voice": "shimmer",            
+      "voice_name": "aura",               
+      "openai_voice": "aura",            
       "language": "es-MX",
       "rate": "medium",
       "pitch": "0%",
