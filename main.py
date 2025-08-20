@@ -1108,15 +1108,15 @@ def push_token():
                 notification=fcm.Notification(title=title, body=body_text),
                 data=data
             )
-            resp = fcm.send_multicast(multicast)
-            return jsonify({"success": True, "sent": resp.success_count, "failed": resp.failure_count})
+            resp = fcm.send_multicast(multi)
+            return jsonify({"success": True, "mode": "tokens", "sent": resp.success_count, "failed": resp.failure_count})
         elif token:
-            message = fcm.Message(
+            msg = fcm.Message(
                 token=token,
                 notification=fcm.Notification(title=title, body=body_text),
                 data=data
             )
-            msg_id = fcm.send(message)
+            msg_id = fcm.send(msg)
             return jsonify({"success": True, "mode": "token", "id": msg_id})
         else:
             return jsonify({"success": False, "message": "token(s) requerido(s)"}), 400
@@ -1466,7 +1466,7 @@ def voice_entry():
     
     bot_name = (bot_cfg.get("name") or "").strip() or "default"
     
-    # ✅ CORRECCIÓN FINAL: Leer la configuración de voz y modelo del bot
+    # ✅ Lógica de lectura de configuración más robusta
     # Si no se encuentra, usar los valores por defecto
     realtime_config = bot_cfg.get("realtime", {})
     voice_config = bot_cfg.get("voice", {})
