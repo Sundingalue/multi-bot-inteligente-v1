@@ -1,4 +1,6 @@
 # main.py — core genérico (sin conocimiento de marca en el core)
+from gevent import monkey
+monkey.patch_all()
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Gather, Connect
