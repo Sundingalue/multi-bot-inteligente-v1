@@ -1,6 +1,6 @@
 # main.py — core genérico (sin conocimiento de marca en el core)
 
-# 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+# 💥💥 CORRECCIÓN FINAL 💥💥
 # Usar monkey_patch de eventlet en lugar de gevent
 import eventlet
 eventlet.monkey_patch()
@@ -1478,29 +1478,36 @@ def voice_entry():
     model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
     voice = str(voice_config.get("openai_voice") or voice_config.get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
-    # 💥💥 CORRECCIÓN CON FIREBASE 💥💥
-    # Crear un identificador de sesión único
-    voice_session_id = str(uuid.uuid4())
+    # 💥💥 CORRECCIÓN FINAL CON CallSid 💥💥
+    # Obtener el CallSid de la solicitud
+    call_sid = request.values.get("CallSid")
     
-    # Guardar la configuración en Firebase
-    try:
-        ref = db.reference(f"voice_sessions/{voice_session_id}")
-        ref.set({
-            "bot_name": bot_name,
-            "model": model,
-            "voice": voice,
-            "system_prompt": _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
-        })
-        print(f"[VOICE] Configuración guardada en Firebase para session_id: {voice_session_id}")
-    except Exception as e:
-        print(f"[VOICE] ❌ Error al guardar la sesión en Firebase: {e}")
-        # Fallback a valores por defecto si Firebase falla
+    if not call_sid:
+        print("[VOICE] ❌ No se encontró el CallSid en la solicitud. No se puede guardar la sesión.")
+        # Fallback a valores por defecto si no hay CallSid
         model = OPENAI_REALTIME_MODEL
         voice = OPENAI_REALTIME_VOICE
         bot_name = "default"
+    else:
+        # Guardar la configuración en Firebase usando el CallSid
+        try:
+            ref = db.reference(f"voice_sessions/{call_sid}")
+            ref.set({
+                "bot_name": bot_name,
+                "model": model,
+                "voice": voice,
+                "system_prompt": _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
+            })
+            print(f"[VOICE] Configuración guardada en Firebase para CallSid: {call_sid}")
+        except Exception as e:
+            print(f"[VOICE] ❌ Error al guardar la sesión en Firebase: {e}")
+            # Fallback a valores por defecto si Firebase falla
+            model = OPENAI_REALTIME_MODEL
+            voice = OPENAI_REALTIME_VOICE
+            bot_name = "default"
         
-    # Creamos la URL del WebSocket solo con el ID de sesión
-    stream_url = f"{_wss_base()}/twilio-media-stream?session_id={voice_session_id}"
+    # Creamos la URL del WebSocket sin parámetros (se usará el CallSid)
+    stream_url = f"{_wss_base()}/twilio-media-stream"
     
     vr = VoiceResponse()
     connect = Connect()
@@ -1565,21 +1572,21 @@ if sock:
         except Exception:
             pass
 
-        # 💥💥 CORRECCIÓN CON FIREBASE 💥💥
-        # Obtenemos la configuración del bot desde Firebase
-        session_id = request.args.get("session_id")
+        # 💥💥 CORRECCIÓN FINAL CON CallSid 💥💥
+        # Obtenemos la configuración del bot desde Firebase usando el CallSid del header
+        call_sid = request.headers.get('X-Twilio-CallSid')
         session_data = None
-        if session_id:
+        if call_sid:
             try:
-                ref = db.reference(f"voice_sessions/{session_id}")
+                ref = db.reference(f"voice_sessions/{call_sid}")
                 session_data = ref.get()
                 # Opcional: eliminar el registro para limpiar la base de datos
                 ref.delete()
             except Exception as e:
-                print(f"[WS] ❌ Error al leer la sesión de Firebase para ID '{session_id}': {e}")
-
+                print(f"[WS] ❌ Error al leer la sesión de Firebase para CallSid '{call_sid}': {e}")
+        
         if not session_data:
-            print(f"[WS] ❌ No se encontró la sesión para el ID '{session_id}'. Usando configuración por defecto.")
+            print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración por defecto.")
             bot_cfg = {}
             bot_name = "default"
             model = OPENAI_REALTIME_MODEL
