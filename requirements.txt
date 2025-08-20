@@ -1,34 +1,29 @@
-# Core web
+# Core Flask y servidor web
 Flask==3.0.3
-Werkzeug==3.0.3
-gunicorn==21.2.0
+gunicorn>=21.2.0
 
-# Async para WS (Twilio Media Streams + OpenAI Realtime)
-eventlet==0.35.2
-greenlet==3.0.3
-flask-sock==0.6.0
+# Asincronía para Websockets (SOLUCIÓN)
+eventlet
+gevent>=24.2.1
+gevent-websocket>=0.10.1
+flask-sock==0.7.0
 websocket-client==1.8.0
 
-# OpenAI
-openai==1.40.0
+# SDK de OpenAI
+openai>=1.12.0
 
-# Twilio
-twilio==9.2.4
-urllib3<3
+# Librerías de Twilio
+twilio
 
-# Firebase / Google
+# Librerías de Firebase y Google
 firebase-admin==6.5.0
-google-api-python-client==2.129.0
-google-auth==2.31.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.0
-protobuf==4.25.3
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
 
-# Env
-python-dotenv==1.0.1
+# Manejo de variables de entorno
+python-dotenv>=1.0.1,<2
 
-# Pagos (si lo usas)
+# Procesamiento de pagos
 stripe==10.10.0
-
-# Compatibilidad Py<=3.10 (seguro también en 3.11/3.12)
-typing_extensions>=4.8.0
