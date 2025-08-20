@@ -1459,17 +1459,22 @@ def voice_entry():
     """
     to_number = _extract_called_number(request)
     bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
-    bot_name = (bot_cfg.get("name") or "").strip() or "default"
     
     # Log de ayuda si no encontró bot
     if not bot_cfg:
         print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
     
-    realtime_config = bot_cfg.get("realtime", {})
-    model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
-    voice = str((bot_cfg.get("voice") or {}).get("openai_voice") or (bot_cfg.get("voice") or {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
+    bot_name = (bot_cfg.get("name") or "").strip() or "default"
     
-    # ✅ CORRECCIÓN IMPORTANTE: Pasamos los parámetros de la llamada por la URL del WebSocket
+    # ✅ CORRECCIÓN FINAL: Leer la configuración de voz y modelo del bot
+    # Si no se encuentra, usar los valores por defecto
+    realtime_config = bot_cfg.get("realtime", {})
+    voice_config = bot_cfg.get("voice", {})
+    
+    model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
+    voice = str(voice_config.get("openai_voice") or voice_config.get("voice_name") or OPENAI_REALTIME_VOICE).strip()
+    
+    # Pasamos los parámetros de la llamada por la URL del WebSocket
     query_params = {
         "bot": bot_name,
         "model": model,
@@ -1484,7 +1489,7 @@ def voice_entry():
     connect = Connect()
     connect.stream(url=stream_url)
     vr.append(connect)
-    print(f"[VOICE] Respondiendo TwiML. bot={bot_name} stream_url={stream_url}")
+    print(f"[VOICE] Respondiendo TwiML. bot={bot_name} model={model} voice={voice} stream_url={stream_url}")
     return str(vr), 200, {"Content-Type": "text/xml"}
 
 
@@ -1539,7 +1544,7 @@ if sock:
             }
             ws.send(json.dumps(session_update))
             return ws
-
+        
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
