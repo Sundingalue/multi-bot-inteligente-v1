@@ -182,7 +182,6 @@ last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
-voice_session_data = {}    # 💥💥 NEW: para compartir la configuración del bot entre rutas
 
 # =======================
 #  Helpers generales (neutros)
@@ -1479,18 +1478,27 @@ def voice_entry():
     model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
     voice = str(voice_config.get("openai_voice") or voice_config.get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
-    # 💥💥 CORRECCIÓN DEFINITIVA 💥💥
-    # Crear un identificador de sesión único para pasar al WS
+    # 💥💥 CORRECCIÓN CON FIREBASE 💥💥
+    # Crear un identificador de sesión único
     voice_session_id = str(uuid.uuid4())
-    voice_session_data[voice_session_id] = {
-        "bot_cfg": bot_cfg,
-        "bot_name": bot_name,
-        "model": model,
-        "voice": voice,
-        "from_number": _canonize_phone(request.values.get("From", "")),
-        "to_number": _canonize_phone(to_number)
-    }
-
+    
+    # Guardar la configuración en Firebase
+    try:
+        ref = db.reference(f"voice_sessions/{voice_session_id}")
+        ref.set({
+            "bot_name": bot_name,
+            "model": model,
+            "voice": voice,
+            "system_prompt": _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
+        })
+        print(f"[VOICE] Configuración guardada en Firebase para session_id: {voice_session_id}")
+    except Exception as e:
+        print(f"[VOICE] ❌ Error al guardar la sesión en Firebase: {e}")
+        # Fallback a valores por defecto si Firebase falla
+        model = OPENAI_REALTIME_MODEL
+        voice = OPENAI_REALTIME_VOICE
+        bot_name = "default"
+        
     # Creamos la URL del WebSocket solo con el ID de sesión
     stream_url = f"{_wss_base()}/twilio-media-stream?session_id={voice_session_id}"
     
@@ -1557,10 +1565,18 @@ if sock:
         except Exception:
             pass
 
-        # 💥💥 CORRECCIÓN DEFINITIVA 💥💥
-        # Obtenemos la configuración del bot desde la sesión de voz
+        # 💥💥 CORRECCIÓN CON FIREBASE 💥💥
+        # Obtenemos la configuración del bot desde Firebase
         session_id = request.args.get("session_id")
-        session_data = voice_session_data.pop(session_id, None)
+        session_data = None
+        if session_id:
+            try:
+                ref = db.reference(f"voice_sessions/{session_id}")
+                session_data = ref.get()
+                # Opcional: eliminar el registro para limpiar la base de datos
+                ref.delete()
+            except Exception as e:
+                print(f"[WS] ❌ Error al leer la sesión de Firebase para ID '{session_id}': {e}")
 
         if not session_data:
             print(f"[WS] ❌ No se encontró la sesión para el ID '{session_id}'. Usando configuración por defecto.")
@@ -1568,16 +1584,16 @@ if sock:
             bot_name = "default"
             model = OPENAI_REALTIME_MODEL
             voice = OPENAI_REALTIME_VOICE
+            sysmsg = "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
         else:
-            bot_cfg = session_data["bot_cfg"]
+            bot_cfg = _get_bot_cfg_by_name(session_data.get("bot_name")) or {}
             bot_name = session_data["bot_name"]
             model = session_data["model"]
             voice = session_data["voice"]
+            sysmsg = session_data["system_prompt"]
         
         print(f"[WS] Sesión recuperada -> bot: {bot_name}, model: {model}, voice: {voice}")
 
-        sysmsg = _make_system_message(bot_cfg)
-        
         # 2) Conectar a OpenAI Realtime
         ws_ai = None
         try:
