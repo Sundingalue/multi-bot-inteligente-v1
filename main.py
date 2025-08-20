@@ -574,8 +574,9 @@ def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_numb
 
     if msgs:
         session_history[clave_sesion] = msgs
+    if len(historial) > 0:
         greeted_state[clave_sesion] = True
-        follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
+    follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
 # =======================
 #  Rutas UI: Paneles
@@ -733,8 +734,8 @@ def panel_exclusivo_bot(bot_nombre):
     leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
-           for config in bots_config.values()
-           if config.get("name") == bot_normalizado),
+            for config in bots_config.values()
+            if config.get("name") == bot_normalizado),
         bot_normalizado
     )
     return render_template("panel_bot.html", leads=leads_filtrados, bot=bot_normalizado, nombre_comercial=nombre_comercial)
@@ -1455,7 +1456,7 @@ def voice_entry():
     voice = str((bot_cfg.get("voice") or {}).get("openai_voice") or (bot_cfg.get("voice") or {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
     # Generamos la URL del WebSocket con los parámetros
-    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}&model={model}&voice={voice}"
+    stream_url = f"{_wss_base()}/twilio-media-stream"
     
     vr = VoiceResponse()
     connect = Connect()
@@ -1494,8 +1495,9 @@ if sock:
         - En silencio (~900 ms) hace commit + response.create (modalidad audio)
         - Reenvía response.audio.delta a Twilio como media
         """
-        # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
-        # Mover esta función al scope de la conexión para evitar el 'not defined'
+        # 💥💥 CORRECCIÓN IMPORTANTE �💥
+        # Todas las funciones auxiliares se definen dentro de este scope
+        # para evitar conflictos con el monkey-patching de eventlet.
         def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
             headers = [
                 "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1517,23 +1519,28 @@ if sock:
             ws.send(json.dumps(session_update))
             return ws
         
+        def _send_twi_media(ws_twi_conn, stream_sid, payload):
+            """
+            Función auxiliar para enviar datos de audio a Twilio en el formato correcto.
+            Definida aquí para asegurar el scope correcto.
+            """
+            ws_twi_conn.send(json.dumps({
+                "event": "media",
+                "streamSid": stream_sid,
+                "media": {
+                    "payload": payload,
+                },
+            }))
+
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
         except Exception:
             pass
 
-        # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
-        # En lugar de usar los query args, buscamos el bot directamente.
-        
-        # 1. Obtenemos el número de la llamada desde los headers de Twilio
-        # Esta es la forma más robusta de obtener el número de teléfono en una conexión WS de Twilio
+        # 1. Obtenemos los números de la llamada desde los headers de Twilio
         from_number = request.headers.get('X-Twilio-From')
         to_number = request.headers.get('X-Twilio-To')
-        
-        # Si los headers de Twilio están ausentes, podemos recurrir a los query args
-        if not to_number:
-            to_number = request.args.get("to")
         
         print(f"[WS] Headers Twilio -> From: {from_number}, To: {to_number}")
         
@@ -1558,7 +1565,8 @@ if sock:
             or OPENAI_REALTIME_VOICE
         ).strip()
         
-        # 1) Conectar a OpenAI Realtime
+        # 2) Conectar a OpenAI Realtime
+        ws_ai = None
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
         except Exception as e:
@@ -1693,10 +1701,8 @@ if sock:
             try:
                 ai_reader_running = False
                 silence_kill.set()
-                try:
+                if ws_ai:
                     ws_ai.close()
-                except Exception:
-                    pass
                 print("[WS] conexión cerrada")
             except Exception:
                 pass
