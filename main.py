@@ -1411,7 +1411,6 @@ def whatsapp_bot():
 # =======================
 
 def _wss_base():
-    # Construye wss:// para Twilio <Connect><Stream>
     base = (request.url_root or "").strip().rstrip("/")
     if base.startswith("http://"):
         base = "wss://" + base[len("http://"):]
@@ -1427,7 +1426,6 @@ def voice_entry():
     Twilio webhook de llamada entrante -> devuelve TwiML que conecta el audio
     a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
     """
-    # Detectar bot por número de destino
     to_number = (request.values.get("To") or "").strip()
     bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
     bot_name = bot_cfg.get("name", "") or "default"
@@ -1440,17 +1438,17 @@ def voice_entry():
     print(f"[VOICE] Respondiendo TwiML. bot={bot_name} stream_url={stream_url}")
     return str(vr), 200, {"Content-Type": "text/xml"}
 
-# === WebSocket (Twilio -> OpenAI Realtime) ===
+# --- WebSocket server (Twilio -> OpenAI Realtime) ---
 sock = None
 try:
     sock = Sock(app)
 except Exception as _e:
     print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
 
-# Utilidad: crear sesión en OpenAI Realtime via WebSocket
 def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     """
     Abre un websocket con OpenAI Realtime y devuelve el objeto ws ya configurado.
+    Configurado para g711_ulaw 8kHz (compat Twilio) y sin commits manuales.
     """
     headers = [
         "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1461,35 +1459,31 @@ def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     ws = websocket.WebSocket()
     ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
 
-    # Configurar sesión: instrucciones, voz y formatos de audio de entrada/salida
     session_update = {
         "type": "session.update",
         "session": {
             "voice": voice,
             "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
-            # Formatos correctos para Twilio Media Streams (G.711 u-law 8kHz mono)
-            "input_audio_format": {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
+            # Formatos 8kHz u-law (1 canal), a juego con Twilio
+            "input_audio_format":  {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
             "output_audio_format": {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
-            # Latencia baja con detección por servidor
-            "turn_detection": {"type": "server_vad"},
+            # VAD del servidor: NO usar commits manuales
+            "turn_detection": {"type": "server_vad", "silence_duration_ms": 700},
         }
     }
     ws.send(json.dumps(session_update))
     return ws
 
 def _send_twi_media(ws_twi, stream_sid, chunk_base64):
-    """
-    Envía audio (base64/mulaw 8k) de vuelta a Twilio Media Streams.
-    """
+    """Envía audio (base64 mulaw 8k) de vuelta a Twilio Media Streams."""
     if not chunk_base64:
         return
-    out = {
-        "event": "media",
-        "streamSid": stream_sid,
-        "media": {"payload": chunk_base64}
-    }
     try:
-        ws_twi.send(json.dumps(out))
+        ws_twi.send(json.dumps({
+            "event": "media",
+            "streamSid": stream_sid,
+            "media": {"payload": chunk_base64}
+        }))
     except Exception as e:
         print("⚠️ Error enviando media a Twilio:", e)
 
@@ -1497,42 +1491,54 @@ if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
         """
-        Bridge WS:
-        - Recibe JSON de Twilio (event:start|media|stop)
-        - Reenvía audio a OpenAI Realtime (input_audio_buffer.append / commit con umbral)
-        - Lee eventos de OpenAI (response.audio.delta) y los reenvía a Twilio como media
+        Bridge WS sin commits:
+        - Acumula audio entrante de Twilio y manda 'append' a OpenAI en trozos ~200 ms
+        - De OpenAI recibe 'response.audio.delta' y lo reenvía a Twilio como 'media'
         """
-        # Parámetros del bot
         args = request.args or {}
         bot_name = (args.get("bot") or "default").strip()
         bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
 
-        # System prompt del bot
         sysmsg = _make_system_message(bot_cfg)
         model = (bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
         voice = (bot_cfg.get("voice", {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
 
-        # Abre WS con OpenAI Realtime
+        # Conectar a OpenAI
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
         except Exception as e:
-            print("[WS]❌ No se pudo conectar a OpenAI Realtime:", e)
-            # Cierra la llamada educadamente
+            print("❌ No se pudo conectar a OpenAI Realtime:", e)
             try:
-                ws_twi.send(json.dumps({"event":"stop"}))
+                ws_twi.send(json.dumps({"event": "stop"}))
             except Exception:
                 pass
             return
 
         print(f"[WS] Twilio conectado. bot={bot_name or 'default'} model={model} voice={voice}")
+
         stream_sid = None
         ai_reader_running = True
 
-        # Contadores para commits
-        bytes_since_commit = 0  # ~1 byte = 1 muestra u-law a 8 kHz
-        COMMIT_BYTES = 1600     # ≈200 ms de audio
+        # Buffer local: ~1600 bytes ~ 200ms a 8kHz u-law (1 byte/muestra)
+        pending_bytes = bytearray()
+        CHUNK_BYTES = 1600
 
-        # Hilo lector: consume eventos de OpenAI y los manda a Twilio
+        def _flush_append(force=False):
+            """Manda a OpenAI un 'append' si hay al menos ~200ms (o si force=True y hay algo)."""
+            nonlocal pending_bytes
+            try:
+                if len(pending_bytes) >= CHUNK_BYTES or (force and len(pending_bytes) > 0):
+                    b64 = base64.b64encode(bytes(pending_bytes)).decode("ascii")
+                    ws_ai.send(json.dumps({
+                        "type": "input_audio_buffer.append",
+                        "audio": b64
+                    }))
+                    print(f"[WS] append -> {len(pending_bytes)} bytes")
+                    pending_bytes.clear()
+            except Exception as e:
+                print("[WS] error en append:", e)
+
+        # Lector de eventos AI -> envía audio TTS a Twilio
         def _ai_reader():
             nonlocal ai_reader_running, stream_sid
             while ai_reader_running:
@@ -1541,25 +1547,17 @@ if sock:
                     if not msg:
                         continue
                     data = json.loads(msg)
-
                     t = data.get("type")
-
                     if t == "response.audio.delta":
                         payload = data.get("delta") or ""
                         if payload and stream_sid:
                             _send_twi_media(ws_twi, stream_sid, payload)
-
-                    elif t == "response.audio_transcript.delta":
-                        # Útil para debug
-                        print("[WS][AI] evt: response.audio_transcript.delta")
-
+                    elif t == "response.created":
+                        print("[WS][AI] response.created")
                     elif t == "response.completed":
-                        # Fin de turno de OpenAI (no disparamos nada; server_vad maneja turnos)
-                        pass
-
+                        print("[WS][AI] response.completed")
                     elif t == "error":
                         print("[WS][AI] ERROR:", data)
-
                 except Exception as e:
                     print("ℹ️ AI reader finalizado:", e)
                     break
@@ -1567,22 +1565,7 @@ if sock:
         reader_thread = Thread(target=_ai_reader, daemon=True)
         reader_thread.start()
 
-        def _commit_if_needed(force=False):
-            nonlocal bytes_since_commit
-            try:
-                if force:
-                    if bytes_since_commit > 0:
-                        ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                        bytes_since_commit = 0
-                        print("[WS] commit forzado (flush)")
-                    return
-                if bytes_since_commit >= COMMIT_BYTES:
-                    ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                    print("[WS] commit por umbral")
-                    bytes_since_commit = 0
-            except Exception as e:
-                print("[WS] error en commit:", e)
-
+        # Loop Twilio -> AI
         try:
             while True:
                 raw = ws_twi.receive()
@@ -1596,29 +1579,25 @@ if sock:
                 etype = evt.get("event")
 
                 if etype == "start":
-                    stream_sid = (((evt.get("start") or {}).get("streamSid")) or stream_sid)
+                    stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
                     print(f"[WS] start streamSid={stream_sid}")
 
                 elif etype == "media":
-                    # Audio del usuario (base64 mulaw 8k)
-                    chunk = ((evt.get("media") or {}).get("payload") or "")
-                    if chunk:
-                        # reenviamos tal cual a OpenAI
-                        ws_ai.send(json.dumps({"type": "input_audio_buffer.append", "audio": chunk}))
-                        # contabilizamos bytes reales (decod base64)
+                    # Llega base64 u-law 8k de Twilio
+                    chunk_b64 = ((evt.get("media") or {}).get("payload") or "")
+                    if chunk_b64:
                         try:
-                            bytes_since_commit += len(base64.b64decode(chunk))
+                            pending_bytes.extend(base64.b64decode(chunk_b64))
                         except Exception:
-                            # aproximación si falla
-                            bytes_since_commit += int(len(chunk) * 0.75)
-                        _commit_if_needed()
+                            pass
+                        _flush_append(force=False)
 
                 elif etype == "stop":
                     print("[WS] stop recibido de Twilio")
-                    _commit_if_needed(force=True)
+                    _flush_append(force=True)   # último empujón
                     break
 
-                # Ignoramos marks para evitar commits vacíos
+                # OJO: ignoramos 'mark' y NO hacemos 'commit' para evitar el error de buffer vacío
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
