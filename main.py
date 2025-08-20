@@ -1531,16 +1531,18 @@ if sock:
         sysmsg = _make_system_message(bot_cfg)
         # soportar ambas formas: "realtime_model" o "realtime": {"model": ...}
         model = (
-            bot_cfg.get("realtime_model")
-            or (bot_cfg.get("realtime") or {}).get("model")
-            or OPENAI_REALTIME_MODEL
-        ).strip()
+    (bot_cfg.get("realtime_model") or "")
+    or ((bot_cfg.get("realtime") or {}).get("model") or "")
+    or OPENAI_REALTIME_MODEL
+).strip()
         # prioriza voice.openai_voice; si no, voice_name; si no, env var
         voice = (
-            (bot_cfg.get("voice") or {}).get("openai_voice")
-            or (bot_cfg.get("voice") or {}).get("voice_name")
-            or OPENAI_REALTIME_VOICE
-        ).strip()
+    ((bot_cfg.get("voice") or {}).get("openai_voice") or "")
+    or ((bot_cfg.get("voice") or {}).get("voice_name") or "")
+    or OPENAI_REALTIME_VOICE
+        )
+        voice = str(voice).strip()
+
 
         # 1) Conectar a OpenAI
         try:
