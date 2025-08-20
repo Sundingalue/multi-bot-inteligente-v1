@@ -1458,69 +1458,42 @@ def _send_twi_media(ws_twi_conn, stream_sid, payload):
     except Exception as e:
         print(f"[WS] ⚠️ Error al enviar datos a Twilio: {e}")
 
-@app.route("/voice", methods=["POST", "GET"])
-def voice_entry():
-    """
-    Twilio webhook de llamada entrante -> devuelve TwiML que conecta el audio
-    a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
-    """
-    to_number = _extract_called_number(request)
-    bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
-    
-    # Log de ayuda si no encontró bot
-    if not bot_cfg:
-        print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
-    
-    bot_name = (bot_cfg.get("name") or "").strip() or "default"
-    
-    # ✅ Lógica de lectura de configuración más robusta
-    # Si no se encuentra, usar los valores por defecto
-    realtime_config = bot_cfg.get("realtime", {})
-    voice_config = bot_cfg.get("voice", {})
-    
-    model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
-    voice = str(voice_config.get("openai_voice") or voice_config.get("voice_name") or OPENAI_REALTIME_VOICE).strip()
-    
-    # 💥💥 CORRECCIÓN FINAL CON CallSid 💥💥
-    # Obtener el CallSid de la solicitud
+@app.route("/voice", methods=["POST"])
+def voice_webhook():
     call_sid = request.values.get("CallSid")
-    
-    if not call_sid:
-        print("[VOICE] ❌ No se encontró el CallSid en la solicitud. No se puede guardar la sesión.")
-        # Fallback a valores por defecto si no hay CallSid
-        model = OPENAI_REALTIME_MODEL
-        voice = OPENAI_REALTIME_VOICE
-        bot_name = "default"
-        sysmsg = _make_system_message({}) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
-    else:
-        # Guardar la configuración en Firebase usando el CallSid
-        sysmsg = _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
-        try:
-            ref = db.reference(f"voice_sessions/{call_sid}")
-            ref.set({
-                "bot_name": bot_name,
-                "model": model,
-                "voice": voice,
-                "system_prompt": sysmsg
-            })
-            print(f"[VOICE] Configuración guardada en Firebase para CallSid: {call_sid}")
-        except Exception as e:
-            print(f"[VOICE] ❌ Error al guardar la sesión en Firebase: {e}")
-            # Fallback a valores por defecto si Firebase falla
-            model = OPENAI_REALTIME_MODEL
-            voice = OPENAI_REALTIME_VOICE
-            bot_name = "default"
-            sysmsg = _make_system_message({}) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
-        
-    # Creamos la URL del WebSocket sin parámetros (se usará el CallSid)
-    stream_url = f"{_wss_base()}/twilio-media-stream"
-    
-    vr = VoiceResponse()
-    connect = Connect()
-    connect.stream(url=stream_url)
-    vr.append(connect)
-    print(f"[VOICE] Respondiendo TwiML. bot={bot_name} model={model} voice={voice} stream_url={stream_url}")
-    return str(vr), 200, {"Content-Type": "text/xml"}
+    to_number = request.values.get("To")  # número destino (tu Twilio)
+    from_number = request.values.get("From")
+
+    # 1. Buscar bot por número
+    bot_cfg = _get_bot_cfg_by_any_number(to_number)
+
+    if not bot_cfg:
+        # fallback: responder silencio
+        resp = VoiceResponse()
+        resp.say("Lo siento, no hay un bot configurado para este número.")
+        return str(resp)
+
+    bot_name = bot_cfg.get("name", "Unknown")
+    model = bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL
+    voice = bot_cfg.get("voice", {}).get("openai_voice") or OPENAI_REALTIME_VOICE
+
+    # Guardar config en Firebase para que /twilio-media-stream la use
+    try:
+        db.reference(f"voice_sessions/{call_sid}").set({
+            "bot_name": bot_name,
+            "model": model,
+            "voice": voice,
+            "created": datetime.now().isoformat()
+        })
+        print(f"[VOICE] Config guardada (CallSid={call_sid}). bot={bot_name} model={model} voice={voice}")
+    except Exception as e:
+        print(f"⚠️ Error guardando config voice: {e}")
+
+    # 2. TwiML SOLO con <Connect><Stream>
+    resp = VoiceResponse()
+    with resp.connect() as connect:
+        connect.stream(url="wss://multi-bot-inteligente-v1.onrender.com/twilio-media-stream")
+    return str(resp)
 
 
 # ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
