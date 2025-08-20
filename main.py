@@ -1399,6 +1399,7 @@ def whatsapp_bot():
 # =======================
 
 def _wss_base():
+    # Construye wss:// para Twilio <Connect><Stream>
     base = (request.url_root or "").strip().rstrip("/")
     if base.startswith("http://"):
         base = "wss://" + base[len("http://"):]
@@ -1411,40 +1412,33 @@ def _wss_base():
 @app.route("/voice", methods=["POST", "GET"])
 def voice_entry():
     """
-    Twilio webhook de llamada entrante -> conecta el audio
+    Twilio webhook de llamada entrante -> devuelve TwiML que conecta el audio
     a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
     """
+    # Detectar bot por número de destino
     to_number = (request.values.get("To") or "").strip()
     bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
     bot_name = bot_cfg.get("name", "") or "default"
 
-    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
-    print(f"[VOICE] TwiML -> <Connect><Stream url='{stream_url}'>  bot={bot_name}")
-
     vr = VoiceResponse()
+    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
     connect = Connect()
     connect.stream(url=stream_url)
     vr.append(connect)
+    print(f"[VOICE] Respondiendo TwiML. bot={bot_name} stream_url={stream_url}")
     return str(vr), 200, {"Content-Type": "text/xml"}
 
-# Ruta de prueba: si esto se escucha, Twilio -> tu server está OK
-@app.route("/voice-test", methods=["POST", "GET"])
-def voice_test():
-    vr = VoiceResponse()
-    vr.say("Prueba de audio local ok. Si oyes esto, la ruta de voz funciona.", language="es-MX")
-    return str(vr), 200, {"Content-Type": "text/xml"}
-
+# === WebSocket (Twilio -> OpenAI Realtime) ===
 sock = None
 try:
     sock = Sock(app)
-except Exception:
+except Exception as _e:
     print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
-    sock = None
 
+# Utilidad: crear sesión en OpenAI Realtime via WebSocket
 def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     """
-    Abre websocket con OpenAI Realtime y configura sesión.
-    NOTA: no usar 'mime_type' (provoca 'unknown_parameter').
+    Abre un websocket con OpenAI Realtime y devuelve el objeto ws ya configurado.
     """
     headers = [
         "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1455,99 +1449,78 @@ def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     ws = websocket.WebSocket()
     ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
 
-    # Config por sesión: voz y formatos G.711 µ-law 8k (lo que Twilio envía/espera)
+    # Configurar sesión: instrucciones, voz y formatos de audio de entrada/salida
     session_update = {
         "type": "session.update",
         "session": {
             "voice": voice,
-            # habilita que las respuestas puedan traer audio sin repetirlo en cada response.create
-            "modalities": ["text", "audio"],
-            "instructions": system_prompt or "Eres un asistente de voz amable y natural en español.",
-            "input_audio_format": {
-                "type": "g711_ulaw",     # <-- sin 'mime_type'
-                "sample_rate": 8000,
-                "channels": 1
-            },
-            "output_audio_format": {
-                "type": "g711_ulaw",
-                "sample_rate": 8000,
-                "channels": 1
-            },
+            "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
+            # Formatos correctos para Twilio Media Streams (G.711 u-law 8kHz mono)
+            "input_audio_format": {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
+            "output_audio_format": {"type": "g711_ulaw", "sample_rate": 8000, "channels": 1},
+            # Latencia baja con detección por servidor
             "turn_detection": {"type": "server_vad"},
         }
     }
     ws.send(json.dumps(session_update))
-    print("[WS][AI] session.update enviado")
     return ws
 
 def _send_twi_media(ws_twi, stream_sid, chunk_base64):
     """
-    Envía audio base64 (µ-law 8k) de vuelta a Twilio.
+    Envía audio (base64/mulaw 8k) de vuelta a Twilio Media Streams.
     """
-    if not chunk_base64 or not stream_sid:
+    if not chunk_base64:
         return
+    out = {
+        "event": "media",
+        "streamSid": stream_sid,
+        "media": {"payload": chunk_base64}
+    }
     try:
-        ws_twi.send(json.dumps({
-            "event": "media",
-            "streamSid": stream_sid,
-            "media": {"payload": chunk_base64}
-        }))
+        ws_twi.send(json.dumps(out))
     except Exception as e:
         print("⚠️ Error enviando media a Twilio:", e)
-
-def _request_response(ws_ai, reason=""):
-    """
-    Dispara la síntesis de respuesta. Mantener lo más simple para evitar params inválidos.
-    """
-    try:
-        ws_ai.send(json.dumps({"type": "response.create"}))
-        if reason:
-            print(f"[WS][AI] response.create ({reason})")
-        else:
-            print("[WS][AI] response.create")
-    except Exception as e:
-        print("⚠️ response.create falló:", e)
 
 if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
         """
-        Puente WS:
-        - Recibe JSON de Twilio (event:start|media|mark|stop)
-        - Reenvía audio a OpenAI Realtime (input_audio_buffer.append / commit)
-        - Lee eventos de OpenAI (response.audio.delta / response.output_audio.delta) y los envía a Twilio como media
+        Bridge WS:
+        - Recibe JSON de Twilio (event:start|media|stop)
+        - Reenvía audio a OpenAI Realtime (input_audio_buffer.append / commit con umbral)
+        - Lee eventos de OpenAI (response.audio.delta) y los reenvía a Twilio como media
         """
-        # === Cargar config del bot del query string ===
-        try:
-            bot_name = (request.args.get("bot") or "default").strip() or "default"
-        except Exception:
-            # fallback por si el server no parsea args
-            from urllib.parse import parse_qs
-            qs = request.environ.get("QUERY_STRING", "")
-            bot_name = parse_qs(qs).get("bot", ["default"])[0]
-
+        # Parámetros del bot
+        args = request.args or {}
+        bot_name = (args.get("bot") or "default").strip()
         bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
+
+        # System prompt del bot
         sysmsg = _make_system_message(bot_cfg)
         model = (bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
         voice = (bot_cfg.get("voice", {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
 
-        print(f"[WS] Twilio conectado  bot={bot_name}  model={model}  voice={voice}")
-
-        # === Conectar a OpenAI Realtime ===
+        # Abre WS con OpenAI Realtime
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
         except Exception as e:
-            print("❌ Conexión a OpenAI Realtime falló:", e)
+            print("[WS]❌ No se pudo conectar a OpenAI Realtime:", e)
+            # Cierra la llamada educadamente
             try:
-                ws_twi.send(json.dumps({"event": "stop"}))
+                ws_twi.send(json.dumps({"event":"stop"}))
             except Exception:
                 pass
             return
 
+        print(f"[WS] Twilio conectado. bot={bot_name or 'default'} model={model} voice={voice}")
         stream_sid = None
         ai_reader_running = True
 
-        # === Hilo lector: AI -> Twilio ===
+        # Contadores para commits
+        bytes_since_commit = 0  # ~1 byte = 1 muestra u-law a 8 kHz
+        COMMIT_BYTES = 1600     # ≈200 ms de audio
+
+        # Hilo lector: consume eventos de OpenAI y los manda a Twilio
         def _ai_reader():
             nonlocal ai_reader_running, stream_sid
             while ai_reader_running:
@@ -1556,37 +1529,47 @@ if sock:
                     if not msg:
                         continue
                     data = json.loads(msg)
+
                     t = data.get("type")
 
-                    # Algunas cuentas envían 'response.audio.delta', otras 'response.output_audio.delta'
-                    if t in ("response.audio.delta", "response.output_audio.delta"):
+                    if t == "response.audio.delta":
                         payload = data.get("delta") or ""
                         if payload and stream_sid:
                             _send_twi_media(ws_twi, stream_sid, payload)
-                        continue
 
-                    if t in ("response.completed", "response.refused"):
-                        print(f"[WS][AI] {t}")
-                        continue
+                    elif t == "response.audio_transcript.delta":
+                        # Útil para debug
+                        print("[WS][AI] evt: response.audio_transcript.delta")
 
-                    if t == "error":
+                    elif t == "response.completed":
+                        # Fin de turno de OpenAI (no disparamos nada; server_vad maneja turnos)
+                        pass
+
+                    elif t == "error":
                         print("[WS][AI] ERROR:", data)
-                        continue
-
-                    # Verbose para depurar: loguea los tipos poco comunes
-                    if t not in ("server.keepalive", "input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"):
-                        print("[WS][AI] evt:", t)
 
                 except Exception as e:
-                    print("ℹ️ AI reader terminó:", e)
+                    print("ℹ️ AI reader finalizado:", e)
                     break
 
         reader_thread = Thread(target=_ai_reader, daemon=True)
         reader_thread.start()
 
-        # === Búfer y commits
-        bytes_since_commit = 0
-        last_commit = time.time()
+        def _commit_if_needed(force=False):
+            nonlocal bytes_since_commit
+            try:
+                if force:
+                    if bytes_since_commit > 0:
+                        ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                        bytes_since_commit = 0
+                        print("[WS] commit forzado (flush)")
+                    return
+                if bytes_since_commit >= COMMIT_BYTES:
+                    ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                    print("[WS] commit por umbral")
+                    bytes_since_commit = 0
+            except Exception as e:
+                print("[WS] error en commit:", e)
 
         try:
             while True:
@@ -1601,58 +1584,87 @@ if sock:
                 etype = evt.get("event")
 
                 if etype == "start":
-                    stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
-                    print(f"[WS] start  streamSid={stream_sid}")
-                    continue
+                    stream_sid = (((evt.get("start") or {}).get("streamSid")) or stream_sid)
+                    print(f"[WS] start streamSid={stream_sid}")
 
-                if etype == "media":
-                    # Audio usuario (µ-law 8k base64) -> AI
+                elif etype == "media":
+                    # Audio del usuario (base64 mulaw 8k)
                     chunk = ((evt.get("media") or {}).get("payload") or "")
                     if chunk:
-                        # ¡Importante!: sólo 'audio', sin 'mime_type'
-                        ws_ai.send(json.dumps({
-                            "type": "input_audio_buffer.append",
-                            "audio": chunk
-                        }))
-                        bytes_since_commit += len(chunk)
+                        # reenviamos tal cual a OpenAI
+                        ws_ai.send(json.dumps({"type": "input_audio_buffer.append", "audio": chunk}))
+                        # contabilizamos bytes reales (decod base64)
+                        try:
+                            bytes_since_commit += len(base64.b64decode(chunk))
+                        except Exception:
+                            # aproximación si falla
+                            bytes_since_commit += int(len(chunk) * 0.75)
+                        _commit_if_needed()
 
-                        # Comprometemos cada ~1s de audio o si pasó >1.2s desde el último commit
-                        if bytes_since_commit > 32000 or (time.time() - last_commit) > 1.2:
-                            ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                            _request_response(ws_ai, reason="periodic")
-                            bytes_since_commit = 0
-                            last_commit = time.time()
-                            print("[WS] commit periódico")
-                    continue
-
-                if etype == "mark":
-                    # Fin de frase marcado por Twilio, enviamos commit inmediato
-                    ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                    _request_response(ws_ai, reason="mark")
-                    bytes_since_commit = 0
-                    last_commit = time.time()
-                    print("[WS] commit por mark")
-                    continue
-
-                if etype == "stop":
+                elif etype == "stop":
                     print("[WS] stop recibido de Twilio")
-                    try:
-                        ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                        _request_response(ws_ai, reason="final")
-                        print("[WS] commit final")
-                    except Exception:
-                        pass
+                    _commit_if_needed(force=True)
                     break
+
+                # Ignoramos marks para evitar commits vacíos
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
         finally:
-            ai_reader_running = False
             try:
-                ws_ai.close()
+                ai_reader_running = False
+                try:
+                    ws_ai.close()
+                except Exception:
+                    pass
+                print("[WS] conexión cerrada")
             except Exception:
                 pass
-            print("[WS] conexión cerrada")
+
+# =======================
+#  Vistas de conversación (leen Firebase)
+# =======================
+@app.route("/conversacion_general/<bot>/<numero>")
+def chat_general(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
+
+@app.route("/conversacion_bot/<bot>/<numero>")
+def chat_bot(bot, numero):
+    if not session.get("autenticado"):
+        return redirect(url_for("panel"))
+    bot_normalizado = _normalize_bot_name(bot)
+    if not bot_normalizado:
+        return "Bot no encontrado", 404
+    if not _user_can_access_bot(bot_normalizado):
+        return "No autorizado para este bot", 403
+
+    bot_cfg = _get_bot_cfg_by_name(bot_normalizado) or {}
+    company_name = bot_cfg.get("business_name", bot_normalizado)
+
+    data = fb_get_lead(bot_normalizado, numero)
+    historial = data.get("historial", [])
+    if isinstance(historial, dict):
+        historial = [historial[k] for k in sorted(historial.keys())]
+    mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
+
+    return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 
 # =======================
