@@ -1115,7 +1115,7 @@ def push_token():
                 data=data
             )
             msg_id = fcm.send(message)
-            return jsonify({"success": True, "mode": "token", "id": msg_id})
+            return jsonify({"success": True, "id": msg_id})
         else:
             return jsonify({"success": False, "message": "token(s) requerido(s)"}), 400
     except Exception as e:
@@ -1450,13 +1450,16 @@ def voice_entry():
     if not bot_cfg:
         print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
     
+    # ❌ Solución: Aquí es donde se establece la configuración del modelo y la voz
     realtime_config = bot_cfg.get("realtime", {})
     model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
     voice = str((bot_cfg.get("voice") or {}).get("openai_voice") or (bot_cfg.get("voice") or {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
     
-    # Generamos la URL del WebSocket con los parámetros
-    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}&model={model}&voice={voice}"
+    # 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+    # El problema es que la URL se está re-escribiendo sin los parámetros
+    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
     
+    # Añadimos la configuración al URL del WebSocket
     vr = VoiceResponse()
     connect = Connect()
     connect.stream(url=stream_url)
@@ -1484,6 +1487,47 @@ try:
 except Exception as _e:
     print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
 
+def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
+    """
+    Abre un websocket con OpenAI Realtime y devuelve el objeto ws ya configurado.
+    Formato de audio: g711_ulaw (PCMU) 8kHz para coincidir con Twilio.
+    """
+    headers = [
+        "Authorization: Bearer " + OPENAI_API_KEY,
+        "OpenAI-Beta: realtime=v1",
+    ]
+    url = f"wss://api.openai.com/v1/realtime?model={model}"
+
+    ws = websocket.WebSocket()
+    ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+
+    # 👈 audio formats como STRING, VAD del servidor
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "voice": voice,
+            "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
+            "input_audio_format":  "g711_ulaw",
+            "output_audio_format": "g711_ulaw",
+            "turn_detection": {"type": "server_vad", "silence_duration_ms": 700},
+        }
+    }
+    ws.send(json.dumps(session_update))
+    return ws
+
+def _send_twi_media(ws_twi, stream_sid, chunk_base64):
+    """Envía audio (base64 u-law 8k) de vuelta a Twilio Media Streams."""
+    if not chunk_base64:
+        return
+    try:
+        ws_twi.send(json.dumps({
+            "event": "media",
+            "streamSid": stream_sid,
+            "media": {"payload": chunk_base64}
+        }))
+    except Exception as e:
+        print("⚠️ Error enviando media a Twilio:", e)
+
 if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
@@ -1497,6 +1541,7 @@ if sock:
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+            # print(f"[WS] query args -> {dict(request.args)}")
         except Exception:
             pass
 
@@ -1507,10 +1552,6 @@ if sock:
         # Esta es la forma más robusta de obtener el número de teléfono en una conexión WS de Twilio
         from_number = request.headers.get('X-Twilio-From')
         to_number = request.headers.get('X-Twilio-To')
-        
-        # Si los headers de Twilio están ausentes, podemos recurrir a los query args
-        if not to_number:
-            to_number = request.args.get("to")
         
         print(f"[WS] Headers Twilio -> From: {from_number}, To: {to_number}")
         
