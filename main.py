@@ -3,7 +3,7 @@ from gevent import monkey
 monkey.patch_all()
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.twiml.voice_response import VoiceResponse, Gather, Connect
+from twilio.twiml.voice_response import VoiceResponse, Gather, Connect, Stream
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
@@ -1029,7 +1029,7 @@ def api_conversation_bot():
 def _push_common_data(payload: dict) -> dict:
     """Sanitiza 'data' para FCM (todos valores deben ser str)."""
     data = {}
-    for k, v in (payload or {}).items():
+    for k, v in (payload or{}).items():
         if v is None:
             continue
         data[str(k)] = str(v)
@@ -1282,7 +1282,7 @@ def whatsapp_bot():
     closing_default = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("closing_message") or ""), flags=re.IGNORECASE)
 
     if _is_scheduled_confirmation(incoming_msg):
-        texto = closing_default or "Agendado."
+        texto = closing_default or"Agendado."
         msg.body(texto)
         _set_agenda(clave_sesion, status="confirmed")
         agenda_state[clave_sesion]["closed"] = True
@@ -1447,11 +1447,16 @@ def voice_entry():
         print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
 
     vr = VoiceResponse()
-    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
     connect = Connect()
-    connect.stream(url=stream_url)
+
+    # ⚠️ Enviar el bot por <Parameter>, Twilio no pasa querystring al WS
+    stream = Stream(url=f"{_wss_base()}/twilio-media-stream", track="inbound_audio")
+    stream.parameter(name="bot", value=bot_name)
+
+    connect.append(stream)
     vr.append(connect)
-    print(f"[VOICE] Respondiendo TwiML. bot={bot_name} stream_url={stream_url}")
+
+    print(f"[VOICE] Respondiendo TwiML. bot={bot_name}")
     return str(vr), 200, {"Content-Type": "text/xml"}
 
 # ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
@@ -1521,7 +1526,7 @@ if sock:
         Bridge WS con commits por silencio:
         - Recibe audio (u-law 8k) de Twilio
         - Envía append a OpenAI
-        - En silencio (~900 ms) hace commit + response.create (modalidad audio)
+        - En silencio (~900 ms) hace commit + response.create (modalidad audio+texto)
         - Reenvía response.audio.delta a Twilio como media
         """
         # Log del handshake para confirmar apertura de WS por Twilio
@@ -1531,7 +1536,7 @@ if sock:
         except Exception:
             pass
 
-        # Resolver bot / modelo / voz
+        # Resolver bot inicial (por query, si llegara) — luego se corrige con customParameters
         args = request.args or {}
         bot_name = (args.get("bot") or "default").strip()
         bot_cfg  = _get_bot_cfg_by_name(bot_name) or {}
@@ -1653,8 +1658,34 @@ if sock:
                 etype = evt.get("event")
 
                 if etype == "start":
-                    stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
-                    print(f"[WS] start streamSid={stream_sid}")
+                    start_info = evt.get("start") or {}
+                    stream_sid = start_info.get("streamSid") or stream_sid
+
+                    # 👉 Leer customParameters enviados por <Parameter>
+                    cp = start_info.get("customParameters") or {}
+                    got_bot = (cp.get("bot") or "").strip()
+                    if got_bot:
+                        bot_name = got_bot
+                        bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
+                        sysmsg = _make_system_message(bot_cfg)
+                        voice = str(
+                            (bot_cfg.get("voice") or {}).get("openai_voice")
+                            or (bot_cfg.get("voice") or {}).get("voice_name")
+                            or OPENAI_REALTIME_VOICE
+                        ).strip()
+                        # Actualizar voz e instrucciones de la sesión (el modelo no se puede cambiar a mitad de sesión)
+                        try:
+                            ws_ai.send(json.dumps({
+                                "type": "session.update",
+                                "session": {
+                                    "voice": voice,
+                                    "instructions": sysmsg or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
+                                }
+                            }))
+                        except Exception as e:
+                            print("[WS] error session.update after start:", e)
+
+                    print(f"[WS] start streamSid={stream_sid} bot={bot_name}")
 
                     # Saludo inicial (audio) para verificar fin-a-fin
                     try:
