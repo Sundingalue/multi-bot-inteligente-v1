@@ -11,3 +11,5 @@ google-auth
 google-auth-httplib2
 google-auth-oauthlib
 stripe==10.10.0
+flask-sock==0.7.0 
+websocket-client==1.8.0
