@@ -619,7 +619,7 @@ def _load_users():
         if isinstance(cfg.get("login"), dict):
             logins.append(cfg["login"])
         if isinstance(cfg.get("logins"), list):
-            logins.extend([x para x in cfg["logins"] if isinstance(x, dict)])
+            logins.extend([x for x in cfg["logins"] if isinstance(x, dict)])
         if isinstance(cfg.get("auth"), dict):  # 🔹 alias compatible
             logins.append(cfg["auth"])
 
@@ -1248,7 +1248,7 @@ def whatsapp_bot():
             links_cfg = bot.get("links") or {}
             app_msg = (links_cfg.get("app_message") or "").strip() if isinstance(links_cfg, dict) else ""
             if app_msg:
-                texto = app_msg si ("http://" in app_msg or "https://" in app_msg) else _compose_with_link(app_msg, url_app)
+                texto = app_msg if app_msg.startswith(("http://", "https://")) else _compose_with_link(app_msg, url_app)
             else:
                 texto = _compose_with_link("Aquí tienes:", url_app)
             msg.body(texto)
@@ -1282,7 +1282,7 @@ def whatsapp_bot():
     closing_default = re.sub(r"\{\{?\s*GOOGLE_CALENDAR_BOOKING_URL\s*\}?\}", (_effective_booking_url(bot) or ""), (agenda_cfg.get("closing_message") or ""), flags=re.IGNORECASE)
 
     if _is_scheduled_confirmation(incoming_msg):
-        texto = closing_default o "Agendado."
+        texto = closing_default or "Agendado."
         msg.body(texto)
         _set_agenda(clave_sesion, status="confirmed")
         agenda_state[clave_sesion]["closed"] = True
@@ -1794,7 +1794,7 @@ def api_chat(bot, numero):
         if ts > last_ts:
             last_ts = ts
 
-    if since_ms == 0 and not nuevos y historial:
+    if since_ms == 0 and not nuevos and historial:
         for reg in historial:
             ts = _hora_to_epoch_ms(reg.get("hora", ""))
             if ts > last_ts:
