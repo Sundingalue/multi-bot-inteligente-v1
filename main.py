@@ -2,6 +2,8 @@
 
 # 💥💥 CORRECCIÓN FINAL 💥💥
 # Usar monkey_patch de eventlet en lugar de gevent
+import eventlet
+eventlet.monkey_patch()
 
 # Resto de importaciones
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
@@ -1456,51 +1458,42 @@ def _send_twi_media(ws_twi_conn, stream_sid, payload):
     except Exception as e:
         print(f"[WS] ⚠️ Error al enviar datos a Twilio: {e}")
 
-@app.route("/voice", methods=["POST", "GET"])
-def voice_entry():
-    """
-    Twilio webhook de llamada entrante -> devuelve TwiML que conecta el audio
-    a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
-    """
-    # 👉 Permite pruebas con ?to=+1...
-    to_number = (request.args.get("to") or "").strip() or _extract_called_number(request)
-    bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
+@app.route("/voice", methods=["POST"])
+def voice_webhook():
+    call_sid = request.values.get("CallSid")
+    to_number = request.values.get("To")  # número destino (tu Twilio)
+    from_number = request.values.get("From")
+
+    # 1. Buscar bot por número
+    bot_cfg = _get_bot_cfg_by_any_number(to_number)
 
     if not bot_cfg:
-        print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
+        # fallback: responder silencio
+        resp = VoiceResponse()
+        resp.say("Lo siento, no hay un bot configurado para este número.")
+        return str(resp)
 
-    bot_name = (bot_cfg.get("name") or "").strip() or "default"
+    bot_name = bot_cfg.get("name", "Unknown")
+    model = bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL
+    voice = bot_cfg.get("voice", {}).get("openai_voice") or OPENAI_REALTIME_VOICE
 
-    # Config por defecto + overrides del bot
-    realtime_config = bot_cfg.get("realtime", {}) or {}
-    voice_config = bot_cfg.get("voice", {}) or {}
+    # Guardar config en Firebase para que /twilio-media-stream la use
+    try:
+        db.reference(f"voice_sessions/{call_sid}").set({
+            "bot_name": bot_name,
+            "model": model,
+            "voice": voice,
+            "created": datetime.now().isoformat()
+        })
+        print(f"[VOICE] Config guardada (CallSid={call_sid}). bot={bot_name} model={model} voice={voice}")
+    except Exception as e:
+        print(f"⚠️ Error guardando config voice: {e}")
 
-    model = str(realtime_config.get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
-    voice = str(voice_config.get("openai_voice") or voice_config.get("voice_name") or OPENAI_REALTIME_VOICE).strip()
-
-    # Asociar CallSid -> sesión en Firebase (si viene)
-    call_sid = (request.values.get("CallSid") or request.headers.get("X-Twilio-CallSid") or "").strip()
-    if not call_sid:
-        # Sin CallSid (p.ej. /voice_debug en navegador)
-        sysmsg = _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
-    else:
-        sysmsg = _make_system_message(bot_cfg) or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
-        try:
-            ref = db.reference(f"voice_sessions/{call_sid}")
-            ref.set({"bot_name": bot_name, "model": model, "voice": voice, "system_prompt": sysmsg})
-            print(f"[VOICE] Configuración guardada en Firebase para CallSid: {call_sid}")
-        except Exception as e:
-            print(f"⚠️ Error guardando config voice: {e}")
-
-    # TwiML -> Conectar con nuestro WS
-    stream_url = f"{_wss_base()}/twilio-media-stream"
-    vr = VoiceResponse()
-    connect = Connect()
-    connect.stream(url=stream_url)
-    vr.append(connect)
-    print(f"[VOICE] Respondiendo TwiML. bot={bot_name} model={model} voice={voice} stream_url={stream_url}")
-    return str(vr), 200, {"Content-Type": "text/xml"}
-
+    # 2. TwiML SOLO con <Connect><Stream>
+    resp = VoiceResponse()
+    with resp.connect() as connect:
+        connect.stream(url="wss://multi-bot-inteligente-v1.onrender.com/twilio-media-stream")
+    return str(resp)
 
 
 # ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
