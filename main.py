@@ -1,7 +1,7 @@
 # main.py — core genérico (sin conocimiento de marca en el core)
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse, Gather, Connect
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
@@ -26,6 +26,17 @@ from firebase_admin import credentials, db
 # 🔹 NEW: FCM (para notificaciones push)
 from firebase_admin import messaging as fcm  # <-- añadido
 
+# 🔹 NEW (Realtime bridge) — dependencias WebSocket
+import base64
+import struct
+import ssl
+from threading import Event
+try:
+    from flask_sock import Sock
+    import websocket  # websocket-client
+except Exception as _e:
+    print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
+
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
 # =======================
@@ -44,6 +55,10 @@ APP_DOWNLOAD_URL_FALLBACK = (os.environ.get("APP_DOWNLOAD_URL", "").strip())
 
 # 🔐 NEW (opcional): Bearer para proteger endpoints /push/* y (ahora) API móvil
 API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
+
+# 🔹 NEW (Realtime): ajustes por defecto del modelo/voz
+OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17").strip()
+OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()  # voces humanas de OpenAI (p.ej. alloy, verse, aria)
 
 def _valid_url(u: str) -> bool:
     return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
@@ -154,7 +169,7 @@ app.register_blueprint(mobile_bp, url_prefix="/api/mobile")
 # =======================
 #  Memorias por sesión (runtime)
 # =======================
-session_history = {}       # clave_sesion -> mensajes para OpenAI
+session_history = {}       # clave_sesion -> mensajes para OpenAI (texto)
 last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": str, "closed": bool}
@@ -193,8 +208,7 @@ def _canonize_phone(raw: str) -> str:
     for p in ("whatsapp:", "tel:", "sip:", "client:"):
         if s.startswith(p):
             s = s[len(p):]
-    digits = "".join(ch for ch in s if s.isdigit() or ch.isdigit())
-    digits = "".join(ch for ch in s if ch.isdigit()) if not digits else digits
+    digits = "".join(ch for ch in s if ch.isdigit())
     if not digits:
         return ""
     if len(digits) == 11 and digits.startswith("1"):
@@ -918,8 +932,8 @@ def api_delete_chat():
     data = request.json or {}
     bot = (data.get("bot") or "").strip()
     numero = (data.get("numero") or "").strip()
-    if not bot or not numero:  # <- mantenemos tu estructura, pero Python exige 'or'
-        pass
+    if not bot or not numero:
+        return jsonify({"error": "Parámetros inválidos (requiere bot y numero)"}), 400
     bot_normalizado = _normalize_bot_name(bot) or bot
     ok = fb_delete_lead(bot_normalizado, numero)
     return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
@@ -995,7 +1009,7 @@ def api_conversation_bot():
     numero = (data.get("numero") or "").strip()
     enabled = data.get("enabled", None)
 
-    if enabled is None or not bot_nombre or not numero:  # mantener forma, Python exige 'or'
+    if enabled is None or not bot_nombre or not numero:
         return jsonify({"error": "Parámetros inválidos (bot, numero, enabled)"}), 400
 
     bot_normalizado = _normalize_bot_name(bot_nombre) or bot_nombre
@@ -1214,7 +1228,7 @@ def whatsapp_bot():
     # 🔒 Kill-Switch GLOBAL por bot
     bot_name = bot.get("name", "")
     if bot_name and not fb_is_bot_on(bot_name):
-        return str(MessagingResponse())  # Twilio <Response/> vacío
+                return str(MessagingResponse())  # Twilio <Response/> vacío
 
     # 🔒 ✅ NUEVO: Kill-Switch POR CONVERSACIÓN
     if not fb_is_conversation_on(bot_name, sender_number):
@@ -1391,255 +1405,217 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔊 Helpers de VOZ (SSML + settings por bot)
+#  🔊 VOZ con OpenAI Realtime + Twilio Media Streams
 # =======================
-def _get_voice_settings(bot_cfg: dict):
-    """Lee ajustes de voz del JSON del bot. Fallbacks seguros."""
-    voice_cfg = (bot_cfg or {}).get("voice") or {}
-    twilio_voice = (voice_cfg.get("twilio_voice") or "").strip() or "alice"
-    language = (voice_cfg.get("language") or "").strip() or "es-ES"
-    rate = (voice_cfg.get("rate") or "").strip() or "medium"   # x-slow|slow|medium|fast|x-fast|NN%
-    pitch = (voice_cfg.get("pitch") or "").strip() or "medium" # e.g. "+2%", "-1st", "medium"
-    return twilio_voice, language, rate, pitch
 
-def _sanitize_text_for_ssml(text: str) -> str:
-    # Escapar caracteres peligrosos, limpiar comillas raras
-    t = (text or "").strip()
-    t = t.encode("utf-8", "ignore").decode("utf-8")
-    t = (t.replace("“", '"').replace("”", '"')
-           .replace("’", "'").replace("—", "-"))
-    return html.escape(t)
+def _wss_base():
+    # Construye wss:// para Twilio <Connect><Stream>
+    base = (request.url_root or "").strip().rstrip("/")
+    if base.startswith("http://"):
+        base = "wss://" + base[len("http://"):]
+    elif base.startswith("https://"):
+        base = "wss://" + base[len("https://"):]
+    else:
+        base = "wss://" + base
+    return base
 
-# --- VOICE persona (inyectada al system solo para llamadas) ---
-VOICE_PERSONA = """
-Eres un asistente de voz en una llamada telefónica. Habla natural y cálido.
-- Frases cortas (8–12 palabras), ritmo tranquilo.
-- Evita tecnicismos y palabras raras; usa lenguaje cotidiano.
-- Asegura comprensión: parafrasea breve y luego haz 1 pregunta.
-- Sonríe en la voz: "claro", "perfecto", "dale", "te escucho".
-- No leas listas largas. Si hay muchos puntos, resume en 2 frases.
-- Si la persona te interrumpe, deja hablar y contesta directo.
-"""
-
-def _make_voice_system_message(bot_cfg: dict) -> str:
-    base = (bot_cfg or {}).get("system_prompt", "") or ""
-    return (base + "\n" + VOICE_PERSONA).strip()
-
-def _text_to_ssml(text: str, rate: str = "medium", pitch: str = "medium") -> str:
+@app.route("/voice", methods=["POST", "GET"])
+def voice_entry():
     """
-    Conversión a SSML con pausas suaves y división de frases natural.
+    Twilio webhook de llamada entrante -> devuelve TwiML que conecta el audio
+    a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
     """
-    t = _sanitize_text_for_ssml(text)
+    # Detectar bot por número de destino
+    to_number = (request.values.get("To") or "").strip()
+    bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
+    bot_name = bot_cfg.get("name", "") or "default"
 
-    # Divide oraciones y limita longitud para sonar natural
-    sentences = [s.strip() for s in re.split(r'(?<=[\.\!\?])\s+', t) if s.strip()]
-    parts = []
-    for s in sentences:
-        # Si una oración es muy larga, dividir por comas con micro-pausas
-        if len(s) > 140:
-            chunks = [c.strip() for c in re.split(r',\s+', s)]
-            for i, c in enumerate(chunks):
-                if c:
-                    parts.append(f"<s>{c}</s>")
-                if i < len(chunks)-1:
-                    parts.append("<break time='220ms'/>")
-        else:
-            parts.append(f"<s>{s}</s>")
-        # micro-pausa entre oraciones
-        parts.append("<break time='260ms'/>")
+    vr = VoiceResponse()
+    # Opcional: breve beep para UX (omitimos say para no duplicar audio)
+    stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
+    connect = Connect()
+    connect.stream(url=stream_url)
+    vr.append(connect)
+    return str(vr), 200, {"Content-Type": "text/xml"}
 
-    body = " ".join(parts) if parts else t
-    ssml = f"<speak><prosody rate='{rate}' pitch='{pitch}'>{body}</prosody></speak>"
-    return ssml
+# === WebSocket (Twilio -> OpenAI Realtime) ===
+sock = None
+try:
+    sock = Sock(app)
+except Exception as _e:
+    print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
 
-def _absolute_action_url():
-    """Construye URL absoluta para el action de Gather (evita hardcodes)."""
-    base = (request.url_root or "").rstrip("/")
-    return f"{base}/voice"
-
-def _clean_user_text(t: str) -> str:
-    """Quita muletillas para que GPT reciba una entrada más clara."""
-    if not t:
-        return ""
-    t = re.sub(r'\b(eh|em|mm|este|pues|okey|okay|ajá|aja)\b', '', t, flags=re.IGNORECASE)
-    t = re.sub(r'\s+', ' ', t).strip(",. ").strip()
-    return t
-
-# =======================
-#  ✅ NEW: Webhook de VOZ (Twilio Calls) — /voice (SAFE MODE + SSML + fluidez)
-# =======================
-@app.route("/voice", methods=["GET", "POST"])
-def voice_bot():
+# Utilidad: crear sesión en OpenAI Realtime via WebSocket
+def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     """
-    Handler de voz:
-    - Nunca devuelve 500: ante cualquier error responde TwiML válido.
-    - Detecta el bot por número.
-    - Usa STT de Twilio con Gather + parámetros conversacionales.
-    - Mantiene prompt/model/estilo desde el JSON del bot con un prompt de voz cálido.
-    - Usa SSML con pausas para sonar más humano.
+    Abre un websocket con OpenAI Realtime y devuelve el objeto ws ya configurado.
     """
-    def _twiml_say(text, voice_name, lang_code):
-        vr = VoiceResponse()
-        ssml = _text_to_ssml(text)
-        vr.say(ssml, voice=voice_name, language=lang_code)
-        return str(vr), 200, {"Content-Type": "text/xml"}
+    headers = [
+        "Authorization: Bearer " + OPENAI_API_KEY,
+        "OpenAI-Beta: realtime=v1",
+    ]
+    url = f"wss://api.openai.com/v1/realtime?model={model}"
 
+    ws = websocket.WebSocket()
+    ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+
+    # Configurar sesión: instrucciones, voz y formatos de audio de entrada/salida
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "voice": voice,
+            "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
+            # Configurar formatos para hacer bypass de transcodificación
+            "input_audio_format": {
+                "mime_type": "audio/mulaw;rate=8000",
+                "channels": 1
+            },
+            "output_audio_format": {
+                "mime_type": "audio/mulaw;rate=8000",
+                "channels": 1
+            },
+            # Mejores pausas/latencia baja
+            "turn_detection": {"type": "server_vad"},
+        }
+    }
+    ws.send(json.dumps(session_update))
+    return ws
+
+def _send_twi_media(ws_twi, stream_sid, chunk_base64):
+    """
+    Envía audio (base64/mulaw 8k) de vuelta a Twilio Media Streams.
+    """
+    if not chunk_base64:
+        return
+    out = {
+        "event": "media",
+        "streamSid": stream_sid,
+        "media": {"payload": chunk_base64}
+    }
     try:
-        from_number   = (request.values.get("From") or "").strip()
-        to_number     = (request.values.get("To") or "").strip()
-        call_sid      = (request.values.get("CallSid") or "").strip()
-        speech_result = (request.values.get("SpeechResult") or "").strip()
-
-        print(f"[VOICE] CallSid={call_sid} From={from_number} To={to_number} canon_to={_canonize_phone(to_number)}")
-
-        # 1) Resolver bot por número (desde bots/*.json)
-        bot = _get_bot_cfg_by_any_number(to_number)
-        if not bot:
-            return _twiml_say("Este número no está asignado a ningún asistente. Gracias.", "alice", "es-ES")
-
-        bot_name = (bot.get("name") or "").strip()
-        if bot_name and not fb_is_bot_on(bot_name):
-            return _twiml_say("El asistente no está disponible en este momento. Gracias.", "alice", "es-ES")
-
-        # Voice settings
-        voice_name, lang_code, rate, pitch = _get_voice_settings(bot)
-        # Ajuste leve por defecto para sonar más humano si no viene sobreescrito
-        if rate == "medium":
-            rate = "slow"
-        if pitch == "medium":
-            pitch = "+2%"
-
-        # 2) Sesión por llamada (separada de WhatsApp)
-        clave_sesion = f"VOICE|{call_sid or (to_number + '|' + from_number)}"
-        if clave_sesion not in session_history:
-            sysmsg = _make_voice_system_message(bot)  # prompt cálido de voz
-            session_history[clave_sesion] = [{"role": "system", "content": sysmsg}]
-
-        # 3) Primer turno (sin STT todavía): saludar y escuchar
-        if not speech_result:
-            greeting_text = (bot.get("voice_greeting") or bot.get("greeting") or
-                             "Hola, soy tu asistente. ¿En qué puedo ayudarte?").strip()
-
-            vr = VoiceResponse()
-            gather = Gather(
-                input="speech",
-                action=_absolute_action_url(),
-                method="POST",
-                language=lang_code,
-                speechTimeout="auto",
-                actionOnEmptyResult=True,
-                timeout=7,
-                # fluidez
-                bargeIn=True,
-                endSilenceTimeoutMs="600",
-                profanityFilter=False,
-                enhanced=True,
-                speechModel="experimental_conversations",
-                hints="sí, no, reservar, cita, presupuesto, número, correo, WhatsApp"
-            )
-            greeting_ssml = _text_to_ssml(greeting_text, rate=rate, pitch=pitch)
-            gather.say(greeting_ssml, voice=voice_name, language=lang_code)
-            vr.append(gather)
-
-            outro_ssml = _text_to_ssml("Te escucho.", rate=rate, pitch=pitch)
-            vr.say(outro_ssml, voice=voice_name, language=lang_code)
-            return str(vr), 200, {"Content-Type": "text/xml"}
-
-        # 4) Tenemos texto del usuario (STT de Twilio)
-        user_text = _clean_user_text(speech_result)
-        try:
-            ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fb_append_historial(bot_name, from_number, {"tipo": "user", "texto": user_text, "hora": ahora})
-        except Exception as e:
-            print(f"⚠️ No se pudo guardar user voice: {e}")
-
-        session_history.setdefault(clave_sesion, []).append({"role": "user", "content": user_text})
-
-        # 5) Llamada a GPT respetando config del JSON del bot
-        try:
-            model_name  = (bot.get("model") or "gpt-4o").strip()
-            temperature = float(bot.get("temperature", 0.6)) if isinstance(bot.get("temperature", None), (int, float)) else 0.6
-
-            completion = client.chat.completions.create(
-                model=model_name,
-                temperature=temperature,
-                messages=session_history[clave_sesion]
-            )
-
-            respuesta = (completion.choices[0].message.content or "").strip()
-            # estilo conversacional
-            respuesta = _apply_style(bot, respuesta)
-            respuesta = re.sub(r'\s+', ' ', respuesta).strip()
-
-            # Limitar longitud de cada oración a ~18 palabras
-            sents = re.split(r'(?<=[\.\!\?])\s+', respuesta)
-            def _shrink(s):
-                words = s.split()
-                if len(words) <= 18:
-                    return s
-                return " ".join(words[:18]).rstrip(",") + "."
-            sents = [_shrink(s) for s in sents if s]
-            respuesta = " ".join(sents)
-
-            # Asegurar pregunta final breve para mantener turno
-            respuesta = _ensure_question(bot, respuesta, force_question=True)
-
-            session_history[clave_sesion].append({"role": "assistant", "content": respuesta})
-
-            # Registro de tokens
-            try:
-                usage = getattr(completion, "usage", None)
-                if usage:
-                    input_tokens  = int(getattr(usage, "prompt_tokens", 0) or 0)
-                    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-                else:
-                    usage_dict = getattr(completion, "to_dict", lambda: {})()
-                    input_tokens  = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
-                    output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
-                record_openai_usage(bot_name, model_name, input_tokens, output_tokens)
-            except Exception as e:
-                print(f"⚠️ No se pudo registrar tokens (voz): {e}")
-
-            try:
-                ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                fb_append_historial(bot_name, from_number, {"tipo": "bot", "texto": respuesta, "hora": ahora_bot})
-            except Exception as e:
-                print(f"⚠️ No se pudo guardar bot voice: {e}")
-
-            # 6) Responder por voz y seguir escuchando (SSML + barge-in)
-            vr = VoiceResponse()
-            gather = Gather(
-                input="speech",
-                action=_absolute_action_url(),
-                method="POST",
-                language=lang_code,
-                speechTimeout="auto",
-                actionOnEmptyResult=True,
-                timeout=7,
-                bargeIn=True,
-                endSilenceTimeoutMs="600",
-                profanityFilter=False,
-                enhanced=True,
-                speechModel="experimental_conversations",
-                hints="sí, no, reservar, cita, presupuesto, número, correo, WhatsApp"
-            )
-            resp_ssml = _text_to_ssml(respuesta, rate=rate, pitch=pitch)
-            gather.say(resp_ssml, voice=voice_name, language=lang_code)
-            vr.append(gather)
-
-            tail_ssml = _text_to_ssml("Te escucho.", rate=rate, pitch=pitch)
-            vr.say(tail_ssml, voice=voice_name, language=lang_code)
-            return str(vr), 200, {"Content-Type": "text/xml"}
-
-        except Exception as e:
-            # Si falla GPT, igual devolvemos TwiML válido
-            print(f"❌ Error GPT en voz: {e}")
-            return _twiml_say("Lo siento. Hubo un error procesando tu solicitud.", voice_name, lang_code)
-
+        ws_twi.send(json.dumps(out))
     except Exception as e:
-        # Cualquier otra excepción: NO 500. Devolvemos TwiML válido.
-        print(f"❌ Exception en /voice: {e}")
-        return _twiml_say("Estamos experimentando dificultades técnicas. Gracias por llamar.", "alice", "es-ES")
+        print("⚠️ Error enviando media a Twilio:", e)
+
+def _flush_openai_response(ws_ai):
+    """
+    Solicita al modelo que cree una respuesta con TTS (cuando lo necesitemos manualmente).
+    En modo server_vad normalmente no hace falta, pero lo dejamos por compatibilidad.
+    """
+    try:
+        ws_ai.send(json.dumps({"type": "response.create", "response": {"conversation": True}}))
+    except Exception:
+        pass
+
+if sock:
+    @sock.route('/twilio-media-stream')
+    def twilio_media_stream(ws_twi):
+        """
+        Bridge WS:
+        - Recibe JSON de Twilio (event:start|media|mark|stop)
+        - Reenvía audio a OpenAI Realtime (input_audio_buffer.append / input_audio_buffer.commit)
+        - Lee eventos de OpenAI (response.audio.delta) y los reenvía a Twilio como media
+        """
+        # Parámetros del bot
+        args = request.args or {}
+        bot_name = (args.get("bot") or "default").strip()
+        bot_cfg = _get_bot_cfg_by_name(bot_name) or {}
+
+        # System prompt del bot
+        sysmsg = _make_system_message(bot_cfg)
+        model = (bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
+        voice = (bot_cfg.get("voice", {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
+
+        # Abre WS con OpenAI Realtime
+        try:
+            ws_ai = _openai_realtime_ws(model, voice, sysmsg)
+        except Exception as e:
+            print("❌ No se pudo conectar a OpenAI Realtime:", e)
+            # Cierra la llamada educadamente
+            try:
+                ws_twi.send(json.dumps({"event":"stop"}))
+            except Exception:
+                pass
+            return
+
+        stream_sid = None
+        ai_reader_running = True
+
+        # Hilo lector: consume eventos de OpenAI y los manda a Twilio
+        def _ai_reader():
+            while ai_reader_running:
+                try:
+                    msg = ws_ai.recv()
+                    if not msg:
+                        continue
+                    data = json.loads(msg)
+
+                    # Audio incremental
+                    if data.get("type") == "response.audio.delta":
+                        # payload es base64 en el formato configurado (mulaw 8k)
+                        payload = data.get("delta") or ""
+                        if payload and stream_sid:
+                            _send_twi_media(ws_twi, stream_sid, payload)
+
+                    # Cuando OpenAI termina la respuesta, pedimos el commit de buffer de Twilio
+                    if data.get("type") in ("response.completed", "response.refused"):
+                        # Nada especial; Twilio seguirá capturando audio hasta que hable el usuario
+                        pass
+
+                except Exception as e:
+                    # Cerramos de forma suave si AI cerró
+                    print("ℹ️ AI reader finalizado:", e)
+                    break
+
+        reader_thread = Thread(target=_ai_reader, daemon=True)
+        reader_thread.start()
+
+        try:
+            while True:
+                raw = ws_twi.receive()
+                if raw is None:
+                    break
+                try:
+                    evt = json.loads(raw)
+                except Exception:
+                    continue
+
+                etype = evt.get("event")
+
+                if etype == "start":
+                    stream_sid = (((evt.get("start") or {}).get("streamSid")) or stream_sid)
+                    # Marcamos el inicio de una nueva captura de audio en OpenAI
+                    # (Realtime no requiere inicio explícito para input buffer)
+                elif etype == "media":
+                    # Audio del usuario (base64 mulaw 8k)
+                    chunk = ((evt.get("media") or {}).get("payload") or "")
+                    if chunk:
+                        ws_ai.send(json.dumps({
+                            "type": "input_audio_buffer.append",
+                            "audio": chunk,
+                            "mime_type": "audio/mulaw;rate=8000"
+                        }))
+                elif etype == "mark":
+                    # Fin de frase del usuario (opcional). Hacemos commit para procesar.
+                    ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                    # Disparar una respuesta
+                    _flush_openai_response(ws_ai)
+                elif etype == "stop":
+                    # Cierre de Twilio
+                    break
+
+        except Exception as e:
+            print("⚠️ WS Twilio error:", e)
+        finally:
+            try:
+                # Cerrar AI WS
+                ai_reader_running = False
+                try:
+                    ws_ai.close()
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
 # =======================
 #  Vistas de conversación (leen Firebase)
@@ -1744,3 +1720,4 @@ if __name__ == "__main__":
     print(f"[BOOT] BOOKING_URL_FALLBACK={BOOKING_URL_FALLBACK}")
     print(f"[BOOT] APP_DOWNLOAD_URL_FALLBACK={APP_DOWNLOAD_URL_FALLBACK}")
     app.run(host="0.0.0.0", port=port)
+
