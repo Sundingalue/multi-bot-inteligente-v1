@@ -30,7 +30,9 @@ from firebase_admin import messaging as fcm  # <-- añadido
 
 # 🔹 NEW (Realtime bridge) — dependencias WebSocket
 import base64
+import struct
 import ssl
+from threading import Event
 try:
     from flask_sock import Sock
     import websocket  # websocket-client
@@ -57,11 +59,16 @@ APP_DOWNLOAD_URL_FALLBACK = (os.environ.get("APP_DOWNLOAD_URL", "").strip())
 API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
 
 # 🔹 NEW (Realtime): ajustes por defecto del modelo/voz
-OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview").strip()
+OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17").strip()
 OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()  # voces humanas de OpenAI (p.ej. alloy, verse, aria)
 
 def _valid_url(u: str) -> bool:
     return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
+
+if BOOKING_URL_FALLBACK and not _valid_url(BOOKING_URL_FALLBACK):
+    print(f"⚠️ BOOKING_URL_FALLBACK inválido: '{BOOKING_URL_FALLBACK}'")
+if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
+    print(f"⚠️ APP_DOWNLOAD_URL_FALLBACK inválido: '{APP_DOWNLOAD_URL_FALLBACK}'")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
@@ -1378,6 +1385,11 @@ def whatsapp_bot():
             if usage:
                 input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
                 output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+            else:
+                # SDKs a veces traen usage como dict
+                usage_dict = getattr(completion, "to_dict", lambda: {})()
+                input_tokens = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
+                output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
             record_openai_usage(bot.get("name", ""), model_name, input_tokens, output_tokens)
         except Exception as e:
             print(f"⚠️ No se pudo registrar tokens en billing: {e}")
@@ -1665,7 +1677,6 @@ def chat_bot(bot, numero):
     mensajes = [{"texto": r.get("texto", ""), "hora": r.get("hora", ""), "tipo": r.get("tipo", "user")} for r in historial]
 
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
-
 
 # =======================
 #  API de polling (leen Firebase) — ahora permite Bearer
