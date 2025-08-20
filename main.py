@@ -1527,8 +1527,9 @@ if sock:
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+            print(f"[WS] query args -> {dict(request.args)}")
         except Exception:
-            print("[WS] handshake: (sin datos)")
+            pass
 
         # Resolver bot / modelo / voz
         args = request.args or {}
@@ -1592,12 +1593,12 @@ if sock:
                 print("[WS] error en append:", e)
 
         def _commit_and_ask():
-            """Cierra el buffer y pide respuesta en audio."""
+            """Cierra el buffer y pide respuesta en audio+texto (requerido por la API)."""
             try:
                 ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
                 ws_ai.send(json.dumps({
                     "type": "response.create",
-                    "response": {"modalities": ["audio"]}
+                    "response": {"modalities": ["audio", "text"]}
                 }))
                 print("[WS] commit + response.create")
             except Exception as e:
@@ -1664,7 +1665,7 @@ if sock:
                             saludo = f"Hola, soy {nombre} de {empresa}. ¿Cómo estás?"
                         ws_ai.send(json.dumps({
                             "type": "response.create",
-                            "response": {"modalities": ["audio"], "instructions": saludo}
+                            "response": {"modalities": ["audio", "text"], "instructions": saludo}
                         }))
                         print("[WS] greeting response.create")
                     except Exception as e:
