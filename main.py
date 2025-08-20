@@ -384,7 +384,7 @@ def _is_polite_closure(texto: str) -> bool:
 
 def _now(): return int(time.time())
 def _minutes_since(ts): return (_now() - int(ts or 0)) / 60.0
-def _hash_text(s: str) -> str: return hashlib.md5((s or "").strip().lower().encode("utf-8")).hexdigest()
+def _hash_text(s: str) -> str: return hashlib.md5((s or "").strip().lower().encode("utf-8")).md5().hexdigest() if False else hashlib.md5((s or "").strip().lower().encode("utf-8")).hexdigest()
 
 def _get_agenda(clave):
     return agenda_state.get(clave) or {"awaiting_confirm": False, "status": "none", "last_update": 0, "last_link_time": 0, "last_bot_hash": "", "closed": False}
@@ -1420,15 +1420,30 @@ def _wss_base():
         base = "wss://" + base
     return base
 
+def _extract_called_number(req):
+    """
+    Extrae el número de destino de la llamada de forma robusta.
+    Twilio suele mandar 'To', pero según rutas proxy/carriers puede venir como 'Called' u otros.
+    """
+    for key in ("To", "Called", "OriginalTo", "CalledTo", "Destination", "CalledVia"):
+        val = (req.values.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
 @app.route("/voice", methods=["POST", "GET"])
 def voice_entry():
     """
     Twilio webhook de llamada entrante -> devuelve TwiML que conecta el audio
     a nuestro WebSocket /twilio-media-stream (bridge a OpenAI Realtime).
     """
-    to_number = (request.values.get("To") or "").strip()
+    to_number = _extract_called_number(request)
     bot_cfg = _get_bot_cfg_by_any_number(to_number) or {}
-    bot_name = bot_cfg.get("name", "") or "default"
+    bot_name = (bot_cfg.get("name") or "").strip() or "default"
+
+    # Log de ayuda si no encontró bot
+    if not bot_cfg:
+        print(f"[VOICE] ⚠️ No se encontró bot para To='{to_number}'. Claves disponibles en bots_config: {list(bots_config.keys())}")
 
     vr = VoiceResponse()
     stream_url = f"{_wss_base()}/twilio-media-stream?bot={bot_name}"
@@ -1437,6 +1452,18 @@ def voice_entry():
     vr.append(connect)
     print(f"[VOICE] Respondiendo TwiML. bot={bot_name} stream_url={stream_url}")
     return str(vr), 200, {"Content-Type": "text/xml"}
+
+# ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
+@app.get("/voice_debug")
+def voice_debug():
+    fake_to = (request.args.get("to") or "").strip()
+    if not fake_to:
+        return Response("<h3>Usa ?to=+1346XXXXXXX para previsualizar TwiML</h3>", mimetype="text/html")
+    fake_req = request
+    # Simula valores
+    fake_req.values = request.values.copy()
+    fake_req.values["To"] = fake_to
+    return voice_entry()
 
 # --- WebSocket server (Twilio -> OpenAI Realtime) ---
 sock = None
@@ -1459,15 +1486,14 @@ def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
     ws = websocket.WebSocket()
     ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
 
-    # 👈 CAMBIO CLAVE: las propiedades de audio van como STRING, no objeto
+    # 👈 audio formats como STRING, VAD del servidor
     session_update = {
         "type": "session.update",
         "session": {
             "voice": voice,
             "instructions": system_prompt or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano.",
-            "input_audio_format":  "g711_ulaw",  # antes enviábamos un objeto -> error
+            "input_audio_format":  "g711_ulaw",
             "output_audio_format": "g711_ulaw",
-            # Usamos VAD del servidor. No hacemos commits manuales.
             "turn_detection": {"type": "server_vad", "silence_duration_ms": 700},
         }
     }
