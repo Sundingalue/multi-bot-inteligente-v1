@@ -1517,9 +1517,11 @@ if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
         """
-        Bridge WS sin commits:
-        - Acumula audio entrante de Twilio y manda 'append' a OpenAI en trozos ~200 ms
-        - De OpenAI recibe 'response.audio.delta' y lo reenvía a Twilio como 'media'
+        Bridge WS con commits por silencio:
+        - Recibe audio (u-law 8k) de Twilio
+        - Envía append a OpenAI
+        - En silencio (~900 ms) hace commit + response.create
+        - Reenvía response.audio.delta a Twilio como media
         """
         args = request.args or {}
         bot_name = (args.get("bot") or "default").strip()
@@ -1529,7 +1531,7 @@ if sock:
         model = (bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
         voice = (bot_cfg.get("voice", {}).get("voice_name") or OPENAI_REALTIME_VOICE).strip()
 
-        # Conectar a OpenAI
+        # 1) Conectar a OpenAI
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
         except Exception as e:
@@ -1545,9 +1547,14 @@ if sock:
         stream_sid = None
         ai_reader_running = True
 
-        # Buffer local: ~1600 bytes ≈ 200ms a 8kHz u-law (1 byte / muestra)
+        # Buffer local de entrada (~200ms = 1600 bytes @8kHz u-law)
         pending_bytes = bytearray()
         CHUNK_BYTES = 1600
+
+        # Silencio: si no llegan frames por ~0.9s => commit + response
+        SILENCE_MS = 900
+        last_media_ts = time.time()
+        silence_kill = Event()
 
         def _flush_append(force=False):
             """Manda a OpenAI un 'append' si hay ≥200ms (o si force=True y hay algo)."""
@@ -1558,13 +1565,22 @@ if sock:
                     ws_ai.send(json.dumps({
                         "type": "input_audio_buffer.append",
                         "audio": b64
-                    }))  # 👈 ya NO mandamos mime_type aquí
+                    }))
                     print(f"[WS] append -> {len(pending_bytes)} bytes")
                     pending_bytes.clear()
             except Exception as e:
                 print("[WS] error en append:", e)
 
-        # Lector de eventos AI -> envía audio TTS a Twilio
+        def _commit_and_ask():
+            """Cierra el buffer y pide respuesta."""
+            try:
+                ws_ai.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                ws_ai.send(json.dumps({"type": "response.create"}))
+                print("[WS] commit + response.create")
+            except Exception as e:
+                print("[WS] error commit/response.create:", e)
+
+        # Lector de eventos AI -> enviar audio TTS a Twilio
         def _ai_reader():
             nonlocal ai_reader_running, stream_sid
             while ai_reader_running:
@@ -1582,14 +1598,33 @@ if sock:
                         print("[WS][AI] response.created")
                     elif t == "response.completed":
                         print("[WS][AI] response.completed")
+                    elif t == "input_audio_buffer.speech_started":
+                        print("[WS][AI] speech_started")
+                    elif t == "input_audio_buffer.speech_stopped":
+                        print("[WS][AI] speech_stopped")
                     elif t == "error":
                         print("[WS][AI] ERROR:", data)
                 except Exception as e:
                     print("ℹ️ AI reader finalizado:", e)
                     break
 
+        # Watchdog de silencio
+        def _silence_watcher():
+            while not silence_kill.is_set():
+                try:
+                    now = time.time()
+                    if (now - last_media_ts) * 1000 >= SILENCE_MS and len(pending_bytes) > 0:
+                        _flush_append(force=True)
+                        _commit_and_ask()
+                    time.sleep(0.1)
+                except Exception:
+                    time.sleep(0.2)
+
         reader_thread = Thread(target=_ai_reader, daemon=True)
         reader_thread.start()
+
+        silence_thread = Thread(target=_silence_watcher, daemon=True)
+        silence_thread.start()
 
         # Loop Twilio -> AI
         try:
@@ -1609,27 +1644,31 @@ if sock:
                     print(f"[WS] start streamSid={stream_sid}")
 
                 elif etype == "media":
-                    # Llega base64 u-law 8k de Twilio
+                    # base64 u-law 8k desde Twilio
                     chunk_b64 = ((evt.get("media") or {}).get("payload") or "")
                     if chunk_b64:
                         try:
                             pending_bytes.extend(base64.b64decode(chunk_b64))
+                            last_media_ts = time.time()
                         except Exception:
                             pass
                         _flush_append(force=False)
 
                 elif etype == "stop":
                     print("[WS] stop recibido de Twilio")
-                    _flush_append(force=True)   # último empujón
+                    # último empujón + pedir respuesta final
+                    _flush_append(force=True)
+                    _commit_and_ask()
                     break
 
-                # Ignoramos 'mark' y NO hacemos 'commit' (lo maneja server_vad)
+                # ignoramos 'mark'
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
         finally:
             try:
                 ai_reader_running = False
+                silence_kill.set()
                 try:
                     ws_ai.close()
                 except Exception:
@@ -1637,6 +1676,7 @@ if sock:
                 print("[WS] conexión cerrada")
             except Exception:
                 pass
+
 
 # =======================
 #  Vistas de conversación (leen Firebase)
