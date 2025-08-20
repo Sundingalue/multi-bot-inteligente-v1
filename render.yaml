@@ -4,7 +4,11 @@ services:
     env: python
     plan: free
     branch: main
-    buildCommand: ""
-    startCommand: "gunicorn main:app"
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn -k eventlet -w 1 -b 0.0.0.0:$PORT main:app
     envVars:
       - fromDotEnv: true
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: PYTHON_VERSION
+        value: "3.12.6"
