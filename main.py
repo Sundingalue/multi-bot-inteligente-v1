@@ -1,6 +1,11 @@
 # main.py — core genérico (sin conocimiento de marca en el core)
-from gevent import monkey
-monkey.patch_all()
+
+# 💥💥 CORRECCIÓN IMPORTANTE 💥💥
+# Usar monkey_patch de eventlet en lugar de gevent
+import eventlet
+eventlet.monkey_patch()
+
+# Resto de importaciones
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Gather, Connect
@@ -26,7 +31,7 @@ from twilio.rest import Client as TwilioClient
 import firebase_admin
 from firebase_admin import credentials, db
 # 🔹 NEW: FCM (para notificaciones push)
-from firebase_admin import messaging as fcm  # <-- añadido
+from firebase_admin import messaging as fcm
 
 # 🔹 NEW (Realtime bridge) — dependencias WebSocket
 import base64
@@ -60,7 +65,7 @@ API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
 
 # 🔹 NEW (Realtime): ajustes por defecto del modelo/voz
 OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17").strip()
-OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()  # voces humanas de OpenAI (p.ej. alloy, verse, aria)
+OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()
 
 def _valid_url(u: str) -> bool:
     return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
@@ -78,7 +83,6 @@ app.secret_key = "supersecreto_sundin_panel_2025"
 app.permanent_session_lifetime = timedelta(days=60)
 app.config.update({
     "SESSION_COOKIE_SAMESITE": "Lax",
-    # Pon en True si sirves por HTTPS (recomendado en producción)
     "SESSION_COOKIE_SECURE": False if os.getenv("DEV_HTTP", "").lower() == "true" else True
 })
 
@@ -1524,8 +1528,6 @@ def _send_twi_media(ws_twi, stream_sid, chunk_base64):
     except Exception as e:
         print("⚠️ Error enviando media a Twilio:", e)
 
-# ... (código existente del main.py) ...
-
 if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
@@ -1539,6 +1541,7 @@ if sock:
         # Log del handshake para confirmar apertura de WS por Twilio
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+            # print(f"[WS] query args -> {dict(request.args)}")
         except Exception:
             pass
 
@@ -1699,6 +1702,8 @@ if sock:
                     _flush_append(force=True)
                     _commit_and_ask()
                     break
+
+                # ignoramos 'mark'
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
