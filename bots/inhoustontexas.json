@@ -107,7 +107,7 @@
       "voice_name": "Polly.Conchita",
       "language": "es-MX",
       "rate": "medium",
-      "pitch": "+2%",
+      "pitch": "0%",
       "style": "conversational",
       "natural_pauses": true,
       "filler_words": ["mmm", "a ver", "bueno", "vale"],
