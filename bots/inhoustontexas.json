@@ -107,20 +107,20 @@
     "realtime": {
       "voice": "nova",
       "model": "gpt-4o-realtime-preview",
-      "latency_mode": "normal",
+      "latency_mode": "low",
       "interruptible": true,
       "audio_in": {
         "format": "mulaw",
-        "sample_rate_hz": 8000
+        "sample_rate_hz": 24000
       },
       "audio_out": {
         "format": "pcm16",
-        "sample_rate_hz": 8000
+        "sample_rate_hz": 24000
       },
       "vad": {
         "enable": true,
         "prefix_ms": 150,
-        "silence_ms": 450
+        "silence_ms": 250
       },
       "transcription": {
         "enable": true,
@@ -131,7 +131,7 @@
         "max_response_ms": 4500
       },
       "language": "es-MX",
-      "rate": "medium",
+      "rate": "slow",
       "pitch": "0%",
       "style": "conversational",
       "natural_pauses": true,
@@ -143,8 +143,8 @@
         "use_informal_contractions": true,
         "insert_small_pauses": true
       },
-      "backchanneling_probability": 0.35,
-      "max_backchannels_per_minute": 6,
+      "backchanneling_probability": 0.45,
+      "max_backchannels_per_minute": 5,
       "filler_words_limit": 1,
       "barge_in": true,
       "dynamic_punctuation": true
