@@ -1391,7 +1391,7 @@ def whatsapp_bot():
 
 # =======================
 #  🔊 VOZ en tiempo real con Twilio Voice Streaming
-#  💥 Versión 6.0: Corregida para evitar errores de cierre de conexión
+#  💥 Versión 7.0: Corregida para evitar errores de cierre de conexión
 # =======================
 
 def _voice_get_bot_config(to_number: str) -> dict:
@@ -1463,10 +1463,7 @@ def voice_stream(ws):
             data = json.loads(message)
             event = data.get("event")
 
-            if not _is_valid_message(data):
-                print(f"[VOICE-STREAM] Ignorando mensaje de formato inválido: {data}")
-                continue
-
+            # 🟢 CORRECCIÓN CLAVE: Proteger contra eventos sin 'start'
             if event == "start":
                 print("[VOICE-STREAM] Evento 'start' recibido.")
                 call_sid = data["start"]["callSid"]
@@ -1499,13 +1496,15 @@ def voice_stream(ws):
                             "payload": base64.b64encode(chunk).decode("utf-8")
                         }
                     }))
-                
-            elif event == "media":
+            
+            # El evento `media` solo se procesa si la conexión ya está configurada
+            elif event == "media" and stream_sid and call_sid and from_number:
                 audio_payload = data["media"]["payload"]
                 audio_data = base64.b64decode(audio_payload)
                 audio_buffer.write(audio_data)
 
-            elif event == "speech":
+            # El evento `speech` solo se procesa si la conexión ya está configurada
+            elif event == "speech" and stream_sid and call_sid and from_number:
                 print("[VOICE-STREAM] Evento 'speech' recibido. Procesando transcripción...")
                 
                 if audio_buffer.tell() == 0:
