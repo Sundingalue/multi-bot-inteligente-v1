@@ -8,6 +8,7 @@ gevent>=24.2.1
 gevent-websocket>=0.10.1
 flask-sock==0.7.0
 websocket-client==1.8.0
+simple-websocket
 
 # SDK de OpenAI
 openai>=1.12.0
