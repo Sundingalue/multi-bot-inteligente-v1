@@ -1395,33 +1395,25 @@ def whatsapp_bot():
 import base64
 import json as _json
 from flask import request
+
 try:
     from flask_sock import Sock
 except Exception:
-    raise RuntimeError("Falta dependencia: instala flask-sock")
+    raise RuntimeError("Falta dependencia: instala flask-sock (pip install flask-sock)")
 
 try:
     import websocket as ws_client  # websocket-client
 except Exception:
-    raise RuntimeError("Falta dependencia: instala websocket-client")
+    raise RuntimeError("Falta dependencia: instala websocket-client (pip install websocket-client)")
 
-# Inicializa Sock (solo una vez en tu app)
+# Inicializa Sock una sola vez
 try:
     sock  # noqa
 except NameError:
     sock = Sock(app)
 
-# -------- Helpers de config por bot (siempre desde /bots/*.json)
 def _voice_get_bot_realtime_config(to_number: str):
-    """
-    Devuelve dict con:
-      - model (OpenAI Realtime), voice, system_prompt, language
-    Lee con prioridad desde claves en JSON:
-      realtime.model | model
-      realtime.voice | voice | tts.voice
-      system_prompt
-      realtime.language | language
-    """
+    """Lee SIEMPRE del JSON en bots/*.json: model/voice/system_prompt/language."""
     bot_cfg = _get_bot_cfg_by_any_number(to_number)
     if not bot_cfg:
         return None
@@ -1453,7 +1445,6 @@ def _voice_get_bot_realtime_config(to_number: str):
         "language": str(language),
     }
 
-
 # -------- 1) TwiML: sin Gather, solo <Connect><Stream> hacia nuestro WS
 @app.route("/voice", methods=["POST"])
 def voice_webhook_realtime():
@@ -1465,32 +1456,31 @@ def voice_webhook_realtime():
         vr.say("Lo siento, este número no tiene un bot configurado.")
         return str(vr)
 
-    # Pasamos el número 'To' como query param para que el WS identifique el bot
-    stream_url = url_for("twilio_media_ws", _external=True) + f"?to={_canonize_phone(to_number)}"
+    # Construir URL WS externa (Twilio requiere wss://)
+    base = request.host_url.rstrip("/")  # ej: https://tu-dominio.com/
+    if base.startswith("https://"):
+        ws_base = "wss://" + base[len("https://"):]
+    else:
+        ws_base = "ws://" + base[len("http://"):]
+    stream_url = f"{ws_base}/ws/twilio-media?to={_canonize_phone(to_number)}"
 
     connect = vr.connect()
-    connect.stream(url=stream_url)  # Twilio abrirá un WebSocket a /ws/twilio-media
+    connect.stream(url=stream_url)
     return str(vr)
-
 
 # -------- 2) WebSocket Twilio <-> OpenAI Realtime
 @sock.route("/ws/twilio-media")
 def twilio_media_ws(ws):
     """
-    WebSocket endpoint para Twilio Media Streams (bidireccional).
-    - Recibe JSON de Twilio (event: start|media|stop)
-    - Conecta a OpenAI Realtime por WS con headers de auth
-    - Reenvía audio:
-        Twilio 'media.payload' (base64 μ-law 8k) -> OpenAI 'input_audio_buffer.append'
-      y
-        OpenAI 'response.output_audio.delta' (base64 μ-law 8k) -> Twilio 'media' (payload)
+    WS para Twilio Media Streams (bidireccional).
+    - Recibe: JSON Twilio (event: start|media|stop) con audio μ-law en base64
+    - Conecta a OpenAI Realtime (WS) y reenvía audio en ambos sentidos (μ-law)
     """
     try:
-        # 1) Identificar bot por número
+        # 1) Bot por número
         to_number = request.args.get("to", "")
         cfg = _voice_get_bot_realtime_config(to_number)
         if not cfg:
-            # Devuelve un close limpio
             ws.send(_json.dumps({"event": "error", "message": "Bot no configurado"}))
             ws.close()
             return
@@ -1499,8 +1489,7 @@ def twilio_media_ws(ws):
         voice = cfg["voice"]
         system_prompt = cfg["system_prompt"]
 
-        # 2) Conectar a OpenAI Realtime (WebSocket)
-        #    IMPORTANTE: requiere headers Authorization y OpenAI-Beta
+        # 2) Conectar a OpenAI Realtime (WS)
         oai_headers = [
             f"Authorization: Bearer {OPENAI_API_KEY}",
             "OpenAI-Beta: realtime=v1"
@@ -1514,35 +1503,29 @@ def twilio_media_ws(ws):
             ws.close()
             return
 
-        # 3) Configurar sesión Realtime (voz y prompt). Pedimos salida de audio μ-law 8k para Twilio
+        # 3) Configurar sesión (voz/prompt) y formatos μ-law para Twilio
         session_update = {
             "type": "session.update",
             "session": {
                 "voice": voice,
                 "instructions": system_prompt,
                 "modalities": ["text", "audio"],
-                "input_audio_format": "mulaw",   # Twilio nos manda PCMU (μ-law)
-                "output_audio_format": "mulaw",  # Para devolver a Twilio sin convertir
+                "input_audio_format": "mulaw",
+                "output_audio_format": "mulaw",
                 "turn_detection": {"type": "server_vad", "threshold": 0.5}
             }
         }
         oai.send(_json.dumps(session_update))
 
         stream_sid = None
-
-        # 4) Loop principal: reenviar audio Twilio→OpenAI y OpenAI→Twilio
-        #    Estrategia: por cada 'media' recibido, lo agregamos al buffer de entrada,
-        #    y disparamos respuestas con response.create cuando detectemos fin de turno
-        #    (usamos server_vad en OpenAI para cortar).
-        ws.settimeout(0.02)  # lectura no bloqueante
+        ws.settimeout(0.02)
         oai.settimeout(0.02)
 
-        # Señal para iniciar la primera respuesta de OpenAI
         pending_commit = False
-
         running = True
+
         while running:
-            # 4a) Leer de Twilio (si hay)
+            # --- Leer Twilio
             tw_msg = None
             try:
                 tw_raw = ws.receive(timeout=0.01)
@@ -1555,11 +1538,9 @@ def twilio_media_ws(ws):
                 ev = str(tw_msg.get("event", ""))
                 if ev == "start":
                     stream_sid = ((tw_msg.get("start") or {}).get("streamSid")) or stream_sid
-                    # Reiniciar input buffer
                     oai.send(_json.dumps({"type": "input_audio_buffer.clear"}))
 
                 elif ev == "media":
-                    # Audio μ-law base64 desde Twilio
                     payload_b64 = (tw_msg.get("media") or {}).get("payload", "")
                     if payload_b64:
                         oai.send(_json.dumps({
@@ -1568,34 +1549,26 @@ def twilio_media_ws(ws):
                         }))
                         pending_commit = True
 
-                elif ev == "mark":
-                    # Ignorar marcas
-                    pass
-
                 elif ev == "stop":
-                    # Cerrar loop
                     running = False
-                    # Intentar finalizar respuesta pendiente
                     if pending_commit:
                         oai.send(_json.dumps({"type": "input_audio_buffer.commit"}))
                         oai.send(_json.dumps({"type": "response.create"}))
                     break
 
-            # 4b) Si tenemos audio en buffer, pedimos respuesta
+            # --- Si hay audio, pedimos respuesta
             if pending_commit:
-                # Comprometer audio actual y pedir respuesta
                 oai.send(_json.dumps({"type": "input_audio_buffer.commit"}))
                 oai.send(_json.dumps({"type": "response.create"}))
                 pending_commit = False
 
-            # 4c) Leer de OpenAI (si hay) y devolver a Twilio como audio μ-law
+            # --- Leer OpenAI y devolver audio a Twilio
             try:
                 oai_raw = oai.recv()
                 if oai_raw:
                     oai_msg = _json.loads(oai_raw)
-
                     t = oai_msg.get("type", "")
-                    # Chunks de audio (μ-law base64) para reproducir en Twilio
+
                     if t == "response.output_audio.delta":
                         audio_b64 = oai_msg.get("delta", "")
                         if audio_b64 and stream_sid:
@@ -1605,45 +1578,28 @@ def twilio_media_ws(ws):
                                 "media": {"payload": audio_b64}
                             }))
 
-                    # Fin de respuesta; listo para el siguiente turno
                     elif t in ("response.completed", "response.cancelled"):
-                        # Opcional: enviar una marca a Twilio
                         if stream_sid:
                             ws.send(_json.dumps({
                                 "event": "mark",
                                 "streamSid": stream_sid,
                                 "mark": {"name": "oai_response_end"}
                             }))
-
-                    # Si OpenAI pide más audio (no usual aquí), lo ignoramos
             except Exception:
                 pass
 
-        # 5) Cierres limpios
-        try:
-            oai.close()
-        except Exception:
-            pass
-        try:
-            ws.close()
-        except Exception:
-            pass
+        # Cierres
+        try: oai.close()
+        except Exception: pass
+        try: ws.close()
+        except Exception: pass
 
     except Exception as e:
-        try:
-            ws.send(_json.dumps({"event": "error", "message": str(e)}))
-        except Exception:
-            pass
-        try:
-            ws.close()
-        except Exception:
-            pass
+        try: ws.send(_json.dumps({"event": "error", "message": str(e)}))
+        except Exception: pass
+        try: ws.close()
+        except Exception: pass
         return
-
-
-# -------- 3) RUTA para el nombre del WS (usada por url_for arriba)
-# Nota: Flask-Sock coloca el path del WS con el nombre de la función; aseguramos endpoint name.
-twilio_media_ws.endpoint = "twilio_media_ws"
 
 
 
