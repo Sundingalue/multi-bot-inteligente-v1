@@ -1,7 +1,3 @@
-
-CODIGO MAIN - toma el json pero no es rápido
-
-
 # main.py — core genérico (sin conocimiento de marca en el core)
 
 # 💥💥 CORRECCIÓN FINAL 💥💥
