@@ -1794,6 +1794,223 @@ def twilio_media_ws(ws):
             pass
         print("[VOICE] WS cerrado (final)")
 
+# =======================
+#  🔊 WS Twilio Media ↔ OpenAI Realtime (bridge con batching >=100ms)
+# =======================
+
+# Voces válidas para Realtime (evitar "nova")
+_RT_VOICES = {"alloy","ash","ballad","coral","echo","sage","shimmer","verse"}
+
+def _oai_realtime_url(model: str) -> str:
+    model = (model or "gpt-4o-realtime-preview").strip()
+    return f"wss://api.openai.com/v1/realtime?model={model}"
+
+# Fallback por si no existiera la función (evita crashear)
+try:
+    _voice_get_bot_realtime_config
+except NameError:
+    def _voice_get_bot_realtime_config(to_number: str) -> dict:
+        # Elige el primer bot disponible como plan B
+        try:
+            for _k, cfg in bots_config.items():
+                if isinstance(cfg, dict):
+                    model = (cfg.get("realtime", {}) or {}).get("model") or cfg.get("model") or "gpt-4o-realtime-preview"
+                    voice = (cfg.get("realtime", {}) or {}).get("voice") or cfg.get("voice") or "alloy"
+                    return {"name": cfg.get("name","Bot"), "model": model, "voice": voice}
+        except Exception:
+            pass
+        return {"name": "Bot", "model": "gpt-4o-realtime-preview", "voice": "alloy"}
+
+@app.route("/ws/twilio-media", methods=["GET"])
+def ws_twilio_media():
+    """
+    Puentea el WS de Twilio Media Streams con OpenAI Realtime:
+     - Acumula >=100ms de audio μ-law (5 frames de ~20ms) ANTES de commit
+     - session.update: voice válida + input_audio_format = "g711_ulaw"
+     - response.create: ["audio","text"] con audio.format "g711_ulaw"
+     - Evita 'conversation_already_has_active_response' con un flag
+    """
+    # 1) Aceptar/abrir el WebSocket de Twilio
+    try:
+        twilio_ws = Server(request.environ)
+    except Exception:
+        return "WebSocket upgrade requerido", 426
+
+    # 2) Resolver config del bot (por número 'to' si viene como parámetro)
+    to_number = request.args.get("to", "") or ""
+    cfg = _voice_get_bot_realtime_config(to_number)
+    bot_name = (cfg.get("name") or "Bot").strip()
+    model = (cfg.get("model") or "gpt-4o-realtime-preview").strip()
+    voice = (cfg.get("voice") or "alloy").strip().lower()
+    if voice not in _RT_VOICES:
+        voice = "alloy"
+
+    print(f"[VOICE][CFG] Resuelto: name={bot_name}, model={model}, voice={voice}")
+
+    # 3) Conectar con OpenAI Realtime por WS (websocket-client)
+    try:
+        headers = [
+            f"Authorization: Bearer {OPENAI_API_KEY}",
+            "OpenAI-Beta: realtime=v1",
+        ]
+        oai_ws = websocket.create_connection(
+            _oai_realtime_url(model),
+            header=headers,
+            enable_multithread=True,
+        )
+    except Exception as e:
+        print(f"[VOICE][OAI] fallo conectando WS Realtime: {e}")
+        try:
+            twilio_ws.close()
+        except Exception:
+            pass
+        return ""
+
+    # 4) Configurar la sesión en OAI (IMPORTANTE: input_audio_format string, NO objeto)
+    try:
+        oai_ws.send(json.dumps({
+            "type": "session.update",
+            "session": {
+                "voice": voice,
+                "input_audio_format": "g711_ulaw",
+                # Turn detection del lado servidor (evita que tú dispares respuesta cada frame)
+                "turn_detection": { "type": "server_vad", "silence_duration_ms": 700 },
+                # Instrucciones generales
+                "instructions": "Habla en español (es-MX), respuestas breves, claras y amables."
+            }
+        }))
+        print("[VOICE][OAI] sesión abierta y configurada.")
+    except Exception as e:
+        print(f"[VOICE][OAI] error en session.update: {e}")
+
+    # 5) Lector asíncrono: eventos desde OpenAI → enviar audio a Twilio
+    response_in_flight = False  # evita 'conversation_already_has_active_response'
+
+    def _oai_reader():
+        nonlocal response_in_flight
+        try:
+            while True:
+                raw = oai_ws.recv()
+                if raw is None:
+                    break
+                evt = json.loads(raw)
+                et = evt.get("type")
+
+                if et == "response.output_audio.delta":
+                    # OAI ya devuelve base64 en el delta con el formato indicado en response.audio.format
+                    b64_ulaw = evt.get("delta") or ""
+                    if b64_ulaw:
+                        try:
+                            twilio_ws.send(json.dumps({"event": "media", "media": {"payload": b64_ulaw}}))
+                        except Exception as _e:
+                            print(f"[VOICE] enviar audio a Twilio falló: {_e}")
+
+                elif et in ("response.completed", "response.stopped"):
+                    response_in_flight = False
+                    try:
+                        twilio_ws.send(json.dumps({"event": "mark", "mark": {"name": "oai_response_complete"}}))
+                    except Exception:
+                        pass
+
+                elif et == "error":
+                    print(f"[VOICE][OAI] error: {evt}")
+
+        except Exception as e:
+            print("[VOICE][OAI] loop receptor finalizado.")
+
+    # Ejecutar el lector en greenlet (eventlet)
+    eventlet.spawn_n(_oai_reader)
+
+    # 6) Batching de audio entrante de Twilio: >=5 frames (~100ms) antes de commit
+    ulaw_chunks_b64 = []
+    frames_count = 0
+
+    def _flush_to_oai(force: bool = False):
+        nonlocal ulaw_chunks_b64, frames_count, response_in_flight
+        if frames_count >= 5 or (force and frames_count > 0):
+            try:
+                raw = b"".join(base64.b64decode(p) for p in ulaw_chunks_b64)
+                b64_concat = base64.b64encode(raw).decode("ascii")
+
+                # 1) append
+                oai_ws.send(json.dumps({
+                    "type": "input_audio_buffer.append",
+                    "audio": b64_concat
+                }))
+                # 2) commit
+                oai_ws.send(json.dumps({ "type": "input_audio_buffer.commit" }))
+
+                # 3) crea respuesta SOLO si no hay una corriendo (evita el error de "active_response")
+                if not response_in_flight:
+                    oai_ws.send(json.dumps({
+                        "type": "response.create",
+                        "response": {
+                            "modalities": ["audio", "text"],
+                            "audio": { "voice": voice, "format": "g711_ulaw" }
+                        }
+                    }))
+                    response_in_flight = True
+
+            except Exception as e:
+                print(f"[VOICE][OAI] error enviando batch: {e}")
+            finally:
+                ulaw_chunks_b64 = []
+                frames_count = 0
+
+    print(f"[VOICE] Bridge Realtime iniciado para streamSid={request.args.get('streamSid','(desconocido)')}")
+
+    # 7) Loop principal: recibir eventos de Twilio
+    try:
+        while True:
+            msg = twilio_ws.receive()
+            if msg is None:
+                break
+
+            try:
+                data = json.loads(msg)
+            except Exception:
+                continue
+
+            etype = data.get("event")
+
+            if etype == "start":
+                # Puedes leer 'start' si deseas loggear metadata
+                pass
+
+            elif etype == "media":
+                payload_b64 = (data.get("media") or {}).get("payload")
+                if payload_b64:
+                    ulaw_chunks_b64.append(payload_b64)
+                    frames_count += 1
+                    _flush_to_oai(force=False)
+
+            elif etype == "mark":
+                # Fuerza flush cuando llega una marca del lado de Twilio
+                _flush_to_oai(force=True)
+
+            elif etype == "stop":
+                _flush_to_oai(force=True)
+                break
+
+            # otros etypes (pong, dtmf, etc.) pueden ignorarse
+
+    except ConnectionClosed:
+        pass
+    except Exception as e:
+        print(f"[VOICE] error en loop Twilio: {e}")
+    finally:
+        try:
+            oai_ws.close()
+        except Exception:
+            pass
+        try:
+            twilio_ws.close()
+        except Exception:
+            pass
+        print("[VOICE] WS cerrado (final)")
+
+    return ""
+
 
 # =======================
 #  Vistas de conversación (leen Firebase)
