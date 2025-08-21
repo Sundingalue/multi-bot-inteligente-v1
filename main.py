@@ -1457,9 +1457,10 @@ def voice_webhook():
 
     resp = VoiceResponse()
     with resp.connect() as connect:
-        # ✅ CAMBIO CRÍTICO: Pasar el CallSid como parte de la RUTA, no como un parámetro.
-        # Esto es mucho más confiable cuando los proxies eliminan los query params.
-        connect.stream(url=f"{_wss_base().rstrip('/')}/twilio-media-stream/{call_sid}")
+        # ✅ CAMBIO CRÍTICO FINAL: Volver a pasar el CallSid como QUERY PARAM.
+        # Esta es la forma estándar, y los logs nos dicen que la ruta dinámica no funciona.
+        # La corrección para el WS lo extraerá manualmente de la URL.
+        connect.stream(url=f"{_wss_base().rstrip('/')}/twilio-media-stream?call_sid={call_sid}")
     return str(resp)
 
 @app.get("/voice_debug")
@@ -1468,11 +1469,9 @@ def voice_debug():
     if not fake_to:
         return Response("<h3>Usa ?to=+1346XXXXXXX para previsualizar TwiML</h3>", mimetype="text/html")
     
-    # Simula valores de Twilio
     fake_call_sid = "CA" + uuid.uuid4().hex
     fake_values = {'CallSid': fake_call_sid, 'To': fake_to, 'From': '+11234567890'}
     
-    # Crea una solicitud simulada con los valores
     with app.test_request_context(method='POST', path='/voice', data=fake_values):
         return voice_webhook()
 
@@ -1484,9 +1483,9 @@ except Exception as _e:
     print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
 
 if sock:
-    # ✅ CAMBIO CRÍTICO: La ruta ahora espera el CallSid como un parámetro de la URL.
-    @sock.route('/twilio-media-stream/<call_sid>')
-    def twilio_media_stream(ws_twi, call_sid):
+    # ✅ CAMBIO CRÍTICO FINAL: La ruta vuelve a ser estática.
+    @sock.route('/twilio-media-stream')
+    def twilio_media_stream(ws_twi):
         def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
             headers = [
                 "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1510,9 +1509,18 @@ if sock:
 
         try:
             print(f"[WS] CONEXIÓN RECIBIDA: ip={request.remote_addr}")
-            print(f"[WS] CallSid recibido de la RUTA: '{call_sid}'")
-        except Exception:
-            pass
+            # ✅ CAMBIO: Extraer el CallSid de la URL de forma manual y robusta.
+            # Los logs muestran que request.args.get('call_sid') falla, así que lo
+            # extraemos de la URL completa.
+            full_url = request.url
+            qs = urllib.parse.urlparse(full_url).query
+            call_sid_from_url = urllib.parse.parse_qs(qs).get('call_sid', [None])[0]
+            call_sid = call_sid_from_url
+            
+            print(f"[WS] CallSid extraído manualmente de la URL: '{call_sid}'")
+        except Exception as e:
+            print(f"[WS] Error al extraer CallSid: {e}")
+            call_sid = None
 
         session_data = voice_call_cache.get(call_sid)
         
