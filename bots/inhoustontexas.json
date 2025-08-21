@@ -151,7 +151,7 @@
         "punctuate": true
       },
       "limits": {
-        "max_response_ms": 6500
+        "max_response_ms": 4500
       }
     },
 
