@@ -1525,16 +1525,22 @@ if sock:
             return ws
 
         try:
-            print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
-            # Log de depuración para ver los encabezados de la solicitud
-            print(f"[WS] Headers completos: {request.headers}")
+            # ✅ DIAGNÓSTICO: Confirmar que la ruta se ejecuta y qué headers recibe.
+            print(f"[WS] CONEXIÓN RECIBIDA: ip={request.remote_addr}")
+            print(f"[WS] Headers de la conexión: {request.headers}")
+            
+            call_sid = request.headers.get('X-Twilio-CallSid')
+            # ✅ DIAGNÓSTICO: Mostrar el CallSid recibido.
+            print(f"[WS] CallSid del header: '{call_sid}'")
         except Exception:
-            pass
+            call_sid = None
 
         # ✅ CAMBIO: LEER LA CONFIGURACIÓN DE LA CACHÉ EN MEMORIA
-        call_sid = request.headers.get('X-Twilio-CallSid')
         session_data = voice_call_cache.get(call_sid)
         
+        # ✅ DIAGNÓSTICO: Mostrar si se encontró la sesión en la caché.
+        print(f"[WS] Sesión encontrada en caché: {bool(session_data)}")
+
         if not session_data:
             print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración por defecto (Luis).")
             bot_name = "default"
@@ -1794,5 +1800,5 @@ def api_chat(bot, numero):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"[BOOT] BOOKING_URL_FALLBACK={BOOKING_URL_FALLBACK}")
-    print(f"[BOOT] APP_DOWNLOAD_URL_FALLBACK={APP_DOWNLOAD_URL_FALLBACK}")
+    print(f"I[BOOT] APP_DOWNLOAD_URL_FALLBACK={APP_DOWNLOAD_URL_FALLBACK}")
     app.run(host="0.0.0.0", port=port)
