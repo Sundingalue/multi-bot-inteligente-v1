@@ -1572,7 +1572,7 @@ if sock:
             bot_name = "default"
             model = OPENAI_REALTIME_MODEL
             voice = OPENAI_REALTIME_VOICE
-            sysmsg = "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
+            sysmsg = "Te llama Luis y eres un asistente de voz amable, cercano y muy natural con asento mexicano. Habla como humano y muy natural."
         else:
             bot_cfg = _get_bot_cfg_by_name(session_data.get("bot_name")) or {}
             bot_name = session_data["bot_name"]
