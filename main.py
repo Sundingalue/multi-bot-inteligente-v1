@@ -1413,11 +1413,9 @@ def _resolve_bot_ref(cfg: dict):
         ref_key = cur.get("$ref") or cur.get("ref")
         if not ref_key:
             break
-        # 1) búsqueda directa
         target = bots_config.get(ref_key)
         if target:
             cur = target; hops += 1; continue
-        # 2) búsqueda por E.164
         canon_ref = _canonize_phone(ref_key)
         found = None
         for k, v in bots_config.items():
@@ -1514,7 +1512,6 @@ def voice_webhook_realtime():
         if call_sid:
             stream.parameter(name="callSid", value=call_sid)
 
-        # Si ya sabemos el nombre de bot, ayuda para debug (opcional)
         cfg_tmp = _voice_get_bot_realtime_config(to_number) if to_number else None
         if cfg_tmp and cfg_tmp.get("bot_name"):
             stream.parameter(name="bot", value=str(cfg_tmp["bot_name"]))
@@ -1528,9 +1525,9 @@ def voice_webhook_realtime():
 
 class OpenAIRealtimeBridge:
     """
-    Conecta con OpenAI Realtime por WebSocket y hace:
+    Conecta con OpenAI Realtime por WebSocket:
      - input: recibe audio μ-law (base64) desde Twilio y lo envía a OAI
-     - output: recibe 'response.output_audio.delta' de OAI (μ-law) y lo reenvía a Twilio
+     - output: recibe 'response.output_audio.delta' (μ-law) y lo reenvía a Twilio
     """
     def __init__(self, cfg: dict, twilio_ws, stream_sid: str):
         self.cfg = cfg or {}
@@ -1539,7 +1536,10 @@ class OpenAIRealtimeBridge:
         self.q_in = Queue(maxsize=200)
         self.oai_ws = None
         self.alive = True
-        self.started = False
+
+        # Medición para evitar commits vacíos
+        self.pending_ms = 0           # ms acumulados desde el último commit
+        self.had_audio_since_commit = False
 
         self.t_recv = Thread(target=self._oai_recv_loop, daemon=True)
         self.t_send = Thread(target=self._pump_input_loop, daemon=True)
@@ -1590,13 +1590,11 @@ class OpenAIRealtimeBridge:
                     "modalities": ["text","audio"],
                     "input_audio_format":  {"type":"mulaw","sample_rate":8000},
                     "output_audio_format": {"type":"mulaw","sample_rate":8000},
-                    # VAD del servidor para turn-taking
                     "turn_detection": {"type":"server_vad","silence_duration_ms":400},
                     "language": self.cfg.get("language","es-MX"),
                 }
             }
             self._oai_send_json(session_update)
-            self.started = True
             print("[VOICE][OAI] sesión abierta y configurada.")
 
             while self.alive:
@@ -1612,7 +1610,6 @@ class OpenAIRealtimeBridge:
                     continue
 
                 typ = data.get("type") or data.get("event")
-                # Audio del modelo hacia el call
                 if typ == "response.output_audio.delta":
                     delta_b64 = (data.get("delta") or "").strip()
                     if delta_b64:
@@ -1627,7 +1624,6 @@ class OpenAIRealtimeBridge:
                         except Exception as e:
                             print(f"[VOICE][WS→Twilio] send delta error: {e}")
                 elif typ in ("response.completed","response.finished"):
-                    # Podríamos mandar un "mark" para diagnosticar cortes
                     try:
                         mark = {"event":"mark","streamSid":self.stream_sid,"mark":{"name":"oai_response_end"}}
                         self.twilio_ws.send(json.dumps(mark))
@@ -1652,38 +1648,51 @@ class OpenAIRealtimeBridge:
                 pass
             print("[VOICE][OAI] loop receptor finalizado.")
 
-    # ---- Interno: loop de bombeo Twilio→OAI con commits periódicos ----
+    # ---- Interno: loop de bombeo Twilio→OAI con commits robustos ----
     def _pump_input_loop(self):
-        pending = 0
-        last_commit_ts = time.time()
+        """
+        - Twilio envía frames ~20ms. Acumulamos ms y sólo commiteamos si:
+            * pending_ms >= 200ms, o
+            * timeout > 0.8s y pending_ms >= 120ms,
+          evitando 'input_audio_buffer_commit_empty'.
+        - También pedimos respuesta con modalities ['audio','text'] (requisito del API).
+        """
+        last_chunk_ts = time.time()
+        timeout_s = 0.8
+
         while self.alive:
             try:
                 chunk = self.q_in.get(timeout=0.2)
+                # Cada 'media' de Twilio ≈ 20ms a 8kHz
+                self._oai_send_json({"type":"input_audio_buffer.append","audio":chunk})
+                self.pending_ms += 20
+                self.had_audio_since_commit = True
+                last_chunk_ts = time.time()
             except Empty:
-                # commit si han pasado >0.8s desde el último append
-                if pending > 0 and (time.time() - last_commit_ts) > 0.8:
+                # Si no hay audio por un rato, commit si ya juntamos suficiente
+                elapsed = time.time() - last_chunk_ts
+                if self.had_audio_since_commit and elapsed > timeout_s and self.pending_ms >= 120:
                     self._commit_and_request()
-                    pending = 0
                 continue
 
-            # Enviamos audio μ-law 8k a Realtime
-            self._oai_send_json({"type":"input_audio_buffer.append","audio":chunk})
-            pending += 1
-
-            # Commit cada ~10 frames (≈200ms a 20ms/frame)
-            if pending >= 10:
+            # Commit por tamaño acumulado
+            if self.pending_ms >= 200:
                 self._commit_and_request()
-                pending = 0
-                last_commit_ts = time.time()
 
         # flush final
-        if pending > 0:
+        if self.had_audio_since_commit and self.pending_ms >= 120:
             self._commit_and_request()
 
     def _commit_and_request(self):
+        # Evitar commits vacíos
+        if not self.had_audio_since_commit or self.pending_ms < 100:
+            return
         self._oai_send_json({"type":"input_audio_buffer.commit"})
-        # Pedimos respuesta de audio (si VAD ya detectó fin, igual sirve)
-        self._oai_send_json({"type":"response.create","response":{"modalities":["audio"]}})
+        # Pedimos respuesta con ambas modalidades (audio + text)
+        self._oai_send_json({"type":"response.create","response":{"modalities":["audio","text"]}})
+        # Reset contadores
+        self.pending_ms = 0
+        self.had_audio_since_commit = False
 
 # ---------- WS de Twilio Media: usa start.customParameters ----------
 
@@ -1692,7 +1701,6 @@ _active_bridges = {}  # streamSid -> OpenAIRealtimeBridge
 @sock.route("/ws/twilio-media")
 def twilio_media_ws(ws):
     print("[VOICE] WS: conexión entrante de Twilio Media")
-    # Variables hasta recibir 'start'
     stream_sid = None
     to_number = None
     from_number = None
@@ -1700,7 +1708,6 @@ def twilio_media_ws(ws):
     bridge = None
 
     try:
-        # Aviso inicial (útil en logs Twilio Console)
         try:
             hello = {"event":"connected"}
             ws.send(json.dumps(hello))
@@ -1728,58 +1735,48 @@ def twilio_media_ws(ws):
                 stream_sid = start.get("streamSid") or stream_sid
                 params = start.get("customParameters") or {}
 
-                # Leemos parámetros confiables del <Parameter>
                 to_number = params.get("to") or to_number
                 from_number = params.get("from") or from_number
                 call_sid = params.get("callSid") or call_sid
 
                 if not to_number:
-                    # fallback extremo: intenta querystring si vino (no confiable)
                     try:
                         to_number = request.args.get("to") or to_number
                     except Exception:
                         pass
 
-                # Resolvemos el bot aquí (ya tenemos parámetros)
                 cfg = _voice_get_bot_realtime_config(to_number) if to_number else None
                 if not cfg:
                     print("[VOICE] Bot no configurado; cerrando WS")
-                    # Cortamos la media stream con elegancia
                     try:
                         ws.send(json.dumps({"event":"mark","streamSid":stream_sid,"mark":{"name":"no_bot"}}))
                     except Exception:
                         pass
                     break
 
-                # Levantamos el bridge Realtime
                 bridge = OpenAIRealtimeBridge(cfg, twilio_ws=ws, stream_sid=stream_sid)
                 _active_bridges[stream_sid] = bridge
                 bridge.start()
                 print(f"[VOICE] Bridge Realtime iniciado para streamSid={stream_sid}")
 
             elif ev == "media":
-                # Audio de Twilio → OAI (μ-law 8k base64)
                 media = data.get("media", {})
                 payload = (media.get("payload") or "").strip()
                 if payload and bridge:
                     bridge.append_audio_b64_mulaw(payload)
 
             elif ev == "mark":
-                # opcional: logs de marcas
                 pass
 
             elif ev == "stop":
-                # Twilio cerrará el stream
                 break
 
             else:
-                # Otros eventos: connected, ping, etc.
                 pass
 
     except Exception as e:
         print(f"[VOICE][WS] error: {e}")
     finally:
-        # Limpieza
         try:
             if bridge:
                 bridge.close()
@@ -1792,7 +1789,6 @@ def twilio_media_ws(ws):
         except Exception:
             pass
         print("[VOICE] WS cerrado (final)")
-
 
 
 # =======================
