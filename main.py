@@ -1470,7 +1470,10 @@ def voice_webhook():
     # 3. TwiML SOLO con <Connect><Stream>
     resp = VoiceResponse()
     with resp.connect() as connect:
-        connect.stream(url="wss://multi-bot-inteligente-v1.onrender.com/twilio-media-stream")
+        # ✅ CAMBIO CRÍTICO: Añadir el CallSid como parámetro de consulta en la URL.
+        # Esto soluciona el problema de que el CallSid no se pasa en el encabezado.
+        stream_url = f"{_wss_base().rstrip('/')}/twilio-media-stream?call_sid={call_sid}"
+        connect.stream(url=stream_url)
     return str(resp)
 
 
@@ -1529,9 +1532,11 @@ if sock:
             print(f"[WS] CONEXIÓN RECIBIDA: ip={request.remote_addr}")
             print(f"[WS] Headers de la conexión: {request.headers}")
             
-            call_sid = request.headers.get('X-Twilio-CallSid')
+            # ✅ CAMBIO CRÍTICO: Obtener el CallSid del parámetro de consulta de la URL.
+            call_sid = request.args.get('call_sid')
+
             # ✅ DIAGNÓSTICO: Mostrar el CallSid recibido.
-            print(f"[WS] CallSid del header: '{call_sid}'")
+            print(f"[WS] CallSid recibido de la URL: '{call_sid}'")
         except Exception:
             call_sid = None
 
