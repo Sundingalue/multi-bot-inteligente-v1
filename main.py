@@ -1398,40 +1398,8 @@ def whatsapp_bot():
 
 # =======================
 #  🔊 VOZ en tiempo real con Twilio Voice Streaming
-#  💥 Versión corregida para evitar bloqueo en el bucle principal
+#  💥 Versión corregida para evitar bloqueo en el bucle principal y errores de clave
 # =======================
-
-def _voice_get_bot_config(to_number: str) -> dict:
-    """Extrae y normaliza la configuración del bot para llamadas de voz."""
-    canon_to = _canonize_phone(to_number)
-    bot_cfg = None
-    for key, cfg in bots_config.items():
-        if _canonize_phone(key) == canon_to:
-            bot_cfg = cfg
-            break
-    
-    if not bot_cfg:
-        bot_cfg = bots_config.get(to_number)
-
-    if not bot_cfg:
-        return None
-
-    config = {
-        "bot_name": bot_cfg.get("name", "Unknown"),
-        "model": bot_cfg.get("model", "gpt-4o"),
-        "system_prompt": bot_cfg.get("system_prompt", "Eres un asistente de voz amable y natural. Habla con una voz humana."),
-        "voice_greeting": bot_cfg.get("voice_greeting", f"Hola, soy el asistente de {bot_cfg.get('business_name', bot_cfg.get('name', 'el bot'))}. ¿Cómo puedo ayudarte?"),
-        "openai_voice": bot_cfg.get("realtime", {}).get("voice", "nova"),
-    }
-    return config
-
-def _is_valid_message(message: dict) -> bool:
-    """
-    Valida que el mensaje de Twilio WebSocket tenga el formato esperado.
-    """
-    return (isinstance(message, dict) and 
-            "event" in message and 
-            isinstance(message.get("event"), str))
 
 # 1. Webhook inicial para la llamada entrante
 @app.route("/voice", methods=["POST"])
@@ -1465,7 +1433,7 @@ def voice_stream(ws):
     call_sid = None
     stream_sid = None
     from_number = None
-
+    
     # Buffer para acumular el audio del usuario antes de enviarlo a OpenAI STT
     audio_buffer = bytearray()
     
@@ -1549,13 +1517,13 @@ def voice_stream(ws):
                         with open(temp_audio_file, "wb") as f:
                             f.write(temp_audio)
                         
-                        # Transcribir el audio del usuario (asíncrono)
+                        # Transcribir el audio del usuario (síncrono, pero en hilo separado)
                         with open(temp_audio_file, "rb") as f:
-                            transcription_response = asyncio.run(async_client.audio.transcriptions.create(
+                            transcription_response = client.audio.transcriptions.create(
                                 model="whisper-1",
                                 file=f,
                                 language="es"
-                            ))
+                            )
                         user_speech = transcription_response.text.strip()
                         os.remove(temp_audio_file)
                         
@@ -1565,26 +1533,26 @@ def voice_stream(ws):
                         
                         print(f"[VOICE-STREAM] Usuario: {user_speech}")
                         
-                        # Actualizar el historial y obtener la respuesta de la IA (asíncrono)
+                        # Actualizar el historial y obtener la respuesta de la IA (síncrono, en hilo separado)
                         voice_conversation_history[call_sid].append({"role": "user", "content": user_speech})
                         
-                        chat_completion_response = asyncio.run(async_client.chat.completions.create(
+                        chat_completion_response = client.chat.completions.create(
                             model=bot_config["model"],
                             messages=voice_conversation_history[call_sid],
                             temperature=0.6
-                        ))
+                        )
                         
                         bot_response_text = chat_completion_response.choices[0].message.content.strip()
                         voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
                         
                         print(f"[VOICE-STREAM] Bot: {bot_response_text}")
 
-                        # Generar audio de la respuesta de la IA (asíncrono) y enviarlo
-                        response_audio_stream = asyncio.run(async_client.audio.speech.create(
+                        # Generar audio de la respuesta de la IA (síncrono, en hilo separado) y enviarlo
+                        response_audio_stream = client.audio.speech.create(
                             model="tts-1",
                             voice=bot_config["openai_voice"],
                             input=bot_response_text
-                        ))
+                        )
                         
                         for chunk in response_audio_stream.iter_bytes(chunk_size=4096):
                             ws.send(json.dumps({
@@ -1595,7 +1563,7 @@ def voice_stream(ws):
                                 }
                             }))
 
-                        # Guardar en el historial de Firebase (opcional, puede ser asíncrono también)
+                        # Guardar en el historial de Firebase
                         try:
                             ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "user", "texto": user_speech, "hora": ahora_bot})
@@ -1605,14 +1573,13 @@ def voice_stream(ws):
 
                     except Exception as e:
                         print(f"❌ Error procesando el audio con OpenAI: {e}")
-                        ws.send(json.dumps({"event": "mark", "name": "error"}))
-                        error_audio_stream = asyncio.run(async_client.audio.speech.create(
+                        error_audio_stream = client.audio.speech.create(
                             model="tts-1",
                             voice=bot_config["openai_voice"],
                             input="Lo siento, tuve un problema y no pude procesar tu mensaje."
-                        ))
+                        )
                         for chunk in error_audio_stream.iter_bytes(chunk_size=4096):
-                             ws.send(json.dumps({
+                            ws.send(json.dumps({
                                 "event": "media",
                                 "streamSid": stream_sid,
                                 "media": {
