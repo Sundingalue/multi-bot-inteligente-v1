@@ -1403,6 +1403,21 @@ except NameError:
 
 # ---------- Helpers de config (resolver $ref y recolectar realtime) ----------
 
+SUPPORTED_OAI_VOICES = {"alloy","ash","ballad","coral","echo","sage","shimmer","verse"}
+VOICE_SYNONYMS = {
+    "nova": "verse",   # ← mapeo crítico
+    "aria": "alloy",   # por si apareciera en configs viejas
+}
+
+def _normalize_voice(v: str) -> str:
+    v = (v or "").strip().lower()
+    if v in VOICE_SYNONYMS:
+        return VOICE_SYNONYMS[v]
+    if v in SUPPORTED_OAI_VOICES:
+        return v
+    # fallback seguro
+    return "alloy"
+
 def _resolve_bot_ref(cfg: dict):
     if not isinstance(cfg, dict):
         return cfg
@@ -1450,11 +1465,10 @@ def _voice_get_bot_realtime_config(to_number: str):
         return default
 
     model = _get_path(bot_cfg, ["realtime.model", "model"], "gpt-4o-realtime-preview")
-    voice = _get_path(bot_cfg, ["realtime.voice", "voice", "tts.voice"], "nova")
+    voice_cfg = _get_path(bot_cfg, ["realtime.voice", "voice", "tts.voice"], "alloy")
+    voice = _normalize_voice(str(voice_cfg))
     system_prompt = bot_cfg.get("system_prompt", "Eres un asistente de voz natural y profesional.")
 
-    # Nota: el API no soporta 'session.language'; si necesitas sesgo de idioma,
-    # inclúyelo en 'instructions' (system_prompt).
     print(f"[VOICE][CFG] Resuelto: name={bot_cfg.get('name')}, model={model}, voice={voice}")
 
     return {
@@ -1584,13 +1598,13 @@ class OpenAIRealtimeBridge:
             session_update = {
                 "type": "session.update",
                 "session": {
-                    "voice": self.cfg.get("voice","nova"),
+                    "voice": self.cfg.get("voice","alloy"),  # ← ya normalizado
                     "instructions": self.cfg.get("system_prompt",""),
-                    "modalities": ["text","audio"],
+                    "modalities": ["audio","text"],  # orden permitido
                     "input_audio_format":  {"type":"mulaw","sample_rate":8000},
                     "output_audio_format": {"type":"mulaw","sample_rate":8000},
                     # Usamos VAD del servidor: NO llamamos response.create manualmente
-                    "turn_detection": {"type":"server_vad","silence_duration_ms":400},
+                    "turn_detection": {"type":"server_vad","silence_duration_ms":500},
                 }
             }
             self._oai_send_json(session_update)
@@ -1651,17 +1665,17 @@ class OpenAIRealtimeBridge:
     def _pump_input_loop(self):
         """
         - Twilio envía frames ~20ms. Acumulamos ms y sólo commiteamos si:
-            * pending_ms >= 200ms, o
-            * timeout > 0.8s y pending_ms >= 120ms,
+            * pending_ms >= 220ms, o
+            * timeout > 0.9s y pending_ms >= 140ms,
           evitando 'input_audio_buffer_commit_empty'.
         - NO llamamos response.create (lo hace server_vad).
         """
         last_chunk_ts = time.time()
-        timeout_s = 0.8
+        timeout_s = 0.9
 
         while self.alive:
             try:
-                chunk = self.q_in.get(timeout=0.2)
+                chunk = self.q_in.get(timeout=0.25)
                 # Cada 'media' de Twilio ≈ 20ms a 8kHz
                 self._oai_send_json({"type":"input_audio_buffer.append","audio":chunk})
                 self.pending_ms += 20
@@ -1670,16 +1684,16 @@ class OpenAIRealtimeBridge:
             except Empty:
                 # Si no hay audio por un rato, commit si ya juntamos suficiente
                 elapsed = time.time() - last_chunk_ts
-                if self.had_audio_since_commit and elapsed > timeout_s and self.pending_ms >= 120:
+                if self.had_audio_since_commit and elapsed > timeout_s and self.pending_ms >= 140:
                     self._commit_only()
                 continue
 
-            # Commit por tamaño acumulado (≥200ms)
-            if self.pending_ms >= 200:
+            # Commit por tamaño acumulado (≥220ms)
+            if self.pending_ms >= 220:
                 self._commit_only()
 
         # flush final
-        if self.had_audio_since_commit and self.pending_ms >= 120:
+        if self.had_audio_since_commit and self.pending_ms >= 140:
             self._commit_only()
 
     def _commit_only(self):
