@@ -1482,7 +1482,7 @@ def voice_webhook():
         db.reference(f"voice_sessions/{call_sid}").set({
             "bot_name": bot_name,
             "model": model,
-            "voice": voice,
+            "voice": aura,
             "system_prompt": sysmsg,
             "created": datetime.now().isoformat()
         })
