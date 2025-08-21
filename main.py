@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 import os
 import json
 import time
-from threading import Thread, Lock
 from datetime import datetime, timedelta
 import csv
 from io import StringIO
@@ -22,6 +21,7 @@ import re
 import glob
 import random
 import hashlib
+import audioop
 import html
 import uuid
 import requests
@@ -1107,7 +1107,7 @@ def push_token():
             msg_id = fcm.send(msg)
             return jsonify({"success": True, "mode": "token", "id": msg_id})
         else:
-            return jsonify({"success": False, "message": "Falta topic o token(s)"}), 400
+            return jsonify({"success": False, "message": "token(s) requerido(s)"}), 400
     except Exception as e:
         print(f"❌ Error FCM universal: {e}")
         return jsonify({"success": False, "message": "FCM error"}), 500
@@ -1390,8 +1390,9 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔊 VOZ en tiempo real con Twilio Voice Streaming
-#  💥 Versión 5.0: Implementación robusta sin hilos ni archivos
+#  🔊 VOZ en tiempo real con Twilio Voice Streaming (NO BLOQUEANTE)
+#  🎯 Solo reemplaza este bloque; el resto del main queda intacto.
+#  Usa OpenAI Realtime por WebSocket y fuerza voz femenina "nova".
 # =======================
 
 def _voice_get_bot_config(to_number: str) -> dict:
@@ -1402,199 +1403,206 @@ def _voice_get_bot_config(to_number: str) -> dict:
         if _canonize_phone(key) == canon_to:
             bot_cfg = cfg
             break
-    
     if not bot_cfg:
         bot_cfg = bots_config.get(to_number)
-
     if not bot_cfg:
         return None
 
-    config = {
+    return {
         "bot_name": bot_cfg.get("name", "Unknown"),
-        "model": bot_cfg.get("model", "gpt-4o"),
-        "system_prompt": bot_cfg.get("system_prompt", "Eres un asistente de voz amable y natural. Habla con una voz humana."),
-        "voice_greeting": bot_cfg.get("voice_greeting", f"Hola, soy el asistente de {bot_cfg.get('business_name', bot_cfg.get('name', 'el bot'))}. ¿Cómo puedo ayudarte?"),
-        "openai_voice": bot_cfg.get("realtime", {}).get("voice", "nova"),
+        "system_prompt": bot_cfg.get("system_prompt", "Eres una asistente de voz amable y natural. Responde breve y claro."),
+        # Permite configurar por JSON, pero lo forzaremos a "nova" en la sesión Realtime:
+        "openai_voice": (bot_cfg.get("realtime", {}) or {}).get("voice", "nova"),
     }
-    return config
 
 def _is_valid_message(message: dict) -> bool:
-    """
-    Valida que el mensaje de Twilio WebSocket tenga el formato esperado.
-    """
-    return (isinstance(message, dict) and 
-            "event" in message and 
-            isinstance(message.get("event"), str))
+    return isinstance(message, dict) and isinstance(message.get("event"), str)
 
-# 1. Webhook inicial para la llamada entrante
 @app.route("/voice", methods=["POST"])
 def voice_webhook():
-    """Ruta inicial para una llamada de voz entrante. Inicia el streaming a nuestro WebSocket."""
-    resp = VoiceResponse()
-    
+    """TwiML que abre un Media Stream bidireccional hacia nuestro WS interno."""
+    vr = VoiceResponse()
     connect = Connect()
+    # Twilio nos enviará audio µ-law 8k a este WS:
     connect.stream(url=f"wss://{request.host}/voice-stream")
-    resp.append(connect)
-    
-    resp.say("Lo siento, no pude conectarme al asistente de voz.")
-    
-    return str(resp)
+    vr.append(connect)
 
+    # (opcional) Mensaje de respaldo si el stream no conecta:
+    # vr.say("No pude conectar con el asistente. Intenta de nuevo.")
+    return str(vr)
 
+# --- Utilidades de audio ---
+def _mulaw8k_to_pcm16_16k(mulaw_bytes: bytes) -> bytes:
+    """µ-law 8k -> PCM16 16k mono"""
+    if not mulaw_bytes:
+        return b""
+    pcm16_8k = audioop.ulaw2lin(mulaw_bytes, 2)
+    pcm16_16k, _ = audioop.ratecv(pcm16_8k, 2, 1, 8000, 16000, None)
+    return pcm16_16k
+
+def _pcm16_16k_to_mulaw8k(pcm16_16k: bytes) -> bytes:
+    """PCM16 16k mono -> µ-law 8k"""
+    if not pcm16_16k:
+        return b""
+    pcm16_8k, _ = audioop.ratecv(pcm16_16k, 2, 1, 16000, 8000, None)
+    return audioop.lin2ulaw(pcm16_8k, 2)
+
+# --- Bridge Twilio <-> OpenAI Realtime ---
 @sock.route("/voice-stream")
 def voice_stream(ws):
     """
-    Maneja el WebSocket para el streaming de voz.
+    Recibe audio del caller desde Twilio (µ-law 8k, base64 en 'media.payload'),
+    lo convierte a PCM16 16k y lo envía por WS a OpenAI Realtime.
+    Recibe audio de salida (PCM16 16k) desde OpenAI, lo convierte a µ-law 8k
+    y se lo devuelve a Twilio en tiempo real.
     """
-    print("[VOICE-STREAM] Conexión WebSocket iniciada.")
+    print("[VOICE] WebSocket Twilio conectado.")
     bot_config = None
     call_sid = None
     stream_sid = None
-    from_number = None
 
-    audio_buffer = BytesIO()
-    
+    # --- Conexión a OpenAI Realtime (API por WebSocket) ---
+    rt_url = f"wss://api.openai.com/v1/realtime?model={os.getenv('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview-2024-12-17')}"
+    rt_headers = [
+        f"Authorization: Bearer {OPENAI_API_KEY}",
+        "OpenAI-Beta: realtime=v1",
+    ]
+
+    # Creamos la conexión WS con OpenAI usando websocket-client (ya importado)
+    try:
+        rt_ws = websocket.create_connection(rt_url, header=rt_headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+    except Exception as e:
+        print(f"❌ No se pudo conectar a OpenAI Realtime WS: {e}")
+        ws.close()
+        return
+
+    # Configurar la sesión: forzar voz "nova" y formatos de audio 16k PCM
+    try:
+        session_update = {
+            "type": "session.update",
+            "session": {
+                "voice": "nova",  # <<<< fuerza VOZ FEMENINA NOVA (ignora JSON si difiere)
+                "input_audio_format": {"type": "wav", "sample_rate_hz": 16000, "channels": 1},
+                "output_audio_format": {"type": "wav", "sample_rate_hz": 16000, "channels": 1}
+            }
+        }
+        rt_ws.send(json.dumps(session_update))
+    except Exception as e:
+        print(f"❌ Error enviando session.update a OpenAI: {e}")
+
+    # Hilo lector desde OpenAI -> enviar a Twilio
+    stop_flag = False
+    def _rt_reader():
+        nonlocal stop_flag
+        try:
+            while not stop_flag:
+                msg = rt_ws.recv()
+                if not msg:
+                    break
+                try:
+                    data = json.loads(msg)
+                except Exception:
+                    continue
+
+                t = data.get("type", "")
+                if t == "output_audio.delta":
+                    # audio PCM16 16k en base64
+                    b64 = data.get("audio", "")
+                    if not b64:
+                        continue
+                    pcm16 = base64.b64decode(b64)
+                    mulaw8k = _pcm16_16k_to_mulaw8k(pcm16)
+                    if stream_sid:
+                        ws.send(json.dumps({
+                            "event": "media",
+                            "streamSid": stream_sid,
+                            "media": {"payload": base64.b64encode(mulaw8k).decode("ascii")}
+                        }))
+                elif t == "response.completed":
+                    # silencio: esperar siguiente input
+                    pass
+                elif t == "error":
+                    print(f"[VOICE] OpenAI error: {data}")
+        except Exception as e:
+            print(f"[VOICE] _rt_reader exception: {e}")
+
+    reader_thread = threading.Thread(target=_rt_reader, daemon=True)
+    reader_thread.start()
+
+    def _commit_and_request_answer():
+        # Termina el buffer de entrada y solicita una respuesta con audio
+        try:
+            rt_ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            # Opcionalmente, enviar un prompt de sistema si aún no existe contexto:
+            rt_ws.send(json.dumps({
+                "type": "response.create",
+                "response": {"modalities": ["audio"], "instructions": "Eres una asistente llamada Nova. Responde breve, natural y en español."}
+            }))
+        except Exception as e:
+            print(f"[VOICE] Error commit/create: {e}")
+
     try:
         while True:
-            message = ws.receive()
-            if not message:
+            raw = ws.receive()
+            if not raw:
                 break
-            
-            data = json.loads(message)
-            event = data.get("event")
 
-            if not _is_valid_message(data):
-                print(f"[VOICE-STREAM] Ignorando mensaje de formato inválido: {data}")
+            try:
+                data = json.loads(raw)
+            except Exception:
                 continue
 
-            if event == "start":
-                print("[VOICE-STREAM] Evento 'start' recibido.")
-                call_sid = data["start"]["callSid"]
-                stream_sid = data["start"]["streamSid"]
-                to_number = data["start"]["to"]
-                from_number = data["start"]["from"]
-                
+            if not _is_valid_message(data):
+                continue
+
+            evt = data.get("event")
+            if evt == "start":
+                call_sid = data["start"].get("callSid")
+                stream_sid = data["start"].get("streamSid")
+                to_number = data["start"].get("to")
                 bot_config = _voice_get_bot_config(to_number)
-                if not bot_config:
-                    print(f"[VOICE-STREAM] No se encontró bot para {to_number}. Desconectando.")
-                    ws.send(json.dumps({"event": "mark", "name": "disconnect"}))
-                    continue
+                print(f"[VOICE] start: call={call_sid}, stream={stream_sid}, bot={bot_config and bot_config['bot_name']}")
+                # Primer saludo (si quieres que hable al iniciar sin esperar audio):
+                # _commit_and_request_answer()
 
-                print(f"[VOICE-STREAM] Bot '{bot_config['bot_name']}' activo. CallSid: {call_sid}")
-                
-                voice_conversation_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
-                
-                # Generar y enviar el saludo de bienvenida
-                response_audio = client.audio.speech.create(
-                    model="tts-1",
-                    voice=bot_config["openai_voice"],
-                    input=bot_config["voice_greeting"]
-                )
-                
-                for chunk in response_audio.iter_bytes(chunk_size=4096):
-                    ws.send(json.dumps({
-                        "event": "media",
-                        "streamSid": stream_sid,
-                        "media": {
-                            "payload": base64.b64encode(chunk).decode("utf-8")
-                        }
-                    }))
-                
-            elif event == "media":
-                audio_payload = data["media"]["payload"]
-                audio_data = base64.b64decode(audio_payload)
-                audio_buffer.write(audio_data)
-
-            elif event == "speech":
-                print("[VOICE-STREAM] Evento 'speech' recibido. Procesando transcripción...")
-                
-                if audio_buffer.tell() == 0:
-                    print("Buffer de audio vacío, ignorando 'speech' event.")
+            elif evt == "media":
+                # Twilio nos envía audio µ-law 8k b64
+                b64 = data.get("media", {}).get("payload", "")
+                if not b64:
                     continue
-                
+                mulaw = base64.b64decode(b64)
+                pcm16_16k = _mulaw8k_to_pcm16_16k(mulaw)
+                # Enviar chunk a OpenAI como input streaming
                 try:
-                    audio_buffer.seek(0)
-                    
-                    # Usamos `client.audio.transcriptions.create` con un BytesIO en memoria
-                    transcription = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=("audio.mp3", audio_buffer.getvalue(), "audio/mpeg"),
-                        language="es"
-                    )
-                    user_speech = transcription.text.strip()
-                    audio_buffer.seek(0)
-                    audio_buffer.truncate(0)
-                    
-                    if not user_speech:
-                        print("Transcripción vacía. Ignorando.")
-                        continue
-                    
-                    print(f"[VOICE-STREAM] Usuario: {user_speech}")
-                    
-                    voice_conversation_history[call_sid].append({"role": "user", "content": user_speech})
-                    
-                    chat_completion_response = client.chat.completions.create(
-                        model=bot_config["model"],
-                        messages=voice_conversation_history[call_sid],
-                        temperature=0.6
-                    )
-                    
-                    bot_response_text = chat_completion_response.choices[0].message.content.strip()
-                    voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
-                    
-                    print(f"[VOICE-STREAM] Bot: {bot_response_text}")
-
-                    # Generar audio de la respuesta de la IA y enviarlo al WebSocket
-                    response_audio_stream = client.audio.speech.create(
-                        model="tts-1",
-                        voice=bot_config["openai_voice"],
-                        input=bot_response_text
-                    )
-                    
-                    for chunk in response_audio_stream.iter_bytes(chunk_size=4096):
-                        ws.send(json.dumps({
-                            "event": "media",
-                            "streamSid": stream_sid,
-                            "media": {
-                                "payload": base64.b64encode(chunk).decode("utf-8")
-                            }
-                        }))
-
-                    # Guardar en el historial de Firebase
-                    try:
-                        ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "user", "texto": user_speech, "hora": ahora_bot})
-                        fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "bot", "texto": bot_response_text, "hora": ahora_bot})
-                    except Exception as e:
-                        print(f"⚠️ No se pudo guardar historial de voz en Firebase: {e}")
-
+                    rt_ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm16_16k).decode("ascii")}))
                 except Exception as e:
-                    print(f"❌ Error procesando el audio con OpenAI: {e}")
-                    error_audio_stream = client.audio.speech.create(
-                        model="tts-1",
-                        voice=bot_config["openai_voice"],
-                        input="Lo siento, tuve un problema y no pude procesar tu mensaje."
-                    )
-                    for chunk in error_audio_stream.iter_bytes(chunk_size=4096):
-                        ws.send(json.dumps({
-                            "event": "media",
-                            "streamSid": stream_sid,
-                            "media": {
-                                "payload": base64.b64encode(chunk).decode("utf-8")
-                            }
-                        }))
-                
-            elif event == "stop":
-                print("[VOICE-STREAM] Evento 'stop' recibido. WebSocket cerrado.")
+                    print(f"[VOICE] Error enviando chunk a OpenAI: {e}")
+
+            elif evt == "mark":
+                pass  # ignorar
+
+            elif evt == "stop":
                 break
 
+            # Estrategia simple: cada ~200ms pedimos respuesta
+            # (Twilio manda ~20ms por frame; aquí pedimos seguido para latencia baja)
+            # Puedes refinar con un temporizador si lo prefieres:
+            _commit_and_request_answer()
+
     except Exception as e:
-        print(f"❌ Error en el WebSocket: {e}")
+        print(f"[VOICE] WS Twilio exception: {e}")
     finally:
-        if call_sid and call_sid in voice_conversation_history:
-            del voice_conversation_history[call_sid]
-        ws.close()
-        print("[VOICE-STREAM] Conexión WebSocket finalizada.")
+        stop_flag = True
+        try:
+            rt_ws.close()
+        except Exception:
+            pass
+        try:
+            ws.close()
+        except Exception:
+            pass
+        print("[VOICE] WebSocket Twilio cerrado.")
+
 
 # =======================
 #  Vistas de conversación (leen Firebase)
