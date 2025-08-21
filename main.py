@@ -46,12 +46,8 @@ try:
     import websocket
 except Exception as _e:
     pass
-
-# Importamos la versión asíncrona de OpenAI
-from openai import AsyncOpenAI
-# Importamos bibliotecas para manejo asíncrono
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+# 🟢 NUEVO: Importaciones para la cola de mensajes
+from queue import Queue
 
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
@@ -81,8 +77,6 @@ if APP_DOWNLOAD_URL_FALLBACK and not _valid_url(APP_DOWNLOAD_URL_FALLBACK):
     print(f"⚠️ APP_DOWNLOAD_URL_FALLBACK inválido: '{APP_DOWNLOAD_URL_FALLBACK}'")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-# 🟢 NUEVO: Cliente asíncrono para voz en tiempo real
-async_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 app = Flask(__name__)
 app.secret_key = "supersecreto_sundin_panel_2025"
@@ -1401,6 +1395,42 @@ def whatsapp_bot():
 #  💥 Versión corregida para evitar bloqueo en el bucle principal y errores de clave
 # =======================
 
+def _voice_get_bot_config(to_number: str) -> dict:
+    """Extrae y normaliza la configuración del bot para llamadas de voz."""
+    canon_to = _canonize_phone(to_number)
+    bot_cfg = None
+    for key, cfg in bots_config.items():
+        if _canonize_phone(key) == canon_to:
+            bot_cfg = cfg
+            break
+    
+    if not bot_cfg:
+        bot_cfg = bots_config.get(to_number)
+
+    if not bot_cfg:
+        return None
+
+    config = {
+        "bot_name": bot_cfg.get("name", "Unknown"),
+        "model": bot_cfg.get("model", "gpt-4o"),
+        "system_prompt": bot_cfg.get("system_prompt", "Eres un asistente de voz amable y natural. Habla con una voz humana."),
+        "voice_greeting": bot_cfg.get("voice_greeting", f"Hola, soy el asistente de {bot_cfg.get('business_name', bot_cfg.get('name', 'el bot'))}. ¿Cómo puedo ayudarte?"),
+        "openai_voice": bot_cfg.get("realtime", {}).get("voice", "nova"),
+    }
+    return config
+
+def _is_valid_message(message: dict) -> bool:
+    """
+    Valida que el mensaje de Twilio WebSocket tenga el formato esperado.
+    """
+    return (isinstance(message, dict) and 
+            "event" in message and 
+            isinstance(message.get("event"), str))
+
+# 🟢 NUEVO: Global que se mantendrá durante la llamada
+# La cola se usa para comunicación entre hilos
+voice_queues = {}
+
 # 1. Webhook inicial para la llamada entrante
 @app.route("/voice", methods=["POST"])
 def voice_webhook():
@@ -1421,20 +1451,119 @@ def voice_webhook():
     
     return str(resp)
 
+def process_voice_requests(call_sid, from_number, bot_config, ws_socket):
+    """
+    Función que se ejecuta en un hilo separado para procesar la cola de mensajes.
+    """
+    q = voice_queues.get(call_sid)
+    if not q:
+        print(f"[VOICE-PROCESSOR] Cola de voz no encontrada para {call_sid}")
+        return
+        
+    try:
+        while True:
+            # Esperamos un elemento en la cola. Si está vacía, bloqueamos el hilo.
+            request_data = q.get()
+            if request_data is None:  # Señal para terminar el hilo
+                break
+                
+            audio_data = request_data['audio']
+            stream_sid = request_data['stream_sid']
+            
+            # Guardar el audio del buffer en un archivo temporal para OpenAI
+            temp_audio_file = f"/tmp/{call_sid}_{uuid.uuid4().hex}.mp3"
+            with open(temp_audio_file, "wb") as f:
+                f.write(audio_data)
+
+            try:
+                # Transcribir el audio del usuario
+                with open(temp_audio_file, "rb") as f:
+                    transcription = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        language="es"
+                    )
+                user_speech = transcription.text.strip()
+                os.remove(temp_audio_file)
+                
+                if not user_speech:
+                    print("Transcripción vacía. Ignorando.")
+                    continue
+                
+                print(f"[VOICE-PROCESSOR] Usuario: {user_speech}")
+                
+                # Actualizar el historial y obtener la respuesta de la IA
+                voice_conversation_history[call_sid].append({"role": "user", "content": user_speech})
+                
+                chat_completion_response = client.chat.completions.create(
+                    model=bot_config["model"],
+                    messages=voice_conversation_history[call_sid],
+                    temperature=0.6
+                )
+                
+                bot_response_text = chat_completion_response.choices[0].message.content.strip()
+                voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
+                
+                print(f"[VOICE-PROCESSOR] Bot: {bot_response_text}")
+
+                # Generar audio de la respuesta de la IA y enviarlo al WebSocket
+                response_audio_stream = client.audio.speech.create(
+                    model="tts-1",
+                    voice=bot_config["openai_voice"],
+                    input=bot_response_text
+                )
+                
+                for chunk in response_audio_stream.iter_bytes(chunk_size=4096):
+                    ws_socket.send(json.dumps({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {
+                            "payload": base64.b64encode(chunk).decode("utf-8")
+                        }
+                    }))
+
+                # Guardar en el historial de Firebase
+                try:
+                    ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "user", "texto": user_speech, "hora": ahora_bot})
+                    fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "bot", "texto": bot_response_text, "hora": ahora_bot})
+                except Exception as e:
+                    print(f"⚠️ No se pudo guardar historial de voz en Firebase: {e}")
+
+            except Exception as e:
+                print(f"❌ Error en el hilo de procesamiento con OpenAI: {e}")
+                # Envía un mensaje de error a Twilio para notificar al usuario
+                error_audio_stream = client.audio.speech.create(
+                    model="tts-1",
+                    voice=bot_config["openai_voice"],
+                    input="Lo siento, tuve un problema y no pude procesar tu mensaje."
+                )
+                for chunk in error_audio_stream.iter_bytes(chunk_size=4096):
+                    ws_socket.send(json.dumps({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {
+                            "payload": base64.b64encode(chunk).decode("utf-8")
+                        }
+                    }))
+    finally:
+        print(f"[VOICE-PROCESSOR] Hilo de procesamiento para {call_sid} terminado.")
+
+
 # 2. Manejador del WebSocket para el streaming de voz
 @sock.route("/voice-stream")
 def voice_stream(ws):
     """
     Maneja el WebSocket para el streaming de voz.
-    Recibe audio de Twilio, lo procesa con OpenAI y envía la respuesta de vuelta.
+    Recibe audio de Twilio y lo pasa a otro hilo para su procesamiento.
     """
     print("[VOICE-STREAM] Conexión WebSocket iniciada.")
     bot_config = None
     call_sid = None
     stream_sid = None
     from_number = None
-    
-    # Buffer para acumular el audio del usuario antes de enviarlo a OpenAI STT
+
+    # Buffer para acumular el audio del usuario
     audio_buffer = bytearray()
     
     try:
@@ -1466,129 +1595,51 @@ def voice_stream(ws):
 
                 print(f"[VOICE-STREAM] Bot '{bot_config['bot_name']}' activo. CallSid: {call_sid}")
                 
-                # Inicializamos la conversación
+                # Inicializamos la conversación y la cola de mensajes
                 voice_conversation_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
+                voice_queues[call_sid] = Queue()
                 
-                # Generamos y enviamos el saludo de bienvenida de forma asíncrona
-                def send_greeting_async():
-                    try:
-                        response_audio = client.audio.speech.create(
-                            model="tts-1",
-                            voice=bot_config["openai_voice"],
-                            input=bot_config["voice_greeting"]
-                        )
-                        for chunk in response_audio.iter_bytes(chunk_size=4096):
-                            ws.send(json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid,
-                                "media": {
-                                    "payload": base64.b64encode(chunk).decode("utf-8")
-                                }
-                            }))
-                    except Exception as e:
-                        print(f"❌ Error enviando saludo en hilo: {e}")
+                # Iniciamos el hilo de procesamiento de la IA
+                processor_thread = Thread(target=process_voice_requests, args=(call_sid, from_number, bot_config, ws), daemon=True)
+                processor_thread.start()
+                
+                # Generamos y enviamos el saludo de bienvenida
+                response_audio = client.audio.speech.create(
+                    model="tts-1",
+                    voice=bot_config["openai_voice"],
+                    input=bot_config["voice_greeting"]
+                )
+                for chunk in response_audio.iter_bytes(chunk_size=4096):
+                    ws.send(json.dumps({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {
+                            "payload": base64.b64encode(chunk).decode("utf-8")
+                        }
+                    }))
 
-                Thread(target=send_greeting_async, daemon=True).start()
-                
             elif event == "media":
-                # Recibir audio del usuario y agregarlo al buffer
                 audio_payload = data["media"]["payload"]
                 audio_data = base64.b64decode(audio_payload)
                 audio_buffer.extend(audio_data)
 
             elif event == "speech":
-                print("[VOICE-STREAM] Evento 'speech' recibido. Procesando transcripción...")
+                print("[VOICE-STREAM] Evento 'speech' recibido. Poniendo en cola para procesamiento.")
                 
-                # Lógica para procesar el audio del buffer en un hilo separado
-                def process_audio_and_respond():
-                    nonlocal audio_buffer
-                    
-                    # Usamos una copia del buffer para no bloquear el hilo principal
-                    temp_audio = audio_buffer[:]
-                    audio_buffer = bytearray()
-                    
-                    if not temp_audio:
-                        print("Buffer de audio vacío, ignorando 'speech' event.")
-                        return
-                    
-                    try:
-                        # Guardar el buffer en un archivo temporal para OpenAI
-                        temp_audio_file = f"/tmp/{call_sid}_{uuid.uuid4().hex}.mp3"
-                        with open(temp_audio_file, "wb") as f:
-                            f.write(temp_audio)
-                        
-                        # Transcribir el audio del usuario (síncrono, pero en hilo separado)
-                        with open(temp_audio_file, "rb") as f:
-                            transcription_response = client.audio.transcriptions.create(
-                                model="whisper-1",
-                                file=f,
-                                language="es"
-                            )
-                        user_speech = transcription_response.text.strip()
-                        os.remove(temp_audio_file)
-                        
-                        if not user_speech:
-                            print("Transcripción vacía. Ignorando.")
-                            return
-                        
-                        print(f"[VOICE-STREAM] Usuario: {user_speech}")
-                        
-                        # Actualizar el historial y obtener la respuesta de la IA (síncrono, en hilo separado)
-                        voice_conversation_history[call_sid].append({"role": "user", "content": user_speech})
-                        
-                        chat_completion_response = client.chat.completions.create(
-                            model=bot_config["model"],
-                            messages=voice_conversation_history[call_sid],
-                            temperature=0.6
-                        )
-                        
-                        bot_response_text = chat_completion_response.choices[0].message.content.strip()
-                        voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
-                        
-                        print(f"[VOICE-STREAM] Bot: {bot_response_text}")
-
-                        # Generar audio de la respuesta de la IA (síncrono, en hilo separado) y enviarlo
-                        response_audio_stream = client.audio.speech.create(
-                            model="tts-1",
-                            voice=bot_config["openai_voice"],
-                            input=bot_response_text
-                        )
-                        
-                        for chunk in response_audio_stream.iter_bytes(chunk_size=4096):
-                            ws.send(json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid,
-                                "media": {
-                                    "payload": base64.b64encode(chunk).decode("utf-8")
-                                }
-                            }))
-
-                        # Guardar en el historial de Firebase
-                        try:
-                            ahora_bot = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "user", "texto": user_speech, "hora": ahora_bot})
-                            fb_append_historial(bot_config["bot_name"], from_number, {"tipo": "bot", "texto": bot_response_text, "hora": ahora_bot})
-                        except Exception as e:
-                            print(f"⚠️ No se pudo guardar historial de voz en Firebase: {e}")
-
-                    except Exception as e:
-                        print(f"❌ Error procesando el audio con OpenAI: {e}")
-                        error_audio_stream = client.audio.speech.create(
-                            model="tts-1",
-                            voice=bot_config["openai_voice"],
-                            input="Lo siento, tuve un problema y no pude procesar tu mensaje."
-                        )
-                        for chunk in error_audio_stream.iter_bytes(chunk_size=4096):
-                            ws.send(json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid,
-                                "media": {
-                                    "payload": base64.b64encode(chunk).decode("utf-8")
-                                }
-                            }))
+                # El "productor" (WebSocket) pone el audio en la cola
+                audio_request = {
+                    'audio': audio_buffer[:],
+                    'stream_sid': data['streamSid']
+                }
                 
-                # Ejecutar la función de procesamiento en un hilo separado
-                Thread(target=process_audio_and_respond, daemon=True).start()
+                # Vaciar el buffer del hilo principal
+                audio_buffer = bytearray()
+                
+                q = voice_queues.get(call_sid)
+                if q:
+                    q.put(audio_request)
+                else:
+                    print(f"⚠️ Cola de voz no encontrada para {call_sid}. ¿Hilo de procesamiento no iniciado?")
                 
             elif event == "stop":
                 print("[VOICE-STREAM] Evento 'stop' recibido. WebSocket cerrado.")
@@ -1597,8 +1648,14 @@ def voice_stream(ws):
     except Exception as e:
         print(f"❌ Error en el WebSocket: {e}")
     finally:
+        # Al cerrar el WebSocket, enviar una señal al hilo de procesamiento para que termine
+        q = voice_queues.get(call_sid)
+        if q:
+            q.put(None)
+            del voice_queues[call_sid]
         if call_sid and call_sid in voice_conversation_history:
             del voice_conversation_history[call_sid]
+        
         ws.close()
         print("[VOICE-STREAM] Conexión WebSocket finalizada.")
 
