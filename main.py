@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import os
 import json
 import time
+from threading import Thread, Lock
 from datetime import datetime, timedelta
 import csv
 from io import StringIO
@@ -1106,7 +1107,7 @@ def push_token():
             msg_id = fcm.send(msg)
             return jsonify({"success": True, "mode": "token", "id": msg_id})
         else:
-            return jsonify({"success": False, "message": "token(s) requerido(s)"}), 400
+            return jsonify({"success": False, "message": "Falta topic o token(s)"}), 400
     except Exception as e:
         print(f"❌ Error FCM universal: {e}")
         return jsonify({"success": False, "message": "FCM error"}), 500
@@ -1390,7 +1391,7 @@ def whatsapp_bot():
 
 # =======================
 #  🔊 VOZ en tiempo real con Twilio Voice Streaming
-#  💥 Versión 4.0: Eliminación de hilos y uso de BytesIO
+#  💥 Versión 5.0: Implementación robusta sin hilos ni archivos
 # =======================
 
 def _voice_get_bot_config(to_number: str) -> dict:
@@ -1512,10 +1513,9 @@ def voice_stream(ws):
                     continue
                 
                 try:
-                    # Preparar el buffer en memoria para la transcripción
                     audio_buffer.seek(0)
                     
-                    # Transcribir el audio del usuario
+                    # Usamos `client.audio.transcriptions.create` con un BytesIO en memoria
                     transcription = client.audio.transcriptions.create(
                         model="whisper-1",
                         file=("audio.mp3", audio_buffer.getvalue(), "audio/mpeg"),
