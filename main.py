@@ -1636,30 +1636,23 @@ if sock:
                 print("[WS] error commit/response.create:", e)
 
         def _ai_reader():
-         nonlocal ai_reader_running, stream_sid
-    while ai_reader_running:
-        try:
-            # recv() ahora es no-bloqueante (timeout=0.0); puede no traer frame
-            msg = ws_ai.recv()
-            if not msg:
-                time.sleep(0.01)
-                continue
-            data = json.loads(msg)
-            t = data.get("type")
-            if t == "response.audio.delta":
-                payload = data.get("delta") or ""
-                if payload and stream_sid:
-                    _send_twi_media(ws_twi, stream_sid, payload)
-            elif t == "error":
-                print("[WS][AI] ERROR:", data)
-        except WebSocketTimeoutException:
-            # No hay datos en este instante; ceder CPU un momento
-            time.sleep(0.01)
-            continue
-        except Exception as e:
-            print("ℹ️ AI reader finalizado:", e)
-            break
-
+            nonlocal ai_reader_running, stream_sid
+            while ai_reader_running:
+                try:
+                    msg = ws_ai.recv()
+                    if not msg:
+                        continue
+                    data = json.loads(msg)
+                    t = data.get("type")
+                    if t == "response.audio.delta":
+                        payload = data.get("delta") or ""
+                        if payload and stream_sid:
+                            _send_twi_media(ws_twi, stream_sid, payload)
+                    elif t == "error":
+                        print("[WS][AI] ERROR:", data)
+                except Exception as e:
+                    print("ℹ️ AI reader finalizado:", e)
+                    break
 
         def _silence_watcher():
             while not silence_kill.is_set():
