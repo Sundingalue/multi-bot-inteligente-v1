@@ -1,8 +1,3 @@
-Perfecto. He tomado tu archivo requirements.txt y lo he editado para que sea compatible con el nuevo entorno de FastAPI y Uvicorn, eliminando las dependencias conflictivas de eventlet y gunicorn.
-
-Aquí tienes el archivo requirements.txt editado y completo. Solo necesitas copiar y pegar esto, y luego seguir los pasos que te di para el deploy y el comando de inicio en Render.
-
-requirements.txt Editado para FastAPI
 # Core FastAPI y servidor web
 fastapi
 uvicorn[standard]
