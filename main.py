@@ -8,13 +8,13 @@ eventlet.monkey_patch()
 # Resto de importaciones
 from flask import Flask, request, session, redirect, url_for, send_file, jsonify, render_template, make_response, Response
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.twiml.voice_response import VoiceResponse, Connect
+from twilio.twiml.voice_response import VoiceResponse, Gather, Connect
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
 import time
-from threading import Thread, Event
+from threading import Thread
 from datetime import datetime, timedelta
 import csv
 from io import StringIO
@@ -24,15 +24,7 @@ import random
 import hashlib
 import html
 import uuid
-import base64
-import struct
-import ssl
-import urllib.parse
-try:
-    from flask_sock import Sock
-    import websocket  # websocket-client
-except Exception as _e:
-    print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
+import requests
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
@@ -43,8 +35,19 @@ from firebase_admin import credentials, db
 # 🔹 NEW: FCM (para notificaciones push)
 from firebase_admin import messaging as fcm
 
+# 🔹 NEW (Realtime bridge) — dependencias WebSocket (solo para VOZ en tiempo real)
+import base64
+import ssl
+from threading import Event
+from urllib.parse import urlsplit
+try:
+    from flask_sock import Sock
+    import websocket  # websocket-client
+except Exception as _e:
+    print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
+
 # =======================
-# Cargar variables de entorno (Render -> Secret File)
+#  Cargar variables de entorno (Render -> Secret File)
 # =======================
 load_dotenv("/etc/secrets/.env")
 load_dotenv()
@@ -62,8 +65,8 @@ APP_DOWNLOAD_URL_FALLBACK = (os.environ.get("APP_DOWNLOAD_URL", "").strip())
 # 🔐 NEW (opcional): Bearer para proteger endpoints /push/* y (ahora) API móvil
 API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
 
-# 🔹 NEW (Realtime): ajustes por defecto del modelo/voz
-OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview").strip()
+# 🔹 NEW (Realtime): ajustes por defecto del modelo/voz (puedes sobreescribir en bots/*.json)
+OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17").strip()
 OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()
 
 def _valid_url(u: str) -> bool:
@@ -101,7 +104,7 @@ def _bearer_ok(req) -> bool:
     return auth == f"Bearer {API_BEARER_TOKEN}"
 
 # =======================
-# Inicializar Firebase
+#  Inicializar Firebase
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
 firebase_db_url = (os.getenv("FIREBASE_DB_URL") or "").strip()
@@ -128,7 +131,7 @@ if not firebase_admin._apps:
         print("⚠️ Firebase inicializado sin databaseURL (db.reference fallará hasta configurar FIREBASE_DB_URL).")
 
 # =======================
-# Twilio REST Client (para respuestas manuales)
+#  Twilio REST Client (para respuestas manuales)
 # =======================
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
@@ -141,7 +144,7 @@ else:
     print("⚠️ TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN no configurados. El envío manual desde panel no funcionará hasta configurarlos.")
 
 # =======================
-# Cargar bots desde carpeta bots/
+#  Cargar bots desde carpeta bots/
 # =======================
 def load_bots_folder():
     bots = {}
@@ -149,9 +152,9 @@ def load_bots_folder():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        bots[k] = v
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    bots[k] = v
         except Exception as e:
             print(f"⚠️ No se pudo cargar {path}: {e}")
     return bots
@@ -161,7 +164,7 @@ if not bots_config:
     print("⚠️ No se encontraron bots en ./bots/*.json")
 
 # =======================
-# 💡 Registrar la API de facturación (Blueprint)
+#  💡 Registrar la API de facturación (Blueprint)
 # =======================
 from billing_api import billing_bp, record_openai_usage
 app.register_blueprint(billing_bp, url_prefix="/billing")
@@ -172,16 +175,21 @@ app.register_blueprint(mobile_bp, url_prefix="/api/mobile")
 
 
 # =======================
-# Memorias por sesión (runtime)
+#  Memorias por sesión (runtime)
 # =======================
-session_history = {}       # clave_sesion -> mensajes para OpenAI (texto)
-last_message_time = {}     # clave_sesion -> timestamp último mensaje
-follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
-agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
-greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
+session_history = {}         # clave_sesion -> mensajes para OpenAI (texto)
+last_message_time = {}       # clave_sesion -> timestamp último mensaje
+follow_up_flags = {}         # clave_sesion -> {"5min": bool, "60min": bool}
+agenda_state = {}            # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
+greeted_state = {}           # clave_sesion -> bool (si ya se saludó)
+
+# ✅ CORRECCIÓN: Definición de variables globales para la voz (legacy; sin uso en Realtime, se mantienen para no romper nada)
+voice_call_cache = {}
+voice_conversation_history = {}
+
 
 # =======================
-# Helpers generales (neutros)
+#  Helpers generales (neutros)
 # =======================
 def _hora_to_epoch_ms(hora_str: str) -> int:
     try:
@@ -225,38 +233,18 @@ def _canonize_phone(raw: str) -> str:
 # ✅ VOICE helper: encuentra bot por número (E.164 o whatsapp:+)
 def _get_bot_cfg_by_any_number(to_number: str):
     if not to_number:
-        # Fallback a un bot si solo hay uno
         if len(bots_config) == 1:
             return list(bots_config.values())[0]
-        return None
-
-    target = _canonize_phone(to_number)
-
-    # 1) Coincidencias directas
-    if to_number in bots_config:
-        return bots_config.get(to_number)
-    cand_whatsapp = f"whatsapp:{target}"
-    if cand_whatsapp in bots_config:
-        return bots_config.get(cand_whatsapp)
-    if target in bots_config:
-        return bots_config.get(target)
-
-    # 2) Normalizando TODAS las claves del JSON
+    
+    # Buscar por E.164 para mayor compatibilidad
+    canon_to = _canonize_phone(to_number)
     for key, cfg in bots_config.items():
-        try:
-            if _canonize_phone(key) == target:
-                return cfg
-        except Exception:
-            continue
+        if _canonize_phone(key) == canon_to:
+            return cfg
+    
+    # Si no, probar clave directa
+    return bots_config.get(to_number)
 
-    # 3) Fallback: si solo hay un bot cargado
-    try:
-        if len(bots_config) == 1:
-            return list(bots_config.values())[0]
-    except Exception:
-        pass
-
-    return None
 
 def _get_bot_number_by_name(bot_name: str) -> str:
     """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
@@ -305,7 +293,7 @@ def _make_system_message(bot_cfg: dict) -> str:
     return (bot_cfg or {}).get("system_prompt", "") or ""
 
 # =======================
-# Helpers de links por BOT
+#  Helpers de links por BOT
 # =======================
 def _drill_get(d: dict, path: str):
     cur = d
@@ -348,7 +336,7 @@ def _effective_app_url(bot_cfg: dict) -> str:
     return APP_DOWNLOAD_URL_FALLBACK if _valid_url(APP_DOWNLOAD_URL_FALLBACK) else ""
 
 # =======================
-# Intenciones
+#  Intenciones
 # =======================
 SCHEDULE_OFFER_PAT = re.compile(
     r"\b(enlace|link|calendar|calendario|agendar|agenda|reservar|reserva|cita|schedule|book|appointment|meeting|call)\b",
@@ -410,7 +398,7 @@ def _can_send_link(clave, cooldown_min=10):
     return True
 
 # =======================
-# Firebase: helpers de leads
+#  Firebase: helpers de leads
 # =======================
 def _lead_ref(bot_nombre, numero):
     return db.reference(f"leads/{bot_nombre}/{numero}")
@@ -507,7 +495,7 @@ def fb_clear_historial(bot_nombre, numero):
         return False
 
 # =======================
-# ✅ Kill-Switch GLOBAL por bot
+#  ✅ Kill-Switch GLOBAL por bot
 # =======================
 def fb_is_bot_on(bot_name: str) -> bool:
     try:
@@ -521,7 +509,7 @@ def fb_is_bot_on(bot_name: str) -> bool:
     return True  # si no hay dato, asumimos ON
 
 # =======================
-# ✅ NUEVO: Kill-Switch por conversación (ON/OFF individual)
+#  ✅ NUEVO: Kill-Switch por conversación (ON/OFF individual)
 # =======================
 def fb_is_conversation_on(bot_nombre: str, numero: str) -> bool:
     """Devuelve True si la conversación tiene el bot activado; si no existe el flag, asume ON."""
@@ -549,7 +537,7 @@ def fb_set_conversation_on(bot_nombre: str, numero: str, enabled: bool):
         return False
 
 # =======================
-# 🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
+#  🔄 Hidratar sesión desde Firebase (evita perder contexto tras reinicios)
 # =======================
 def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_number: str):
     if clave_sesion in session_history:
@@ -581,7 +569,7 @@ def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_numb
     follow_up_flags[clave_sesion] = {"5min": False, "60min": False}
 
 # =======================
-# Rutas UI: Paneles
+#  Rutas UI: Paneles
 # =======================
 def _load_users():
     """
@@ -769,7 +757,7 @@ def panel():
                 clave = request.form.get("password")  # por si el input se llama 'password'
             clave = (clave or "").strip()
 
-            # ✅ Remember me desde HTML: 'recordarme' (hidden) o 'remember' (checkbox)
+            # ✅ Sesión persistente si marcaron "Recuérdame"
             remember_flag = (request.form.get("recordarme") or request.form.get("remember") or "").strip().lower()
             remember_on = remember_flag in ("on", "1", "true", "yes", "si", "sí")
 
@@ -837,7 +825,7 @@ def logout():
     return resp
 
 # =======================
-# Guardar/Exportar
+#  Guardar/Exportar
 # =======================
 @app.route("/guardar-lead", methods=["POST"])
 def guardar_edicion():
@@ -890,7 +878,7 @@ def exportar():
     return send_file(output, mimetype="text/csv", download_name="leads.csv", as_attachment=True)
 
 # =======================
-# ✅ NUEVO: Borrar / Vaciar conversaciones (protegido)
+#  ✅ NUEVO: Borrar / Vaciar conversaciones (protegido)
 # =======================
 @app.route("/borrar-conversacion", methods=["POST"])
 def borrar_conversacion_post():
@@ -949,7 +937,7 @@ def api_delete_chat():
     return jsonify({"ok": ok, "bot": bot_normalizado, "numero": numero})
 
 # =======================
-# ✅ API para responder MANUALMENTE desde el panel o la APP (Bearer)
+#  ✅ API para responder MANUALMENTE desde el panel o la APP (Bearer)
 # =======================
 @app.route("/api/send_manual", methods=["POST", "OPTIONS"])
 def api_send_manual():
@@ -999,7 +987,7 @@ def api_send_manual():
         return jsonify({"error": "Fallo enviando el mensaje"}), 500
 
 # =======================
-# ✅ API para ON/OFF por conversación (panel o APP con Bearer)
+#  ✅ API para ON/OFF por conversación (panel o APP con Bearer)
 # =======================
 @app.route("/api/conversation_bot", methods=["POST", "OPTIONS"])
 def api_conversation_bot():
@@ -1030,7 +1018,7 @@ def api_conversation_bot():
     return jsonify({"ok": bool(ok), "enabled": bool(enabled)})
 
 # =======================
-# 🔔 NEW: Endpoints PUSH (evitan HTTP 404)
+#  🔔 Endpoints PUSH
 # =======================
 
 def _push_common_data(payload: dict) -> dict:
@@ -1150,7 +1138,6 @@ def push_universal():
     topic = (body.get("topic") or body.get("segmento") or "").strip()
     token = (body.get("token") or "").strip()
     tokens = body.get("tokens") if isinstance(body.get("tokens"), list) else None
-
     data = _push_common_data({
         "link": body.get("link") or "",
         "screen": body.get("screen") or "",
@@ -1192,8 +1179,9 @@ def push_universal():
         print(f"❌ Error FCM universal: {e}")
         return jsonify({"success": False, "message": "FCM error"}), 500
 
+
 # =======================
-# Webhook WhatsApp
+#  Webhook WhatsApp
 # =======================
 @app.route("/webhook", methods=["GET"])
 def verify_whatsapp():
@@ -1225,30 +1213,24 @@ def whatsapp_bot():
         resp.message("Este número no está asignado a ningún bot.")
         return str(resp)
 
-    # Reconstruir contexto (por si el proceso se reinició)
     _hydrate_session_from_firebase(clave_sesion, bot, sender_number)
 
-    # Guardar SIEMPRE el mensaje del usuario (trazabilidad)
     try:
         ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         fb_append_historial(bot["name"], sender_number, {"tipo": "user", "texto": incoming_msg, "hora": ahora})
     except Exception as e:
         print(f"❌ Error guardando lead: {e}")
 
-    # 🔒 Kill-Switch GLOBAL por bot
     bot_name = bot.get("name", "")
     if bot_name and not fb_is_bot_on(bot_name):
-        return str(MessagingResponse())  # Twilio <Response/> vacío
+        return str(MessagingResponse())
 
-    # 🔒 ✅ NUEVO: Kill-Switch POR CONVERSACIÓN
     if not fb_is_conversation_on(bot_name, sender_number):
-        # Bot OFF para esta conversación: no responder, solo registrar
         return str(MessagingResponse())
 
     response = MessagingResponse()
     msg = response.message()
 
-    # Atajos neutrales
     if _wants_app_download(incoming_msg):
         url_app = _effective_app_url(bot)
         if url_app:
@@ -1280,7 +1262,6 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ====== FLUJO AGENDA ======
     st = _get_agenda(clave_sesion)
     agenda_cfg = (bot.get("agenda") or {}) if isinstance(bot, dict) else {}
 
@@ -1336,7 +1317,6 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ====== Sesión / saludo ======
     if clave_sesion not in session_history:
         sysmsg = _make_system_message(bot)
         session_history[clave_sesion] = [{"role": "system", "content": sysmsg}] if sysmsg else []
@@ -1352,7 +1332,6 @@ def whatsapp_bot():
         last_message_time[clave_sesion] = time.time()
         return str(response)
 
-    # ====== Continuación normal (GPT) ======
     session_history.setdefault(clave_sesion, []).append({"role": "user", "content": incoming_msg})
     last_message_time[clave_sesion] = time.time()
 
@@ -1366,7 +1345,6 @@ def whatsapp_bot():
             messages=session_history[clave_sesion]
         )
 
-        # Contenido
         respuesta = (completion.choices[0].message.content or "").strip()
         respuesta = _apply_style(bot, respuesta)
 
@@ -1387,14 +1365,12 @@ def whatsapp_bot():
         agenda_state.setdefault(clave_sesion, {})
         agenda_state[clave_sesion]["last_bot_hash"] = _hash_text(respuesta)
 
-        # 🔹 REGISTRO DE TOKENS POR BOT (para facturación):
         try:
             usage = getattr(completion, "usage", None)
             if usage:
                 input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
                 output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
             else:
-                # SDKs a veces traen usage como dict
                 usage_dict = getattr(completion, "to_dict", lambda: {})()
                 input_tokens = int(((usage_dict or {}).get("usage") or {}).get("prompt_tokens", 0))
                 output_tokens = int(((usage_dict or {}).get("usage") or {}).get("completion_tokens", 0))
@@ -1414,75 +1390,58 @@ def whatsapp_bot():
 
     return str(response)
 
+
 # =======================
-# 🔊 VOZ con OpenAI Realtime + Twilio Media Streams
+#  🔊 VOZ en tiempo real (Twilio <-> OpenAI Realtime)
 # =======================
-
-def _wss_base():
-    base = (request.url_root or "").strip().rstrip("/")
-    if base.startswith("http://"):
-        base = "wss://" + base[len("http://"):]
-    elif base.startswith("https://"):
-        base = "wss://" + base[len("https://"):]
-    else:
-        base = "wss://" + base
-    return base
-
-def _extract_called_number(req):
-    """
-    Extrae el número de destino de la llamada de forma robusta.
-    Twilio suele mandar 'To', pero según rutas proxy/carriers puede venir como 'Called' u otros.
-    """
-    for key in ("To", "Called", "OriginalTo", "CalledTo", "Destination", "CalledVia"):
-        val = (req.values.get(key) or "").strip()
-        if val:
-            return val
-    return ""
-
-def _send_twi_media(ws_twi_conn, stream_sid, payload):
-    """
-    Función auxiliar para enviar datos de audio a Twilio en el formato correcto.
-    Ahora en el scope global para evitar problemas de hilos.
-    """
+def _get_bot_cfg_by_any_number(to_number: str):
+    if not to_number:
+        if len(bots_config) == 1:
+            return list(bots_config.values())[0]
+        return None
+    target = _canonize_phone(to_number)
+    if to_number in bots_config:
+        return bots_config.get(to_number)
+    cand_whatsapp = f"whatsapp:{target}"
+    if cand_whatsapp in bots_config:
+        return bots_config.get(cand_whatsapp)
+    if target in bots_config:
+        return bots_config.get(target)
+    for key, cfg in bots_config.items():
+        try:
+            if _canonize_phone(key) == target:
+                return cfg
+        except Exception:
+            continue
     try:
-        ws_twi_conn.send(json.dumps({
-            "event": "media",
-            "streamSid": stream_sid,
-            "media": {
-                "payload": payload,
-            },
-        }))
-    except Exception as e:
-        print(f"[WS] ⚠️ Error al enviar datos a Twilio: {e}")
-
-from urllib.parse import urlsplit
+        if len(bots_config) == 1:
+            return list(bots_config.values())[0]
+    except Exception:
+        pass
+    return None
 
 @app.route("/voice", methods=["POST"])
 def voice_webhook():
     call_sid = request.values.get("CallSid")
-    to_number = request.values.get("To")  # número destino (tu Twilio)
+    to_number = request.values.get("To")
     from_number = request.values.get("From")
 
-    # 1. Buscar bot por número
     bot_cfg = _get_bot_cfg_by_any_number(to_number)
-
     if not bot_cfg:
-        # fallback: responder silencio
         resp = VoiceResponse()
         resp.say("Lo siento, no hay un bot configurado para este número.")
         return str(resp)
 
     bot_name = bot_cfg.get("name", "Unknown")
-    model = (bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL).strip()
-    voice = ((bot_cfg.get("voice") or {}).get("openai_voice") or OPENAI_REALTIME_VOICE).strip()
+    model = (bot_cfg.get("realtime", {}).get("model") or OPENAI_REALTIME_MODEL).strip()
+    voice = (bot_cfg.get("realtime", {}).get("voice") or OPENAI_REALTIME_VOICE).strip()
     sysmsg = (bot_cfg.get("system_prompt") or "").strip()
 
-    # Guardar config en Firebase para que /twilio-media-stream la use (incluye system_prompt)
     try:
         db.reference(f"voice_sessions/{call_sid}").set({
             "bot_name": bot_name,
             "model": model,
-            "voice": aura,
+            "voice": voice,
             "system_prompt": sysmsg,
             "created": datetime.now().isoformat()
         })
@@ -1490,7 +1449,6 @@ def voice_webhook():
     except Exception as e:
         print(f"⚠️ Error guardando config voice: {e}")
 
-    # 2. TwiML SOLO con <Connect><Stream> usando host dinámico
     host = urlsplit(request.url_root).netloc
     wss_url = f"wss://{host}/twilio-media-stream"
 
@@ -1499,13 +1457,10 @@ def voice_webhook():
         connect.stream(url=wss_url)
     return str(resp)
 
-
-# ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX (sin voice_entry)
+# Vista de depuración simple
 @app.get("/voice_debug")
 def voice_debug():
     fake_to = (request.args.get("to") or "").strip()
-    if not fake_to:
-        return Response("<h3>Usa ?to=+1346XXXXXXX para previsualizar TwiML</h3>", mimetype="text/html")
     host = urlsplit(request.url_root).netloc
     wss_url = f"wss://{host}/twilio-media-stream"
     resp = VoiceResponse()
@@ -1513,23 +1468,19 @@ def voice_debug():
         connect.stream(url=wss_url)
     return Response(str(resp), mimetype="text/xml")
 
-# --- WebSocket server (Twilio -> OpenAI Realtime) ---
-sock = None
+# WebSocket bridge Twilio <-> OpenAI Realtime
 try:
     sock = Sock(app)
 except Exception as _e:
+    sock = None
     print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
 
 if sock:
     @sock.route('/twilio-media-stream')
     def twilio_media_stream(ws_twi):
-        """
-        Bridge WS con commits por silencio:
-        - Recibe audio (u-law 8k) de Twilio
-        - Envía append a OpenAI
-        - En silencio (~900 ms) hace commit + response.create (modalidad audio)
-        - Reenvía response.audio.delta a Twilio como media
-        """
+        import json, base64, time
+        from threading import Thread
+
         def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
             headers = [
                 "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1542,7 +1493,7 @@ if sock:
                 "type": "session.update",
                 "session": {
                     "voice": voice,
-                    "instructions": system_prompt or "Eres Sara, asesora amable y natural. Responde breve y directo.",
+                    "instructions": system_prompt or "Eres un asistente de voz amable y breve.",
                     "input_audio_format":  "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
                     "turn_detection": {"type": "server_vad", "silence_duration_ms": 700},
@@ -1551,44 +1502,28 @@ if sock:
             ws.send(json.dumps(session_update))
             return ws
 
-        try:
-            print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
-            print(f"[WS] Headers completos: {request.headers}")
-        except Exception:
-            pass
-
-        # Recuperar la configuración del bot usando el CallSid (Firebase)
         call_sid = request.headers.get('X-Twilio-CallSid')
         session_data = None
         if call_sid:
             try:
                 ref = db.reference(f"voice_sessions/{call_sid}")
                 session_data = ref.get()
-                # Limpieza opcional
                 ref.delete()
             except Exception as e:
-                print(f"[WS] ❌ Error al leer la sesión de Firebase para CallSid '{call_sid}': {e}")
-        
+                print(f"[WS] ❌ Error leyendo voice_sessions: {e}")
+
         if not session_data:
-            print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración por defecto del bot.")
             bot_cfg = {}
-            bot_name = "Sara"
+            bot_name = "Default"
             model = OPENAI_REALTIME_MODEL
             voice = OPENAI_REALTIME_VOICE
-            sysmsg = "Eres Sara, asesora de In Houston Texas. Hablas de forma cálida, natural y breve."
+            sysmsg = "Eres un asistente de In Houston Texas. Voz natural y respuestas breves."
         else:
-            bot_cfg = _get_bot_cfg_by_name(session_data.get("bot_name")) or {}
-            bot_name = session_data.get("bot_name", "Sara")
+            bot_name = session_data.get("bot_name", "Default")
             model = session_data.get("model", OPENAI_REALTIME_MODEL)
             voice = session_data.get("voice", OPENAI_REALTIME_VOICE)
-            # 👇 si no vino en la sesión, usamos el del bot; y si tampoco, usamos un fallback neutro de Sara
-            sysmsg = (session_data.get("system_prompt") or bot_cfg.get("system_prompt") or "Eres Sara, asesora de In Houston Texas. Hablas de forma cálida, natural y breve.")
-        
-        print(f"[WS] Sesión recuperada -> bot: {bot_name}, model: {model}, voice: {voice}")
-        print(f"[WS] System Prompt cargado: {sysmsg[:100]}...")
+            sysmsg = session_data.get("system_prompt") or "Eres un asistente de In Houston Texas. Voz natural y respuestas breves."
 
-        # 2) Conectar a OpenAI Realtime
-        ws_ai = None
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
         except Exception as e:
@@ -1599,17 +1534,25 @@ if sock:
                 pass
             return
 
-        print(f"[WS] Twilio conectado. bot={bot_name or 'default'} model={model} voice={voice}")
-
+        print(f"[WS] Twilio conectado. bot={bot_name} model={model} voice={voice}")
         stream_sid = None
         ai_reader_running = True
 
         pending_bytes = bytearray()
         CHUNK_BYTES = 1600
-
         SILENCE_MS = 900
         last_media_ts = time.time()
-        silence_kill = Event()
+        kill = Event()
+
+        def _send_twi_media(payload_b64: str):
+            try:
+                ws_twi.send(json.dumps({
+                    "event": "media",
+                    "streamSid": stream_sid,
+                    "media": {"payload": payload_b64},
+                }))
+            except Exception as e:
+                print(f"[WS] ⚠️ Error enviando a Twilio: {e}")
 
         def _flush_append(force=False):
             nonlocal pending_bytes
@@ -1620,10 +1563,9 @@ if sock:
                         "type": "input_audio_buffer.append",
                         "audio": b64
                     }))
-                    print(f"[WS] append -> {len(pending_bytes)} bytes")
                     pending_bytes.clear()
             except Exception as e:
-                print("[WS] error en append:", e)
+                print("[WS] error append:", e)
 
         def _commit_and_ask():
             try:
@@ -1632,34 +1574,31 @@ if sock:
                     "type": "response.create",
                     "response": {"modalities": ["audio", "text"]}
                 }))
-                print("[WS] commit + response.create")
             except Exception as e:
                 print("[WS] error commit/response.create:", e)
 
         def _ai_reader():
-            nonlocal ai_reader_running, stream_sid
+            nonlocal ai_reader_running
             while ai_reader_running:
                 try:
-                    msg = ws_ai.recv()
-                    if not msg:
+                    raw = ws_ai.recv()
+                    if not raw:
                         continue
-                    data = json.loads(msg)
-                    t = data.get("type")
-                    if t == "response.audio.delta":
-                        payload = data.get("delta") or ""
-                        if payload and stream_sid:
-                            _send_twi_media(ws_twi, stream_sid, payload)
-                    elif t == "error":
+                    data = json.loads(raw)
+                    if data.get("type") == "response.audio.delta":
+                        delta = data.get("delta") or ""
+                        if delta and stream_sid:
+                            _send_twi_media(delta)
+                    elif data.get("type") == "error":
                         print("[WS][AI] ERROR:", data)
                 except Exception as e:
-                    print("ℹ️ AI reader finalizado:", e)
+                    print("[WS] AI reader terminado:", e)
                     break
 
         def _silence_watcher():
-            while not silence_kill.is_set():
+            while not kill.is_set():
                 try:
-                    now = time.time()
-                    if (now - last_media_ts) * 1000 >= SILENCE_MS and len(pending_bytes) > 0:
+                    if (time.time() - last_media_ts) * 1000 >= SILENCE_MS and len(pending_bytes) > 0:
                         _flush_append(force=True)
                         _commit_and_ask()
                     time.sleep(0.1)
@@ -1680,22 +1619,15 @@ if sock:
                     continue
 
                 etype = evt.get("event")
-
                 if etype == "start":
                     stream_sid = ((evt.get("start") or {}).get("streamSid")) or stream_sid
-                    print(f"[WS] start streamSid={stream_sid}")
-
+                    # saludo inicial generado por OpenAI
                     try:
-                        saludo = (bot_cfg.get("voice_greeting") or "").strip()
-                        if not saludo:
-                            empresa = (bot_cfg.get("business_name") or "").strip()
-                            nombre = (bot_cfg.get("name") or "Sara").strip()
-                            saludo = f"Hola, soy {nombre} de {empresa}. ¿Cómo estás?"
+                        greeting = f"Hola, soy {bot_name}. ¿En qué puedo ayudarte?"
                         ws_ai.send(json.dumps({
                             "type": "response.create",
-                            "response": {"modalities": ["audio", "text"], "instructions": saludo}
+                            "response": {"modalities": ["audio", "text"], "instructions": greeting}
                         }))
-                        print("[WS] greeting response.create")
                     except Exception as e:
                         print("[WS] error greeting:", e)
 
@@ -1710,28 +1642,24 @@ if sock:
                         _flush_append(force=False)
 
                 elif etype == "stop":
-                    print("[WS] stop recibido de Twilio")
                     _flush_append(force=True)
                     _commit_and_ask()
                     break
-
-                # ignoramos 'mark'
 
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
         finally:
             try:
                 ai_reader_running = False
-                silence_kill.set()
-                if ws_ai:
-                    ws_ai.close()
-                print("[WS] conexión cerrada")
+                kill.set()
+                ws_ai.close()
             except Exception:
                 pass
+            print("[WS] conexión cerrada")
 
 
 # =======================
-# Vistas de conversación (leen Firebase)
+#  Vistas de conversación (Firebase)
 # =======================
 @app.route("/conversacion_general/<bot>/<numero>")
 def chat_general(bot, numero):
@@ -1776,14 +1704,13 @@ def chat_bot(bot, numero):
     return render_template("chat_bot.html", numero=numero, mensajes=mensajes, bot=bot_normalizado, bot_data=bot_cfg, company_name=company_name)
 
 # =======================
-# API de polling (leen Firebase) — ahora permite Bearer
+#  API de polling (Firebase)
 # =======================
 @app.route("/api/chat/<bot>/<numero>", methods=["GET", "OPTIONS"])
 def api_chat(bot, numero):
     if request.method == "OPTIONS":
         return ("", 204)
 
-    # ✅ Permitir sesión o Bearer
     if not session.get("autenticado") and not _bearer_ok(request):
         return jsonify({"error": "No autenticado"}), 401
 
@@ -1820,13 +1747,12 @@ def api_chat(bot, numero):
                 last_ts = ts
         nuevos = [{"texto": reg.get("texto", ""), "hora": reg.get("hora", ""), "tipo": reg.get("tipo", "user"), "ts": _hora_to_epoch_ms(reg.get("hora", ""))} for reg in historial]
 
-    # ✅ Adjuntamos estado ON/OFF por conversación para que el front muestre el botón correcto
     bot_enabled = fb_is_conversation_on(bot_normalizado, numero)
 
     return jsonify({"mensajes": nuevos, "last_ts": last_ts, "bot_enabled": bool(bot_enabled)})
 
 # =======================
-# Run
+#  Run
 # =======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
