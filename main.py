@@ -1387,134 +1387,66 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔧 Resolución robusta de bots por número (con $ref)
-#  Reemplaza TUS helpers: _get_bot_cfg_by_any_number y el lector de config de voz
+#  🔊 VOICE ENTRYPOINT — Twilio → TwiML (sin Gather)
+#  Acepta GET/POST y /voice o /voice/ (evita 404)
 # =======================
 
-def _resolve_bot_ref(cfg: dict):
+from flask import request
+from twilio.twiml.voice_response import VoiceResponse
+
+def _build_ws_url_for_twilio():
     """
-    Resuelve {"$ref": "..."} siguiendo referencias dentro de bots_config.
-    Acepta "$ref" o "ref". Hace hasta 5 saltos para evitar ciclos.
+    Construye la URL wss:// para Twilio <Connect><Stream>.
+    Usa request.host_url y fuerza WSS.
     """
-    if not isinstance(cfg, dict):
-        return cfg
-    max_hops = 5
-    cur = cfg
-    hops = 0
-    while isinstance(cur, dict) and hops < max_hops:
-        ref_key = cur.get("$ref") or cur.get("ref")
-        if not ref_key:
-            break
-        # Búsqueda directa por clave exacta
-        target = bots_config.get(ref_key)
-        if target:
-            cur = target
-            hops += 1
-            continue
-        # Búsqueda por número canonizado (por si el ref es "+1..." y la clave real es "whatsapp:+1...")
-        canon_ref = _canonize_phone(ref_key)
-        found = None
-        for k, v in bots_config.items():
-            if _canonize_phone(k) == canon_ref:
-                found = v
-                break
-        if found:
-            cur = found
-            hops += 1
-            continue
-        # Si no se encontró, se deja tal cual (rompe el loop)
-        break
-    return cur
+    base = (request.host_url or "").strip().rstrip("/")  # ej: https://multi-bot-inteligente-v1.onrender.com
+    if base.startswith("https://"):
+        ws_base = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        ws_base = "ws://" + base[len("http://"):]
+    else:
+        # fallback ultra-conservador
+        ws_base = "wss://" + base
+    return ws_base
 
-def _get_bot_cfg_by_any_number(to_number: str):
-    """
-    Devuelve la configuración del bot para un número dado.
-    - Soporta claves "whatsapp:+1..." o "+1..."
-    - Resuelve {"$ref": "..."} si existe.
-    - Loguea claves disponibles cuando no encuentra match.
-    """
-    if not bots_config or not isinstance(bots_config, dict):
-        print("[VOICE][CFG] bots_config vacío o inválido.")
-        return None
+def _safe_number(val: str) -> str:
+    return _canonize_phone(val or "")
 
-    if not to_number:
-        # Si no llega número y solo hay un bot, úsalo
-        if len(bots_config) == 1:
-            only_cfg = list(bots_config.values())[0]
-            return _resolve_bot_ref(only_cfg) if isinstance(only_cfg, dict) else None
-        print("[VOICE][CFG] to_number vacío y hay múltiples bots; no se puede inferir.")
-        return None
+def _twiml_error(msg: str):
+    vr = VoiceResponse()
+    vr.say("Lo siento. Ha ocurrido un error de aplicación. Hasta luego.", language="es-MX")
+    print(f"[VOICE][ERROR] {msg}")
+    return str(vr)
 
-    canon_to = _canonize_phone(to_number)
-
-    # 1) Match por número canonizado contra TODAS las claves
-    for key, cfg in bots_config.items():
-        try:
-            if _canonize_phone(key) == canon_to:
-                return _resolve_bot_ref(cfg) if isinstance(cfg, dict) else None
-        except Exception:
-            continue
-
-    # 2) Fallback: acceso directo por clave exacta
-    direct = bots_config.get(to_number)
-    if isinstance(direct, dict):
-        return _resolve_bot_ref(direct)
-
-    # 3) Fallback adicional: si solo hay un bot y no hubo match, úsalo
-    if len(bots_config) == 1:
-        only_cfg = list(bots_config.values())[0]
-        return _resolve_bot_ref(only_cfg) if isinstance(only_cfg, dict) else None
-
-    # 4) Debug: listar claves disponibles
+# Acepta /voice y /voice/ en GET y POST para evitar 404
+@app.route("/voice", methods=["GET", "POST"])
+@app.route("/voice/", methods=["GET", "POST"])
+def voice_webhook_realtime():
     try:
-        keys_preview = []
-        for k in bots_config.keys():
-            keys_preview.append(f"{k} → {_canonize_phone(k)}")
-        print(f"[VOICE][CFG] Bot NO encontrado para to='{to_number}' canon='{canon_to}'. "
-              f"Claves disponibles: {', '.join(keys_preview)}")
-    except Exception:
-        print(f"[VOICE][CFG] Bot NO encontrado para to='{to_number}' canon='{canon_to}'.")
-    return None
+        to_number = request.values.get("To", "") or request.args.get("to", "")
+        from_number = request.values.get("From", "") or request.args.get("from", "")
+        call_sid = request.values.get("CallSid", "") or request.args.get("CallSid", "")
 
-def _voice_get_bot_realtime_config(to_number: str):
-    """
-    Lee la config de voz realtime desde bots/*.json,
-    siempre AFTER de resolver $ref.
-    """
-    bot_cfg = _get_bot_cfg_by_any_number(to_number)
-    if not bot_cfg:
-        return None
+        print(f"[VOICE] /voice hit → method={request.method} To={to_number} From={from_number} CallSid={call_sid}")
 
-    def _get_path(d, paths, default=None):
-        for p in paths:
-            cur = d
-            ok = True
-            for k in p.split("."):
-                if isinstance(cur, dict) and k in cur:
-                    cur = cur[k]
-                else:
-                    ok = False
-                    break
-            if ok:
-                return cur
-        return default
+        # Lee config del bot (resuelve $ref y E.164). Si no hay, responde TwiML amable (no 404).
+        cfg = _voice_get_bot_realtime_config(to_number)
+        if not cfg:
+            return _twiml_error(f"Bot no configurado para To='{to_number}'")
 
-    model = _get_path(bot_cfg, ["realtime.model", "model"], "gpt-4o-realtime-preview")
-    voice = _get_path(bot_cfg, ["realtime.voice", "voice", "tts.voice"], "nova")
-    system_prompt = bot_cfg.get("system_prompt", "Eres un asistente de voz natural y profesional.")
-    language = _get_path(bot_cfg, ["realtime.language", "language"], "es-MX")
+        # Construir la URL WSS del stream de Twilio
+        ws_base = _build_ws_url_for_twilio()
+        stream_url = f"{ws_base}/ws/twilio-media?to={_safe_number(to_number)}"
+        print(f"[VOICE] TwiML Connect.Stream → {stream_url}")
 
-    # Log útil para verificar qué se tomó finalmente
-    print(f"[VOICE][CFG] Resuelto: name={bot_cfg.get('name')}, model={model}, voice={voice}, lang={language}")
+        # Devuelve TwiML con <Connect><Stream>
+        vr = VoiceResponse()
+        connect = vr.connect()
+        connect.stream(url=stream_url)
+        return str(vr)
 
-    return {
-        "bot_name": bot_cfg.get("name", "Unknown"),
-        "model": str(model),
-        "voice": str(voice),
-        "system_prompt": str(system_prompt),
-        "language": str(language),
-    }
-
+    except Exception as e:
+        return _twiml_error(f"Excepción en /voice: {e}")
 
 
 # =======================
