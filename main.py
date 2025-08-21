@@ -1413,7 +1413,7 @@ def _voice_get_bot_config(to_number: str) -> dict:
         "model": bot_cfg.get("model", "gpt-4o"),
         "system_prompt": bot_cfg.get("system_prompt", "Eres un asistente de voz amable y natural. Habla con una voz humana."),
         "voice_greeting": bot_cfg.get("voice_greeting", f"Hola, soy el asistente de {bot_cfg.get('business_name', bot_cfg.get('name', 'el bot'))}. ¿Cómo puedo ayudarte?"),
-        "openai_voice": bot_cfg.get("realtime", {}).get("voice", "Shimmer"),
+        "openai_voice": bot_cfg.get("realtime", {}).get("voice", "nova"),
     }
     return config
 
