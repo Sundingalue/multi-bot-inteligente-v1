@@ -1452,19 +1452,19 @@ def _voice_get_bot_realtime_config(to_number: str):
     model = _get_path(bot_cfg, ["realtime.model", "model"], "gpt-4o-realtime-preview")
     voice = _get_path(bot_cfg, ["realtime.voice", "voice", "tts.voice"], "nova")
     system_prompt = bot_cfg.get("system_prompt", "Eres un asistente de voz natural y profesional.")
-    language = _get_path(bot_cfg, ["realtime.language", "language"], "es-MX")
 
-    print(f"[VOICE][CFG] Resuelto: name={bot_cfg.get('name')}, model={model}, voice={voice}, lang={language}")
+    # Nota: el API no soporta 'session.language'; si necesitas sesgo de idioma,
+    # inclúyelo en 'instructions' (system_prompt).
+    print(f"[VOICE][CFG] Resuelto: name={bot_cfg.get('name')}, model={model}, voice={voice}")
 
     return {
         "bot_name": bot_cfg.get("name", "Unknown"),
         "model": str(model),
         "voice": str(voice),
         "system_prompt": str(system_prompt),
-        "language": str(language),
     }
 
-# ---------- TwiML /voice: no usamos querystring, pasamos <Parameter> ----------
+# ---------- TwiML /voice: pasamos parámetros vía <Parameter> ----------
 
 def _build_ws_url_for_twilio():
     base = (request.host_url or "").strip().rstrip("/")
@@ -1493,7 +1493,7 @@ def voice_webhook_realtime():
 
         print(f"[VOICE] /voice hit → method={request.method} To={to_number} From={from_number} CallSid={call_sid}")
 
-        # Resolvemos aquí para loguear temprano (no dependemos de esto en el WS)
+        # Log de cfg (solo informativo)
         if to_number:
             _ = _voice_get_bot_realtime_config(to_number)
 
@@ -1504,7 +1504,6 @@ def voice_webhook_realtime():
         vr = VoiceResponse()
         connect = vr.connect()
         stream = connect.stream(url=stream_url)
-        # Pasamos parámetros fiables (Twilio → start.customParameters)
         if to_number:
             stream.parameter(name="to", value=_safe_number(to_number))
         if from_number:
@@ -1538,7 +1537,7 @@ class OpenAIRealtimeBridge:
         self.alive = True
 
         # Medición para evitar commits vacíos
-        self.pending_ms = 0           # ms acumulados desde el último commit
+        self.pending_ms = 0            # ms acumulados desde último commit
         self.had_audio_since_commit = False
 
         self.t_recv = Thread(target=self._oai_recv_loop, daemon=True)
@@ -1590,8 +1589,8 @@ class OpenAIRealtimeBridge:
                     "modalities": ["text","audio"],
                     "input_audio_format":  {"type":"mulaw","sample_rate":8000},
                     "output_audio_format": {"type":"mulaw","sample_rate":8000},
+                    # Usamos VAD del servidor: NO llamamos response.create manualmente
                     "turn_detection": {"type":"server_vad","silence_duration_ms":400},
-                    "language": self.cfg.get("language","es-MX"),
                 }
             }
             self._oai_send_json(session_update)
@@ -1655,7 +1654,7 @@ class OpenAIRealtimeBridge:
             * pending_ms >= 200ms, o
             * timeout > 0.8s y pending_ms >= 120ms,
           evitando 'input_audio_buffer_commit_empty'.
-        - También pedimos respuesta con modalities ['audio','text'] (requisito del API).
+        - NO llamamos response.create (lo hace server_vad).
         """
         last_chunk_ts = time.time()
         timeout_s = 0.8
@@ -1672,24 +1671,22 @@ class OpenAIRealtimeBridge:
                 # Si no hay audio por un rato, commit si ya juntamos suficiente
                 elapsed = time.time() - last_chunk_ts
                 if self.had_audio_since_commit and elapsed > timeout_s and self.pending_ms >= 120:
-                    self._commit_and_request()
+                    self._commit_only()
                 continue
 
-            # Commit por tamaño acumulado
+            # Commit por tamaño acumulado (≥200ms)
             if self.pending_ms >= 200:
-                self._commit_and_request()
+                self._commit_only()
 
         # flush final
         if self.had_audio_since_commit and self.pending_ms >= 120:
-            self._commit_and_request()
+            self._commit_only()
 
-    def _commit_and_request(self):
-        # Evitar commits vacíos
-        if not self.had_audio_since_commit or self.pending_ms < 100:
+    def _commit_only(self):
+        # Evitar commits vacíos (OAI exige ≥100ms)
+        if not self.had_audio_since_commit or self.pending_ms < 160:
             return
         self._oai_send_json({"type":"input_audio_buffer.commit"})
-        # Pedimos respuesta con ambas modalidades (audio + text)
-        self._oai_send_json({"type":"response.create","response":{"modalities":["audio","text"]}})
         # Reset contadores
         self.pending_ms = 0
         self.had_audio_since_commit = False
