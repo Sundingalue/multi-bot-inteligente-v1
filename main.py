@@ -42,7 +42,7 @@ from threading import Event
 import urllib.parse
 try:
     from flask_sock import Sock
-    import websocket  # websocket-client
+    import websocket # websocket-client
 except Exception as _e:
     print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
 
@@ -152,9 +152,9 @@ def load_bots_folder():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        bots[k] = v
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    bots[k] = v
         except Exception as e:
             print(f"⚠️ No se pudo cargar {path}: {e}")
     return bots
@@ -177,11 +177,14 @@ app.register_blueprint(mobile_bp, url_prefix="/api/mobile")
 # =======================
 #  Memorias por sesión (runtime)
 # =======================
-session_history = {}       # clave_sesion -> mensajes para OpenAI (texto)
-last_message_time = {}     # clave_sesion -> timestamp último mensaje
-follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
-agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
-greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
+session_history = {}         # clave_sesion -> mensajes para OpenAI (texto)
+last_message_time = {}       # clave_sesion -> timestamp último mensaje
+follow_up_flags = {}         # clave_sesion -> {"5min": bool, "60min": bool}
+agenda_state = {}            # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
+greeted_state = {}           # clave_sesion -> bool (si ya se saludó)
+
+# ✅ CAMBIO: CACHÉ EN MEMORIA PARA LLAMADAS DE VOZ (en lugar de Firebase)
+voice_call_cache = {}
 
 # =======================
 #  Helpers generales (neutros)
@@ -231,35 +234,7 @@ def _get_bot_cfg_by_any_number(to_number: str):
         # Fallback a un bot si solo hay uno
         if len(bots_config) == 1:
             return list(bots_config.values())[0]
-        return None
-
-    target = _canonize_phone(to_number)
-
-    # 1) Coincidencias directas
-    if to_number in bots_config:
-        return bots_config.get(to_number)
-    cand_whatsapp = f"whatsapp:{target}"
-    if cand_whatsapp in bots_config:
-        return bots_config.get(cand_whatsapp)
-    if target in bots_config:
-        return bots_config.get(target)
-
-    # 2) Normalizando TODAS las claves del JSON
-    for key, cfg in bots_config.items():
-        try:
-            if _canonize_phone(key) == target:
-                return cfg
-        except Exception:
-            continue
-
-    # 3) Fallback: si solo hay un bot cargado
-    try:
-        if len(bots_config) == 1:
-            return list(bots_config.values())[0]
-    except Exception:
-        pass
-
-    return None
+    return bots_config.get(to_number) # ✅ CAMBIO: Simplificado para el uso directo en el webhook de voz.
 
 def _get_bot_number_by_name(bot_name: str) -> str:
     """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
@@ -772,7 +747,7 @@ def panel():
                 clave = request.form.get("password")  # por si el input se llama 'password'
             clave = (clave or "").strip()
 
-            # ✅ Remember me desde HTML: 'recordarme' (hidden) o 'remember' (checkbox)
+            # ✅ Sesión persistente si marcaron "Recuérdame"
             remember_flag = (request.form.get("recordarme") or request.form.get("remember") or "").strip().lower()
             remember_on = remember_flag in ("on", "1", "true", "yes", "si", "sí")
 
@@ -1112,7 +1087,7 @@ def push_token():
                 notification=fcm.Notification(title=title, body=body_text),
                 data=data
             )
-            resp = fcm.send_multicast(multi)
+            resp = fcm.send_multicast(multicast)
             return jsonify({"success": True, "mode": "tokens", "sent": resp.success_count, "failed": resp.failure_count})
         elif token:
             msg = fcm.Message(
@@ -1464,32 +1439,35 @@ def voice_webhook():
     to_number = request.values.get("To")  # número destino (tu Twilio)
     from_number = request.values.get("From")
 
-    # 1. Buscar bot por número
-    bot_cfg = _get_bot_cfg_by_any_number(to_number)
+    # ✅ CAMBIO: Buscar el bot directamente en la configuración inicial
+    #    La clave en tu JSON es el número +13469882323
+    bot_cfg = bots_config.get(to_number)
 
     if not bot_cfg:
-        # fallback: responder silencio
         resp = VoiceResponse()
-        resp.say("Lo siento, no hay un bot configurado para este número.")
+        resp.say("Lo siento, no hay un bot configurado para este número de voz.")
         return str(resp)
 
+    # 2. Guardar la configuración en una caché en memoria
+    #    Así el WebSocket lo puede recuperar sin usar Firebase
     bot_name = bot_cfg.get("name", "Unknown")
-    model = bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL
-    voice = bot_cfg.get("voice", {}).get("openai_voice") or OPENAI_REALTIME_VOICE
+    # ✅ CAMBIO: Leer la configuración de voz del sub-diccionario 'realtime'
+    model = bot_cfg.get("realtime", {}).get("model") or OPENAI_REALTIME_MODEL
+    voice = bot_cfg.get("realtime", {}).get("voice") or OPENAI_REALTIME_VOICE
+    system_prompt = bot_cfg.get("system_prompt") or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
+    voice_greeting = bot_cfg.get("voice_greeting", "").strip() or f"Hola, soy {bot_name}. ¿Cómo estás?"
+    
+    voice_call_cache[call_sid] = {
+        "bot_name": bot_name,
+        "model": model,
+        "voice": voice,
+        "system_prompt": system_prompt,
+        "voice_greeting": voice_greeting,
+    }
 
-    # Guardar config en Firebase para que /twilio-media-stream la use
-    try:
-        db.reference(f"voice_sessions/{call_sid}").set({
-            "bot_name": bot_name,
-            "model": model,
-            "voice": voice,
-            "created": datetime.now().isoformat()
-        })
-        print(f"[VOICE] Config guardada (CallSid={call_sid}). bot={bot_name} model={model} voice={voice}")
-    except Exception as e:
-        print(f"⚠️ Error guardando config voice: {e}")
+    print(f"[VOICE] Configuración guardada en caché para CallSid={call_sid}.")
 
-    # 2. TwiML SOLO con <Connect><Stream>
+    # 3. TwiML SOLO con <Connect><Stream>
     resp = VoiceResponse()
     with resp.connect() as connect:
         connect.stream(url="wss://multi-bot-inteligente-v1.onrender.com/twilio-media-stream")
@@ -1506,7 +1484,7 @@ def voice_debug():
     # Simula valores
     fake_req.values = request.values.copy()
     fake_req.values["To"] = fake_to
-    return voice_entry()
+    return voice_webhook() # ✅ CAMBIO: Llamamos a la función principal
 
 # --- WebSocket server (Twilio -> OpenAI Realtime) ---
 sock = None
@@ -1553,36 +1531,25 @@ if sock:
         except Exception:
             pass
 
-        # 💥💥 CORRECCIÓN FINAL CON CallSid 💥💥
-        # Obtenemos la configuración del bot desde Firebase usando el CallSid del header
+        # ✅ CAMBIO: LEER LA CONFIGURACIÓN DE LA CACHÉ EN MEMORIA
         call_sid = request.headers.get('X-Twilio-CallSid')
-        session_data = None
-        if call_sid:
-            try:
-                ref = db.reference(f"voice_sessions/{call_sid}")
-                session_data = ref.get()
-                # Opcional: eliminar el registro para limpiar la base de datos
-                ref.delete()
-            except Exception as e:
-                print(f"[WS] ❌ Error al leer la sesión de Firebase para CallSid '{call_sid}': {e}")
+        session_data = voice_call_cache.get(call_sid)
         
         if not session_data:
-            print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración por defecto.")
-            bot_cfg = {}
+            print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración por defecto (Luis).")
             bot_name = "default"
             model = OPENAI_REALTIME_MODEL
             voice = OPENAI_REALTIME_VOICE
-            sysmsg = "Te llama Luis y eres un asistente de voz amable, cercano y muy natural con asento mexicano. Habla como humano y muy natural."
+            sysmsg = "Te llama Luis y eres un asistente de voz amable, cercano y muy natural con acento mexicano. Habla como humano y muy natural."
+            voice_greeting = "Lo siento, hubo un problema al iniciar. Por favor, llame de nuevo."
         else:
-            bot_cfg = _get_bot_cfg_by_name(session_data.get("bot_name")) or {}
             bot_name = session_data["bot_name"]
             model = session_data["model"]
             voice = session_data["voice"]
             sysmsg = session_data["system_prompt"]
-        
-        print(f"[WS] Sesión recuperada -> bot: {bot_name}, model: {model}, voice: {voice}")
-        print(f"[WS] System Prompt cargado: {sysmsg[:100]}...")
-
+            voice_greeting = session_data["voice_greeting"]
+            print(f"[WS] ✅ Sesión recuperada de la caché -> bot: {bot_name}, model: {model}, voice: {voice}")
+            
         # 2) Conectar a OpenAI Realtime
         ws_ai = None
         try:
@@ -1682,11 +1649,8 @@ if sock:
                     print(f"[WS] start streamSid={stream_sid}")
 
                     try:
-                        saludo = (bot_cfg.get("voice_greeting") or "").strip()
-                        if not saludo:
-                            empresa = (bot_cfg.get("business_name") or "").strip()
-                            nombre = (bot_cfg.get("name") or "nuestro asistente").strip()
-                            saludo = f"Hola, soy {nombre} de {empresa}. ¿Cómo estás?"
+                        # ✅ CAMBIO: Usar el saludo del JSON o el de fallback.
+                        saludo = voice_greeting
                         ws_ai.send(json.dumps({
                             "type": "response.create",
                             "response": {"modalities": ["audio", "text"], "instructions": saludo}
@@ -1721,7 +1685,10 @@ if sock:
                 silence_kill.set()
                 if ws_ai:
                     ws_ai.close()
-                print("[WS] conexión cerrada")
+                # ✅ CAMBIO: Eliminar la configuración de la caché
+                if call_sid in voice_call_cache:
+                    del voice_call_cache[call_sid]
+                print("[WS] conexión cerrada y caché limpia")
             except Exception:
                 pass
 
