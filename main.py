@@ -24,7 +24,7 @@ import random
 import hashlib
 import html
 import uuid
-import requests # ✅ Nuevo: para descargar el audio grabado
+import requests
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
@@ -34,6 +34,18 @@ import firebase_admin
 from firebase_admin import credentials, db
 # 🔹 NEW: FCM (para notificaciones push)
 from firebase_admin import messaging as fcm
+
+# Se eliminan las dependencias de WebSocket porque no funcionaban
+# import base64
+# import struct
+# import ssl
+# from threading import Event
+# import urllib.parse
+# try:
+#     from flask_sock import Sock
+#     import websocket
+# except Exception as _e:
+#     pass
 
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
@@ -168,7 +180,8 @@ follow_up_flags = {}         # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}            # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}           # clave_sesion -> bool (si ya se saludó)
 
-voice_conversation_history = {} # Historial de conversaciones para llamadas de voz
+# ✅ CAMBIO: CACHÉ EN MEMORIA PARA LLAMADAS DE VOZ (en lugar de Firebase)
+voice_call_cache = {}
 
 # =======================
 #  Helpers generales (neutros)
@@ -217,7 +230,13 @@ def _get_bot_cfg_by_any_number(to_number: str):
     if not to_number:
         if len(bots_config) == 1:
             return list(bots_config.values())[0]
-    return bots_config.get(to_number)
+    
+    # ✅ CORRECCIÓN FINAL: Buscar por E.164 o con el prefijo "whatsapp:"
+    canon_to = _canonize_phone(to_number)
+    for key, cfg in bots_config.items():
+        if key.strip().lower() == to_number.strip().lower() or _canonize_phone(key) == canon_to:
+            return cfg
+    return None
 
 def _get_bot_number_by_name(bot_name: str) -> str:
     """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
@@ -259,7 +278,7 @@ def _ensure_question(bot_cfg: dict, text: str, force_question: bool) -> str:
         return txt
     if not txt.endswith((".", "!", "…")):
         txt += "."
-    probe = _next_probe_from_bot(bot_cfg)
+    probe = _next_probe_from_from_bot(bot_cfg)
     return f"{txt} {probe}".strip() if probe else txt
 
 def _make_system_message(bot_cfg: dict) -> str:
@@ -1367,18 +1386,18 @@ def whatsapp_bot():
 #  🔊 VOZ con Twilio Gather + OpenAI Speech to Text + Chat Completion
 # =======================
 
-# ✅ CAMBIO CRÍTICO: SE ELIMINAN LAS RUTAS DE WEBSOCKET Y SE REEMPLAZAN POR ESTE ENFOQUE.
-# Ya no es necesario importar Flask-Sock o websocket-client
-try:
-    from flask_sock import Sock
-    import websocket
-    print("Se encontraron dependencias de WebSocket, pero la lógica ha sido reemplazada.")
-except ImportError:
-    pass
-
 def _voice_get_bot_config(to_number: str) -> dict:
-    """Extrae y normaliza la configuración del bot para llamadas de voz."""
+    """
+    Extrae y normaliza la configuración del bot para llamadas de voz.
+    Mejora: Busca por E.164 para mayor compatibilidad.
+    """
     bot_cfg = bots_config.get(to_number)
+    
+    # Intenta normalizar el número y buscar de nuevo
+    if not bot_cfg:
+        canon_to_number = _canonize_phone(to_number)
+        bot_cfg = bots_config.get(canon_to_number)
+    
     if not bot_cfg:
         return None
 
@@ -1391,43 +1410,98 @@ def _voice_get_bot_config(to_number: str) -> dict:
     }
     return config
 
+def _generate_and_play_audio(text: str, voice_name: str, call_sid: str) -> str:
+    """Genera audio con OpenAI TTS y lo guarda en /tmp. Devuelve la URL."""
+    try:
+        temp_dir = "/tmp"
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+        audio_file = os.path.join(temp_dir, f"{call_sid}_{uuid.uuid4().hex[:8]}.mp3")
+        
+        tts_response = client.audio.speech.create(
+            model="tts-1",
+            voice=voice_name,
+            input=text,
+            speed=1.0
+        )
+        tts_response.stream_to_file(audio_file)
+        
+        return f"{request.host_url}voice-audio/{os.path.basename(audio_file)}"
+
+    except Exception as e:
+        print(f"❌ Error al generar audio con OpenAI TTS: {e}")
+        return ""
+
+def _thread_target_chat(call_sid, user_speech, bot_config):
+    """Función para el hilo de procesamiento de la IA."""
+    try:
+        if call_sid not in voice_conversation_history:
+            voice_conversation_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
+        
+        voice_conversation_history[call_sid].append({"role": "user", "content": user_speech})
+        
+        chat_completion = client.chat.completions.create(
+            model=bot_config["model"],
+            messages=voice_conversation_history[call_sid]
+        )
+        bot_response_text = chat_completion.choices[0].message.content.strip()
+        voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
+
+        # Generar audio y guardar la URL en la caché de la conversación
+        audio_url = _generate_and_play_audio(bot_response_text, bot_config["openai_voice"], call_sid)
+        
+        # Guardar la URL del audio en una caché
+        voice_call_cache[call_sid] = {"audio_url": audio_url}
+        
+    except Exception as e:
+        print(f"❌ Error en el hilo de chat con OpenAI: {e}")
+        voice_call_cache[call_sid] = {"audio_url": ""} # Marcar como error
+
+def _start_async_chat(call_sid, user_speech, bot_config):
+    """Inicia un hilo para procesar el chat de forma asíncrona."""
+    # Limpiar caché para esta llamada
+    if call_sid in voice_call_cache:
+        del voice_call_cache[call_sid]
+
+    thread = Thread(target=_thread_target_chat, args=(call_sid, user_speech, bot_config))
+    thread.daemon = True # El hilo morirá si la app se apaga
+    thread.start()
+
+def _wait_for_audio(call_sid, timeout=10):
+    """Espera hasta que el hilo haya generado el audio o se agote el tiempo."""
+    start_time = time.time()
+    while call_sid not in voice_call_cache and (time.time() - start_time) < timeout:
+        time.sleep(0.1)
+    
+    if call_sid in voice_call_cache:
+        return voice_call_cache[call_sid].get("audio_url", "")
+    return ""
+
 # 1. Webhook inicial para la llamada entrante
 @app.route("/voice", methods=["POST"])
 def voice_webhook():
     to_number = request.values.get("To")
-    call_sid = request.values.get("CallSid") # Se necesita para el nombre del archivo de audio
-    bot_config = _voice_get_bot_config(to_number)
+    call_sid = request.values.get("CallSid")
 
+    bot_config = _voice_get_bot_config(to_number)
     if not bot_config:
         resp = VoiceResponse()
         resp.say("Lo siento, no hay un bot configurado para este número de voz.")
         return str(resp)
 
-    # ✅ CAMBIO: Generar el saludo con OpenAI TTS para que suene natural
+    # ✅ CORRECCIÓN: Generar el saludo con OpenAI TTS para que suene natural
     try:
-        temp_dir = "/tmp"
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
-        greeting_file = os.path.join(temp_dir, f"{call_sid}_greeting.mp3")
-
-        # Evitar generar si ya existe el archivo (por si hay redirecciones)
-        if not os.path.exists(greeting_file):
-            tts_response = client.audio.speech.create(
-                model="tts-1",
-                voice=bot_config["openai_voice"],
-                input=bot_config["voice_greeting"],
-                speed=1.0
-            )
-            tts_response.stream_to_file(greeting_file)
-        
-        # Iniciar la conversación con el saludo de OpenAI
-        resp = VoiceResponse()
-        resp.play(url=f"{request.host_url}voice-audio/{os.path.basename(greeting_file)}")
-
+        greeting_url = _generate_and_play_audio(bot_config["voice_greeting"], bot_config["openai_voice"], f"{call_sid}_greeting")
+        if not greeting_url:
+            raise Exception("No se pudo generar el audio de saludo.")
     except Exception as e:
         print(f"❌ Error al generar el saludo con OpenAI TTS: {e}")
         resp = VoiceResponse()
         resp.say("Lo siento, no pude generar el saludo. Por favor, llame de nuevo.")
+        return str(resp)
+
+    resp = VoiceResponse()
+    resp.play(greeting_url)
 
     # Usar <Gather> para escuchar la respuesta del usuario
     gather = Gather(
@@ -1438,8 +1512,7 @@ def voice_webhook():
         language="es-ES"
     )
     resp.append(gather)
-
-    # Si nadie habla, volver a pedir que hablen
+    
     resp.redirect(url_for('voice_webhook', _external=True))
     
     print(f"[VOICE] Llamada a {bot_config['bot_name']} iniciada con saludo de OpenAI.")
@@ -1459,46 +1532,26 @@ def voice_gather():
         resp.say("Lo siento, hubo un problema técnico.")
         return str(resp)
 
-    bot_name = bot_config["bot_name"]
-    model = bot_config["model"]
-    openai_voice = bot_config["openai_voice"]
-
-    if call_sid not in session_history:
-        session_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
-
     if user_speech:
         print(f"[VOICE] Mensaje del usuario: {user_speech}")
-        session_history[call_sid].append({"role": "user", "content": user_speech})
         
-        try:
-            chat_completion = client.chat.completions.create(
-                model=model,
-                messages=session_history[call_sid]
-            )
-            bot_response_text = chat_completion.choices[0].message.content.strip()
-            
-            print(f"[VOICE] Respuesta del bot: {bot_response_text}")
-            session_history[call_sid].append({"role": "assistant", "content": bot_response_text})
-
-            tts_response = client.audio.speech.create(
-                model="tts-1",
-                voice=openai_voice,
-                input=bot_response_text,
-                speed=1.0
-            )
-
-            temp_dir = "/tmp"
-            temp_file = os.path.join(temp_dir, f"{call_sid}.mp3")
-            with open(temp_file, "wb") as f:
-                for chunk in tts_response.iter_bytes(chunk_size=4096):
-                    f.write(chunk)
-            
-            resp.play(url=f"{request.host_url}voice-audio/{os.path.basename(temp_file)}")
-            
-        except Exception as e:
-            print(f"❌ Error al procesar la voz con OpenAI: {e}")
-            resp.say("Lo siento, hubo un error procesando tu solicitud.")
-
+        # ✅ CORRECCIÓN: Iniciar el procesamiento de la IA en un hilo separado
+        _start_async_chat(call_sid, user_speech, bot_config)
+        
+        # Esperar la respuesta de audio del hilo, con un tiempo de espera
+        audio_url = _wait_for_audio(call_sid, timeout=15)
+        
+        if audio_url:
+            print(f"[VOICE] Reproduciendo respuesta del bot desde: {audio_url}")
+            resp.play(audio_url)
+        else:
+            print(f"❌ Error: No se pudo obtener la URL de audio a tiempo.")
+            resp.say("Lo siento, estoy teniendo un problema y no pude responder.")
+    else:
+        print("[VOICE] No se detectó voz del usuario.")
+        resp.say("No te escuché. ¿Puedes repetir, por favor?")
+        
+    # Volver a iniciar el Gather para la próxima respuesta
     gather = Gather(
         input="speech", 
         action=url_for('voice_gather', _external=True), 
@@ -1517,6 +1570,7 @@ def voice_audio(filename):
     if os.path.exists(file_path):
         return send_file(file_path, mimetype="audio/mpeg", as_attachment=False)
     else:
+        print(f"❌ Error 404: Archivo no encontrado en {file_path}")
         return "Archivo no encontrado", 404
 
 # =======================
