@@ -23,8 +23,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.websockets import WebSocket
 from starlette.middleware.cors import CORSMiddleware
 from starlette.templating import Jinja2Templates
-from starlette.requests import Request as StarletteRequest
 from starlette.background import BackgroundTasks
+from starlette.middleware.sessions import SessionMiddleware
 
 # Importaciones de Twilio y OpenAI
 from twilio.twiml.messaging_response import MessagingResponse
@@ -74,7 +74,8 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
-# 🌐 NEW: CORS básico para llamadas desde WordPress / app
+# Middleware de sesión y CORS
+app.add_middleware(SessionMiddleware, secret_key="supersecreto_sundin_panel_2025")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -83,18 +84,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Sistema de autenticación con FastAPI
-# Puedes adaptarlo a tu lógica de sesión si es necesario
-# Este es un ejemplo para que el código compile
-def get_current_user_from_request(request: Request):
-    # Lógica para verificar si el usuario está autenticado,
-    # por ejemplo, leyendo una cookie de sesión
-    if "autenticado" in request.session:
-        return request.session["usuario"]
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No autenticado")
+def _auth_user(username, password):
+    users = _load_users()
+    rec = users.get(username)
+    if rec and rec.get("password") == password:
+        return {"username": username, "bots": rec.get("bots", [])}
+    return None
+
+def _is_admin(request: Request):
+    bots = request.session.get("bots_permitidos", [])
+    return isinstance(bots, list) and ("*" in bots)
+
+def _first_allowed_bot(request: Request):
+    bots = request.session.get("bots_permitidos", [])
+    if isinstance(bots, list):
+        for b in bots:
+            if b != "*":
+                return b
+    return None
+
+def _user_can_access_bot(request: Request, bot_name: str):
+    if _is_admin(request):
+        return True
+    bots = request.session.get("bots_permitidos", [])
+    return bot_name in bots
 
 def _bearer_ok(req: Request) -> bool:
-    """Devuelve True si no hay token configurado o si el header Authorization coincide."""
     if not API_BEARER_TOKEN:
         return True
     auth = req.headers.get("Authorization")
@@ -158,14 +173,14 @@ if not bots_config:
     print("⚠️ No se encontraron bots en ./bots/*.json")
 
 # =======================
-#  💡 Registrar la API de facturación (Blueprint)
+#  💡 Registrar la API de facturación (Router)
 # =======================
-from billing_api import billing_bp, record_openai_usage
-app.include_router(billing_bp, prefix="/billing")
+from billing_api_fastapi import billing_router, record_openai_usage
+app.include_router(billing_router, prefix="/billing")
 
 # 💡 API móvil (JSON público para la app)
-from bots.api_mobile import mobile_bp
-app.include_router(mobile_bp, prefix="/api/mobile")
+from bots.api_mobile_fastapi import mobile_router
+app.include_router(mobile_router, prefix="/api/mobile")
 
 # =======================
 #  Memorias por sesión (runtime)
@@ -179,6 +194,7 @@ greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
 # ✅ CORRECCIÓN: Definición de variables globales para la voz
 voice_call_cache = {}
 voice_conversation_history = {}
+
 
 # =======================
 #  Helpers generales (neutros)
@@ -208,7 +224,6 @@ def _get_bot_cfg_by_name(name: str):
 def _get_bot_cfg_by_number(to_number: str):
     return bots_config.get(to_number)
 
-# ✅ VOICE helper: canonizar número a E.164 (+1...)
 def _canonize_phone(raw: str) -> str:
     s = str(raw or "").strip()
     for p in ("whatsapp:", "tel:", "sip:", "client:"):
@@ -223,7 +238,6 @@ def _canonize_phone(raw: str) -> str:
         digits = "1" + digits
     return "+" + digits
 
-# ✅ VOICE helper: encuentra bot por número (E.164 o whatsapp:+)
 def _get_bot_cfg_by_any_number(to_number: str):
     if not to_number:
         if len(bots_config) == 1:
@@ -237,7 +251,6 @@ def _get_bot_cfg_by_any_number(to_number: str):
     return bots_config.get(to_number)
 
 def _get_bot_number_by_name(bot_name: str) -> str:
-    """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
     for number_key, cfg in bots_config.items():
         if isinstance(cfg, dict) and cfg.get("name", "").strip().lower() == (bot_name or "").strip().lower():
             return number_key
@@ -731,16 +744,12 @@ async def panel(request: Request):
     )
 
 @app.post("/panel", response_class=RedirectResponse)
-async def panel_login(request: Request, usuario: str = Form(None), clave: str = Form(None), recordarme: str = Form(None)):
+async def panel_login(request: Request, usuario: str = Form(None), clave: str = Form(None)):
     auth = _auth_user(usuario, clave)
     if auth:
         request.session["autenticado"] = True
         request.session["usuario"] = auth["username"]
         request.session["bots_permitidos"] = auth["bots"]
-        
-        # Lógica de sesión persistente, si es necesaria
-        # FastAPI no maneja la vida de la sesión con una cookie de la misma forma que Flask
-        # Puedes usar una librería como `starlette-sessions` si lo necesitas
         
         if "*" in auth["bots"]:
             return RedirectResponse(url="/panel", status_code=status.HTTP_303_SEE_OTHER)
@@ -763,12 +772,26 @@ async def guardar_edicion(data: dict):
     return JSONResponse(content={"mensaje": "Lead actualizado"})
 
 @app.get("/exportar", response_class=Response)
-async def exportar():
-    # ... (lógica sin cambios) ...
+async def exportar(request: Request):
+    # Lógica de autenticación
+    # if not request.session.get("autenticado"):
+    #     raise HTTPException(status_code=401, detail="No autenticado")
+    
+    leads = fb_list_leads_all()
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(["Bot", "Número", "Primer contacto", "Último mensaje", "Última vez", "Mensajes", "Estado", "Notas"])
-    # ...
+    for _, datos in leads.items():
+        writer.writerow([
+            datos.get("bot", ""),
+            datos.get("numero", ""),
+            datos.get("first_seen", ""),
+            datos.get("last_message", ""),
+            datos.get("last_seen", ""),
+            datos.get("messages", ""),
+            datos.get("status", ""),
+            datos.get("notes", "")
+        ])
     output.seek(0)
     return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment;filename=leads.csv"})
 
@@ -1166,8 +1189,6 @@ async def voice_stream(websocket: WebSocket):
 # =======================
 @app.get("/conversacion_general/{bot}/{numero}", response_class=HTMLResponse)
 async def chat_general(request: Request, bot: str, numero: str):
-    # Asume que Jinja2Templates está configurado para acceder a los templates
-    # y que la lógica de autenticación de FastAPI está implementada
     # Lógica de autenticación simple de ejemplo
     # if not request.session.get("autenticado"):
     #     return RedirectResponse(url="/panel")
@@ -1195,8 +1216,7 @@ async def chat_general(request: Request, bot: str, numero: str):
 
 @app.get("/conversacion_bot/{bot}/{numero}", response_class=HTMLResponse)
 async def chat_bot(request: Request, bot: str, numero: str):
-    # Asume que Jinja2Templates está configurado para acceder a los templates
-    # y que la lógica de autenticación de FastAPI está implementada
+    # Lógica de autenticación simple de ejemplo
     # if not request.session.get("autenticado"):
     #     return RedirectResponse(url="/panel")
 
