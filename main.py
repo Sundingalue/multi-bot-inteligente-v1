@@ -180,7 +180,10 @@ follow_up_flags = {}         # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}            # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}           # clave_sesion -> bool (si ya se saludó)
 
-voice_conversation_history = {} # Historial de conversaciones para llamadas de voz
+# ✅ CORRECCIÓN: Definición de variables globales para la voz
+voice_call_cache = {}
+voice_conversation_history = {}
+
 
 # =======================
 #  Helpers generales (neutros)
@@ -230,11 +233,14 @@ def _get_bot_cfg_by_any_number(to_number: str):
         if len(bots_config) == 1:
             return list(bots_config.values())[0]
     
+    # ✅ CORRECCIÓN FINAL: Buscar por E.164 para mayor compatibilidad
     canon_to = _canonize_phone(to_number)
     for key, cfg in bots_config.items():
-        if key.strip().lower() == to_number.strip().lower() or _canonize_phone(key) == canon_to:
+        if _canonize_phone(key) == canon_to:
             return cfg
-    return None
+    
+    return bots_config.get(to_number)
+
 
 def _get_bot_number_by_name(bot_name: str) -> str:
     """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
@@ -1500,6 +1506,8 @@ def voice_webhook():
     print(f"[VOICE] Llamada a '{bot_config['bot_name']}' iniciada.")
     
     # ✅ CORRECCIÓN: Iniciar el procesamiento del saludo en un hilo separado
+    # Se añade la entrada a voice_call_cache para que el hilo sepa dónde guardar el resultado
+    voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": "placeholder"} # Evitar que el hilo falle
     Thread(target=_generate_and_store_greeting, args=(call_sid, bot_config), daemon=True).start()
 
     resp = VoiceResponse()
@@ -1511,8 +1519,10 @@ def voice_webhook():
         speech_timeout="auto",
         language="es-ES"
     )
+    # Se omite el .say() para evitar que twilio genere audio robotico
     resp.append(gather)
     
+    # Se redirige inmediatamente para ir al "gather" que espera el saludo
     resp.redirect(url_for('voice_gather', _external=True))
     
     return str(resp)
@@ -1531,38 +1541,35 @@ def voice_gather():
         resp.say("Lo siento, hubo un problema técnico.")
         return str(resp)
 
-    if not user_speech:
-        # El primer gather que se ejecuta después del saludo
-        # Esperar a que el saludo se haya generado y reproducirlo
+    if call_sid not in voice_conversation_history:
+        # ✅ CORRECCIÓN: En la primera llamada a voice_gather, el usuario no ha hablado,
+        # así que reproducimos el saludo.
         greeting_file_name = _wait_for_audio(call_sid, f"{call_sid}_greeting")
         if greeting_file_name:
             resp.play(f"{request.host_url}voice-audio/{greeting_file_name}")
         else:
             resp.say("Lo siento, no pude generar el saludo.")
         
-        # Iniciar el siguiente gather inmediatamente
-        gather = Gather(
-            input="speech", 
-            action=url_for('voice_gather', _external=True), 
-            speech_model="phone_call",
-            speech_timeout="auto",
-            language="es-ES"
-        )
-        resp.append(gather)
-        return str(resp)
-
-    # Si hay voz del usuario, procesar la conversación
-    print(f"[VOICE] Mensaje del usuario: {user_speech}")
+        # El historial de la conversación se inicializa antes de la primera respuesta del usuario
+        voice_conversation_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
     
-    _start_async_chat(call_sid, user_speech, bot_config)
-    audio_file_name = _wait_for_audio(call_sid, call_sid, timeout=15)
-    
-    if audio_file_name:
-        print(f"[VOICE] Reproduciendo respuesta del bot desde: {audio_file_name}")
-        resp.play(f"{request.host_url}voice-audio/{audio_file_name}")
+    elif user_speech:
+        print(f"[VOICE] Mensaje del usuario: {user_speech}")
+        
+        # ✅ CORRECCIÓN: Iniciar el procesamiento de la IA en un hilo separado
+        _start_async_chat(call_sid, user_speech, bot_config)
+        audio_file_name = _wait_for_audio(call_sid, call_sid, timeout=15)
+        
+        if audio_file_name:
+            print(f"[VOICE] Reproduciendo respuesta del bot desde: {audio_file_name}")
+            resp.play(f"{request.host_url}voice-audio/{audio_file_name}")
+        else:
+            print(f"❌ Error: No se pudo obtener la URL de audio a tiempo.")
+            resp.say("Lo siento, estoy teniendo un problema y no pude responder.")
+        
     else:
-        print(f"❌ Error: No se pudo obtener la URL de audio a tiempo.")
-        resp.say("Lo siento, estoy teniendo un problema y no pude responder.")
+        print("[VOICE] No se detectó voz del usuario.")
+        resp.say("No te escuché. ¿Puedes repetir, por favor?")
         
     gather = Gather(
         input="speech", 
