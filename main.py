@@ -1387,205 +1387,240 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔊 VOZ con Twilio Gather + OpenAI Speech to Text + Chat Completion
+#  🔊 VOZ — OpenAI Realtime (sin Gather)
+#  Twilio <Connect><Stream> ↔ WebSocket bridge ↔ OpenAI Realtime
 # =======================
 
-def _voice_get_bot_config(to_number: str) -> dict:
-    """
-    Extrae y normaliza la configuración del bot para llamadas de voz.
-    Mejora: Busca por E.164 para mayor compatibilidad.
-    """
-    canon_to = _canonize_phone(to_number)
-    bot_cfg = None
-    for key, cfg in bots_config.items():
-        if _canonize_phone(key) == canon_to:
-            bot_cfg = cfg
-            break
-    
-    if not bot_cfg:
-        bot_cfg = bots_config.get(to_number)
+import base64
+import json as _json
+from flask import request
+from threading import Thread
 
+try:
+    from flask_sock import Sock
+except Exception:
+    raise RuntimeError("Falta dependencia: instala flask-sock (pip install flask-sock)")
+
+try:
+    import websocket as ws_client  # websocket-client
+except Exception:
+    raise RuntimeError("Falta dependencia: instala websocket-client (pip install websocket-client)")
+
+# Inicializa Sock una sola vez
+try:
+    sock  # noqa
+except NameError:
+    sock = Sock(app)
+
+def _voice_get_bot_realtime_config(to_number: str):
+    """Lee la config de voz realtime desde bots/*.json"""
+    bot_cfg = _get_bot_cfg_by_any_number(to_number)
     if not bot_cfg:
         return None
 
-    config = {
+    def _get_path(d, paths, default=None):
+        for p in paths:
+            cur = d
+            ok = True
+            for k in p.split("."):
+                if isinstance(cur, dict) and k in cur:
+                    cur = cur[k]
+                else:
+                    ok = False
+                    break
+            if ok:
+                return cur
+        return default
+
+    model = _get_path(bot_cfg, ["realtime.model", "model"], "gpt-4o-realtime-preview")
+    voice = _get_path(bot_cfg, ["realtime.voice", "voice", "tts.voice"], "nova")
+    system_prompt = bot_cfg.get("system_prompt", "Eres un asistente de voz natural y profesional.")
+    language = _get_path(bot_cfg, ["realtime.language", "language"], "es-MX")
+
+    return {
         "bot_name": bot_cfg.get("name", "Unknown"),
-        "model": bot_cfg.get("model", "gpt-4o"),
-        "system_prompt": bot_cfg.get("system_prompt", "Eres un asistente de voz amable y natural. Habla con una voz humana."),
-        "voice_greeting": bot_cfg.get("voice_greeting", f"Hola, soy el asistente de {bot_cfg.get('business_name', bot_cfg.get('name', 'el bot'))}. ¿Cómo puedo ayudarte?"),
-        "openai_voice": bot_cfg.get("realtime", {}).get("voice", "nova"),
+        "model": str(model),
+        "voice": str(voice),
+        "system_prompt": str(system_prompt),
+        "language": str(language),
     }
-    return config
 
-def _generate_and_store_greeting(call_sid: str, bot_config: dict):
-    """Genera audio con OpenAI TTS y lo guarda en /tmp. Guarda el nombre del archivo en caché."""
-    try:
-        greeting_text = bot_config["voice_greeting"]
-        openai_voice = bot_config["openai_voice"]
-        
-        temp_dir = "/tmp"
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
-        greeting_file_name = f"{call_sid}_greeting.mp3"
-        greeting_file_path = os.path.join(temp_dir, greeting_file_name)
-
-        if not os.path.exists(greeting_file_path):
-            tts_response = client.audio.speech.create(
-                model="tts-1",
-                voice=openai_voice,
-                input=greeting_text,
-                speed=1.0
-            )
-            tts_response.stream_to_file(greeting_file_path)
-        
-        # ✅ CORRECCIÓN: Guardar el nombre del archivo dentro de un diccionario
-        voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": greeting_file_name}
-
-    except Exception as e:
-        print(f"❌ Error en el hilo al generar el saludo para {call_sid}: {e}")
-        # ✅ CORRECCIÓN: Asegurar que siempre se guarde un diccionario
-        voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": ""}
-
-def _thread_target_chat(call_sid, user_speech, bot_config):
-    """Función para el hilo de procesamiento de la IA."""
-    try:
-        if call_sid not in voice_conversation_history:
-            voice_conversation_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
-        
-        voice_conversation_history[call_sid].append({"role": "user", "content": user_speech})
-        
-        chat_completion = client.chat.completions.create(
-            model=bot_config["model"],
-            messages=voice_conversation_history[call_sid]
-        )
-        bot_response_text = chat_completion.choices[0].message.content.strip()
-        
-        voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
-
-        temp_dir = "/tmp"
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
-        audio_file_name = f"{call_sid}_{uuid.uuid4().hex[:8]}.mp3"
-        audio_file_path = os.path.join(temp_dir, audio_file_name)
-        
-        tts_response = client.audio.speech.create(
-            model="tts-1",
-            voice=bot_config["openai_voice"],
-            input=bot_response_text,
-            speed=1.0
-        )
-        tts_response.stream_to_file(audio_file_path)
-
-        # Guardar el nombre del archivo en la caché
-        voice_call_cache[call_sid] = {"audio_file_name": audio_file_name}
-        
-    except Exception as e:
-        print(f"❌ Error en el hilo de chat con OpenAI: {e}")
-        voice_call_cache[call_sid] = {"audio_file_name": ""}
-
-def _wait_for_audio(call_sid, cache_key, timeout=15):
-    """Espera hasta que el hilo haya generado el audio o se agote el tiempo."""
-    start_time = time.time()
-    while cache_key not in voice_call_cache and (time.time() - start_time) < timeout:
-        time.sleep(0.1)
-    
-    if cache_key in voice_call_cache:
-        return voice_call_cache[cache_key].get("audio_file_name", "")
-    return ""
-
-# 1. Webhook inicial para la llamada entrante
+# -------- 1) TwiML: sin Gather, solo <Connect><Stream>
 @app.route("/voice", methods=["POST"])
-def voice_webhook():
-    to_number = request.values.get("To")
-    call_sid = request.values.get("CallSid")
+def voice_webhook_realtime():
+    to_number = request.values.get("To", "")
+    cfg = _voice_get_bot_realtime_config(to_number)
 
-    bot_config = _voice_get_bot_config(to_number)
-    if not bot_config:
-        resp = VoiceResponse()
-        resp.say("Lo siento, no hay un bot configurado para este número de voz.")
-        return str(resp)
+    vr = VoiceResponse()
+    if not cfg:
+        vr.say("Lo siento, este número no tiene un bot configurado.")
+        return str(vr)
 
-    print(f"[VOICE] Llamada a '{bot_config['bot_name']}' iniciada.")
-    
-    # ✅ CORRECCIÓN: Iniciar el procesamiento del saludo en un hilo separado
-    # Se añade la entrada a voice_call_cache para que el hilo sepa dónde guardar el resultado
-    voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": "placeholder"}
-    Thread(target=_generate_and_store_greeting, args=(call_sid, bot_config), daemon=True).start()
-
-    resp = VoiceResponse()
-    # Usar <Gather> para escuchar la respuesta del usuario
-    gather = Gather(
-        input="speech", 
-        action=url_for('voice_gather', _external=True),
-        speech_model="phone_call",
-        speech_timeout="auto",
-        language="es-ES"
-    )
-    # Se omite el .say() para evitar que twilio genere audio robotico
-    resp.append(gather)
-    
-    # Se redirige inmediatamente para ir al "gather" que espera el saludo
-    resp.redirect(url_for('voice_gather', _external=True))
-    
-    return str(resp)
-
-# 2. Webhook para procesar el audio del usuario
-@app.route("/voice-gather", methods=["POST"])
-def voice_gather():
-    resp = VoiceResponse()
-    
-    user_speech = request.values.get("SpeechResult", "").strip()
-    call_sid = request.values.get("CallSid")
-    to_number = request.values.get("To")
-
-    bot_config = _voice_get_bot_config(to_number)
-    if not bot_config:
-        resp.say("Lo siento, hubo un problema técnico.")
-        return str(resp)
-        
-    if user_speech:
-        print(f"[VOICE] Mensaje del usuario: {user_speech}")
-        
-        # ✅ CORRECCIÓN: Iniciar el procesamiento de la IA en un hilo separado
-        _thread_target_chat(call_sid, user_speech, bot_config)
-        audio_file_name = _wait_for_audio(call_sid, call_sid, timeout=15)
-        
-        if audio_file_name:
-            print(f"[VOICE] Reproduciendo respuesta del bot desde: {audio_file_name}")
-            resp.play(f"{request.host_url}voice-audio/{audio_file_name}")
-        else:
-            print(f"❌ Error: No se pudo obtener la URL de audio a tiempo.")
-            resp.say("Lo siento, estoy teniendo un problema y no pude responder.")
-        
+    # Construir URL WS externa (Twilio requiere wss://)
+    base = request.host_url.rstrip("/")  # ej: https://tu-dominio.com/
+    if base.startswith("https://"):
+        ws_base = "wss://" + base[len("https://"):]
     else:
-        # ✅ CORRECCIÓN: En la primera llamada a voice_gather, el usuario no ha hablado,
-        # así que reproducimos el saludo.
-        greeting_file_name = _wait_for_audio(call_sid, f"{call_sid}_greeting")
-        if greeting_file_name:
-            resp.play(f"{request.host_url}voice-audio/{greeting_file_name}")
-        else:
-            resp.say("Lo siento, no pude generar el saludo.")
+        ws_base = "ws://" + base[len("http://"):]
+    stream_url = f"{ws_base}/ws/twilio-media?to={_canonize_phone(to_number)}"
 
-    gather = Gather(
-        input="speech", 
-        action=url_for('voice_gather', _external=True), 
-        speech_model="phone_call",
-        speech_timeout="auto",
-        language="es-ES"
-    )
-    resp.append(gather)
-    
-    return str(resp)
+    connect = vr.connect()
+    connect.stream(url=stream_url)
+    return str(vr)
 
-# 3. Endpoint para servir el archivo de audio
-@app.route("/voice-audio/<filename>", methods=["GET"])
-def voice_audio(filename):
-    file_path = os.path.join("/tmp", filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, mimetype="audio/mpeg", as_attachment=False)
-    else:
-        print(f"❌ Error 404: Archivo no encontrado en {file_path}")
-        return "Archivo no encontrado", 404
+# -------- 2) Hilo lector de OpenAI
+def _oai_reader_loop(oai, ws, stream_sid):
+    try:
+        while True:
+            raw = oai.recv()
+            if not raw:
+                break
+            msg = _json.loads(raw)
+            t = msg.get("type", "")
+
+            if t == "response.output_audio.delta":
+                audio_b64 = msg.get("delta", "")
+                if audio_b64 and stream_sid:
+                    try:
+                        ws.send(_json.dumps({
+                            "event": "media",
+                            "streamSid": stream_sid,
+                            "media": {"payload": audio_b64}
+                        }))
+                    except Exception:
+                        break
+
+            elif t in ("response.completed", "response.cancelled"):
+                if stream_sid:
+                    try:
+                        ws.send(_json.dumps({
+                            "event": "mark",
+                            "streamSid": stream_sid,
+                            "mark": {"name": "oai_response_end"}
+                        }))
+                    except Exception:
+                        break
+    except Exception:
+        pass
+
+# -------- 3) WebSocket Twilio <-> OpenAI Realtime
+@sock.route("/ws/twilio-media")
+def twilio_media_ws(ws):
+    oai = None
+    oai_thread = None
+    stream_sid = None
+    frame_count = 0
+    try:
+        # 1) Config del bot
+        to_number = request.args.get("to", "")
+        cfg = _voice_get_bot_realtime_config(to_number)
+        if not cfg:
+            try:
+                ws.send(_json.dumps({"event": "error", "message": "Bot no configurado"}))
+            except Exception:
+                pass
+            return
+
+        model = cfg["model"]
+        voice = cfg["voice"]
+        system_prompt = cfg["system_prompt"]
+
+        # 2) Conectar a OpenAI Realtime
+        oai_headers = [
+            f"Authorization: Bearer {OPENAI_API_KEY}",
+            "OpenAI-Beta: realtime=v1"
+        ]
+        oai_ws_url = f"wss://api.openai.com/v1/realtime?model={model}"
+        oai = ws_client.create_connection(oai_ws_url, header=oai_headers)
+
+        # 3) Configurar sesión
+        oai.send(_json.dumps({
+            "type": "session.update",
+            "session": {
+                "voice": voice,
+                "instructions": system_prompt,
+                "modalities": ["text", "audio"],
+                "input_audio_format": "mulaw",
+                "output_audio_format": "mulaw",
+                "turn_detection": {"type": "server_vad", "threshold": 0.5}
+            }
+        }))
+
+        # 4) Arranca hilo lector de OpenAI
+        oai_thread = Thread(target=_oai_reader_loop, args=(oai, ws, None), daemon=True)
+        oai_thread.start()
+
+        # 5) Loop principal: leer Twilio
+        while True:
+            try:
+                tw_raw = ws.receive()  # bloqueante
+            except EOFError:
+                break
+            except Exception:
+                break
+
+            if not tw_raw:
+                break
+
+            try:
+                tw_msg = _json.loads(tw_raw)
+            except Exception:
+                continue
+
+            ev = str(tw_msg.get("event", ""))
+
+            if ev == "start":
+                stream_sid = ((tw_msg.get("start") or {}).get("streamSid")) or stream_sid
+                # reiniciar hilo lector con stream_sid
+                if oai_thread and oai_thread.is_alive():
+                    pass
+                else:
+                    oai_thread = Thread(target=_oai_reader_loop, args=(oai, ws, stream_sid), daemon=True)
+                    oai_thread.start()
+
+                try:
+                    oai.send(_json.dumps({"type": "input_audio_buffer.clear"}))
+                except Exception:
+                    break
+
+            elif ev == "media":
+                payload_b64 = (tw_msg.get("media") or {}).get("payload", "")
+                if payload_b64:
+                    try:
+                        oai.send(_json.dumps({
+                            "type": "input_audio_buffer.append",
+                            "audio": payload_b64
+                        }))
+                        frame_count += 1
+                        if frame_count >= 10:
+                            oai.send(_json.dumps({"type": "input_audio_buffer.commit"}))
+                            oai.send(_json.dumps({"type": "response.create"}))
+                            frame_count = 0
+                    except Exception:
+                        break
+
+            elif ev == "stop":
+                try:
+                    if frame_count > 0:
+                        oai.send(_json.dumps({"type": "input_audio_buffer.commit"}))
+                        oai.send(_json.dumps({"type": "response.create"}))
+                except Exception:
+                    pass
+                break
+
+    except Exception:
+        pass
+    finally:
+        try:
+            if oai:
+                oai.close()
+        except Exception:
+            pass
+        try:
+            ws.close()
+        except Exception:
+            pass
+
 
 # =======================
 #  Vistas de conversación (leen Firebase)
