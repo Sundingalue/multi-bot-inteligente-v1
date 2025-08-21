@@ -234,7 +234,7 @@ def _get_bot_cfg_by_any_number(to_number: str):
         # Fallback a un bot si solo hay uno
         if len(bots_config) == 1:
             return list(bots_config.values())[0]
-    return bots_config.get(to_number) # ✅ CAMBIO: Simplificado para el uso directo en el webhook de voz.
+    return bots_config.get(to_number)
 
 def _get_bot_number_by_name(bot_name: str) -> str:
     """Devuelve la clave 'whatsapp:+1...' de bots_config para un nombre de bot dado."""
@@ -1397,20 +1397,13 @@ def whatsapp_bot():
 # =======================
 
 def _wss_base():
-    base = (request.url_root or "").strip().rstrip("/")
-    if base.startswith("http://"):
-        base = "wss://" + base[len("http://"):]
-    elif base.startswith("https://"):
-        base = "wss://" + base[len("https://"):]
-    else:
-        base = "wss://" + base
-    return base
+    # Obtener el host de la solicitud de forma segura
+    # Esto evita problemas con Render y otros proxies
+    host = request.headers.get("Host") or request.host
+    protocol = "wss://"
+    return f"{protocol}{host}"
 
 def _extract_called_number(req):
-    """
-    Extrae el número de destino de la llamada de forma robusta.
-    Twilio suele mandar 'To', pero según rutas proxy/carriers puede venir como 'Called' u otros.
-    """
     for key in ("To", "Called", "OriginalTo", "CalledTo", "Destination", "CalledVia"):
         val = (req.values.get(key) or "").strip()
         if val:
@@ -1418,10 +1411,6 @@ def _extract_called_number(req):
     return ""
 
 def _send_twi_media(ws_twi_conn, stream_sid, payload):
-    """
-    Función auxiliar para enviar datos de audio a Twilio en el formato correcto.
-    Ahora en el scope global para evitar problemas de hilos.
-    """
     try:
         ws_twi_conn.send(json.dumps({
             "event": "media",
@@ -1436,11 +1425,9 @@ def _send_twi_media(ws_twi_conn, stream_sid, payload):
 @app.route("/voice", methods=["POST"])
 def voice_webhook():
     call_sid = request.values.get("CallSid")
-    to_number = request.values.get("To")  # número destino (tu Twilio)
+    to_number = request.values.get("To")
     from_number = request.values.get("From")
 
-    # ✅ CAMBIO: Buscar el bot directamente en la configuración inicial
-    #    La clave en tu JSON es el número +13469882323
     bot_cfg = bots_config.get(to_number)
 
     if not bot_cfg:
@@ -1448,15 +1435,16 @@ def voice_webhook():
         resp.say("Lo siento, no hay un bot configurado para este número de voz.")
         return str(resp)
 
-    # 2. Guardar la configuración en una caché en memoria
-    #    Así el WebSocket lo puede recuperar sin usar Firebase
     bot_name = bot_cfg.get("name", "Unknown")
-    # ✅ CAMBIO: Leer la configuración de voz del sub-diccionario 'realtime'
     model = bot_cfg.get("realtime", {}).get("model") or OPENAI_REALTIME_MODEL
     voice = bot_cfg.get("realtime", {}).get("voice") or OPENAI_REALTIME_VOICE
     system_prompt = bot_cfg.get("system_prompt") or "Eres un asistente de voz amable, cercano y muy natural. Habla como humano."
     voice_greeting = bot_cfg.get("voice_greeting", "").strip() or f"Hola, soy {bot_name}. ¿Cómo estás?"
     
+    if not call_sid:
+        print("❌ Error: CallSid no recibido en el webhook de voz.")
+        return str(VoiceResponse().say("Lo siento, no pude iniciar la llamada correctamente."))
+
     voice_call_cache[call_sid] = {
         "bot_name": bot_name,
         "model": model,
@@ -1467,27 +1455,26 @@ def voice_webhook():
 
     print(f"[VOICE] Configuración guardada en caché para CallSid={call_sid}.")
 
-    # 3. TwiML SOLO con <Connect><Stream>
     resp = VoiceResponse()
     with resp.connect() as connect:
-        # ✅ CAMBIO CRÍTICO: Añadir el CallSid como parámetro de consulta en la URL.
-        # Esto soluciona el problema de que el CallSid no se pasa en el encabezado.
-        stream_url = f"{_wss_base().rstrip('/')}/twilio-media-stream?call_sid={call_sid}"
-        connect.stream(url=stream_url)
+        # ✅ CAMBIO CRÍTICO: Pasar el CallSid como parte de la RUTA, no como un parámetro.
+        # Esto es mucho más confiable cuando los proxies eliminan los query params.
+        connect.stream(url=f"{_wss_base().rstrip('/')}/twilio-media-stream/{call_sid}")
     return str(resp)
 
-
-# ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
 @app.get("/voice_debug")
 def voice_debug():
     fake_to = (request.args.get("to") or "").strip()
     if not fake_to:
         return Response("<h3>Usa ?to=+1346XXXXXXX para previsualizar TwiML</h3>", mimetype="text/html")
-    fake_req = request
-    # Simula valores
-    fake_req.values = request.values.copy()
-    fake_req.values["To"] = fake_to
-    return voice_webhook() # ✅ CAMBIO: Llamamos a la función principal
+    
+    # Simula valores de Twilio
+    fake_call_sid = "CA" + uuid.uuid4().hex
+    fake_values = {'CallSid': fake_call_sid, 'To': fake_to, 'From': '+11234567890'}
+    
+    # Crea una solicitud simulada con los valores
+    with app.test_request_context(method='POST', path='/voice', data=fake_values):
+        return voice_webhook()
 
 # --- WebSocket server (Twilio -> OpenAI Realtime) ---
 sock = None
@@ -1497,15 +1484,9 @@ except Exception as _e:
     print("⚠️ Sock no inicializado (instala flask-sock). Realtime por WS no disponible.")
 
 if sock:
-    @sock.route('/twilio-media-stream')
-    def twilio_media_stream(ws_twi):
-        """
-        Bridge WS con commits por silencio:
-        - Recibe audio (u-law 8k) de Twilio
-        - Envía append a OpenAI
-        - En silencio (~900 ms) hace commit + response.create (modalidad audio)
-        - Reenvía response.audio.delta a Twilio como media
-        """
+    # ✅ CAMBIO CRÍTICO: La ruta ahora espera el CallSid como un parámetro de la URL.
+    @sock.route('/twilio-media-stream/<call_sid>')
+    def twilio_media_stream(ws_twi, call_sid):
         def _openai_realtime_ws(model: str, voice: str, system_prompt: str):
             headers = [
                 "Authorization: Bearer " + OPENAI_API_KEY,
@@ -1528,22 +1509,13 @@ if sock:
             return ws
 
         try:
-            # ✅ DIAGNÓSTICO: Confirmar que la ruta se ejecuta y qué headers recibe.
             print(f"[WS] CONEXIÓN RECIBIDA: ip={request.remote_addr}")
-            print(f"[WS] Headers de la conexión: {request.headers}")
-            
-            # ✅ CAMBIO CRÍTICO: Obtener el CallSid del parámetro de consulta de la URL.
-            call_sid = request.args.get('call_sid')
-
-            # ✅ DIAGNÓSTICO: Mostrar el CallSid recibido.
-            print(f"[WS] CallSid recibido de la URL: '{call_sid}'")
+            print(f"[WS] CallSid recibido de la RUTA: '{call_sid}'")
         except Exception:
-            call_sid = None
+            pass
 
-        # ✅ CAMBIO: LEER LA CONFIGURACIÓN DE LA CACHÉ EN MEMORIA
         session_data = voice_call_cache.get(call_sid)
         
-        # ✅ DIAGNÓSTICO: Mostrar si se encontró la sesión en la caché.
         print(f"[WS] Sesión encontrada en caché: {bool(session_data)}")
 
         if not session_data:
@@ -1561,7 +1533,6 @@ if sock:
             voice_greeting = session_data["voice_greeting"]
             print(f"[WS] ✅ Sesión recuperada de la caché -> bot: {bot_name}, model: {model}, voice: {voice}")
             
-        # 2) Conectar a OpenAI Realtime
         ws_ai = None
         try:
             ws_ai = _openai_realtime_ws(model, voice, sysmsg)
@@ -1660,7 +1631,6 @@ if sock:
                     print(f"[WS] start streamSid={stream_sid}")
 
                     try:
-                        # ✅ CAMBIO: Usar el saludo del JSON o el de fallback.
                         saludo = voice_greeting
                         ws_ai.send(json.dumps({
                             "type": "response.create",
@@ -1686,8 +1656,6 @@ if sock:
                     _commit_and_ask()
                     break
 
-                # ignoramos 'mark'
-
         except Exception as e:
             print("⚠️ WS Twilio error:", e)
         finally:
@@ -1696,7 +1664,6 @@ if sock:
                 silence_kill.set()
                 if ws_ai:
                     ws_ai.close()
-                # ✅ CAMBIO: Eliminar la configuración de la caché
                 if call_sid in voice_call_cache:
                     del voice_call_cache[call_sid]
                 print("[WS] conexión cerrada y caché limpia")
@@ -1805,5 +1772,5 @@ def api_chat(bot, numero):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"[BOOT] BOOKING_URL_FALLBACK={BOOKING_URL_FALLBACK}")
-    print(f"I[BOOT] APP_DOWNLOAD_URL_FALLBACK={APP_DOWNLOAD_URL_FALLBACK}")
+    print(f"[BOOT] APP_DOWNLOAD_URL_FALLBACK={APP_DOWNLOAD_URL_FALLBACK}")
     app.run(host="0.0.0.0", port=port)
