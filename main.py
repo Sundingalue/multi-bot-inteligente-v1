@@ -35,18 +35,6 @@ from firebase_admin import credentials, db
 # 🔹 NEW: FCM (para notificaciones push)
 from firebase_admin import messaging as fcm
 
-# 🔹 NEW (Realtime bridge) — dependencias WebSocket
-import base64
-import struct
-import ssl
-from threading import Event
-import urllib.parse
-try:
-    from flask_sock import Sock
-    import websocket # websocket-client
-except Exception as _e:
-    print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
-
 # =======================
 #  Cargar variables de entorno (Render -> Secret File)
 # =======================
@@ -65,10 +53,6 @@ APP_DOWNLOAD_URL_FALLBACK = (os.environ.get("APP_DOWNLOAD_URL", "").strip())
 
 # 🔐 NEW (opcional): Bearer para proteger endpoints /push/* y (ahora) API móvil
 API_BEARER_TOKEN = (os.environ.get("API_BEARER_TOKEN") or "").strip()
-
-# 🔹 NEW (Realtime): ajustes por defecto del modelo/voz
-OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17").strip()
-OPENAI_REALTIME_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "verse").strip()
 
 def _valid_url(u: str) -> bool:
     return isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))
@@ -184,8 +168,7 @@ follow_up_flags = {}         # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}            # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}           # clave_sesion -> bool (si ya se saludó)
 
-# ✅ CAMBIO: CACHÉ EN MEMORIA PARA LLAMADAS DE VOZ (en lugar de Firebase)
-voice_call_cache = {}
+voice_conversation_history = {} # Historial de conversaciones para llamadas de voz
 
 # =======================
 #  Helpers generales (neutros)
@@ -1381,7 +1364,7 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔊 VOZ con OpenAI Realtime + Twilio Media Streams
+#  🔊 VOZ con Twilio Gather + OpenAI Speech to Text + Chat Completion
 # =======================
 
 # ✅ CAMBIO CRÍTICO: SE ELIMINAN LAS RUTAS DE WEBSOCKET Y SE REEMPLAZAN POR ESTE ENFOQUE.
@@ -1412,6 +1395,7 @@ def _voice_get_bot_config(to_number: str) -> dict:
 @app.route("/voice", methods=["POST"])
 def voice_webhook():
     to_number = request.values.get("To")
+    call_sid = request.values.get("CallSid") # Se necesita para el nombre del archivo de audio
     bot_config = _voice_get_bot_config(to_number)
 
     if not bot_config:
@@ -1419,9 +1403,33 @@ def voice_webhook():
         resp.say("Lo siento, no hay un bot configurado para este número de voz.")
         return str(resp)
 
-    # Iniciar la conversación con un saludo
-    resp = VoiceResponse()
-    # Usar <Gather> con speech_model para transcripción
+    # ✅ CAMBIO: Generar el saludo con OpenAI TTS para que suene natural
+    try:
+        temp_dir = "/tmp"
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+        greeting_file = os.path.join(temp_dir, f"{call_sid}_greeting.mp3")
+
+        # Evitar generar si ya existe el archivo (por si hay redirecciones)
+        if not os.path.exists(greeting_file):
+            tts_response = client.audio.speech.create(
+                model="tts-1",
+                voice=bot_config["openai_voice"],
+                input=bot_config["voice_greeting"],
+                speed=1.0
+            )
+            tts_response.stream_to_file(greeting_file)
+        
+        # Iniciar la conversación con el saludo de OpenAI
+        resp = VoiceResponse()
+        resp.play(url=f"{request.host_url}voice-audio/{os.path.basename(greeting_file)}")
+
+    except Exception as e:
+        print(f"❌ Error al generar el saludo con OpenAI TTS: {e}")
+        resp = VoiceResponse()
+        resp.say("Lo siento, no pude generar el saludo. Por favor, llame de nuevo.")
+
+    # Usar <Gather> para escuchar la respuesta del usuario
     gather = Gather(
         input="speech", 
         action=url_for('voice_gather', _external=True),
@@ -1429,13 +1437,12 @@ def voice_webhook():
         speech_timeout="auto",
         language="es-ES"
     )
-    gather.say(bot_config["voice_greeting"], voice=bot_config["openai_voice"])
     resp.append(gather)
-    
+
     # Si nadie habla, volver a pedir que hablen
     resp.redirect(url_for('voice_webhook', _external=True))
     
-    print(f"[VOICE] Llamada a {bot_config['bot_name']} iniciada con saludo.")
+    print(f"[VOICE] Llamada a {bot_config['bot_name']} iniciada con saludo de OpenAI.")
     return str(resp)
 
 # 2. Webhook para procesar el audio del usuario
@@ -1456,13 +1463,11 @@ def voice_gather():
     model = bot_config["model"]
     openai_voice = bot_config["openai_voice"]
 
-    # Usar CallSid para gestionar la conversación en memoria
     if call_sid not in session_history:
         session_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
 
     if user_speech:
         print(f"[VOICE] Mensaje del usuario: {user_speech}")
-        
         session_history[call_sid].append({"role": "user", "content": user_speech})
         
         try:
@@ -1473,10 +1478,8 @@ def voice_gather():
             bot_response_text = chat_completion.choices[0].message.content.strip()
             
             print(f"[VOICE] Respuesta del bot: {bot_response_text}")
-
             session_history[call_sid].append({"role": "assistant", "content": bot_response_text})
 
-            # Convertir la respuesta de texto a voz con OpenAI TTS
             tts_response = client.audio.speech.create(
                 model="tts-1",
                 voice=openai_voice,
@@ -1484,23 +1487,18 @@ def voice_gather():
                 speed=1.0
             )
 
-            # Guardar el audio en un archivo temporal
             temp_dir = "/tmp"
-            if not os.path.exists(temp_dir):
-                os.makedirs(temp_dir)
             temp_file = os.path.join(temp_dir, f"{call_sid}.mp3")
             with open(temp_file, "wb") as f:
                 for chunk in tts_response.iter_bytes(chunk_size=4096):
                     f.write(chunk)
             
-            # Servir el audio desde un endpoint de la misma app
-            resp.play(f"{request.host_url}voice-audio/{call_sid}.mp3")
+            resp.play(url=f"{request.host_url}voice-audio/{os.path.basename(temp_file)}")
             
         except Exception as e:
             print(f"❌ Error al procesar la voz con OpenAI: {e}")
             resp.say("Lo siento, hubo un error procesando tu solicitud.")
 
-    # Volver a iniciar el Gather para la próxima respuesta
     gather = Gather(
         input="speech", 
         action=url_for('voice_gather', _external=True), 
