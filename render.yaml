@@ -1,10 +1,9 @@
 services:
   - type: web
-    name: multi-bot-inteligente-v1
+    name: multi-bot-inteligente
     env: python
-    plan: free
-    branch: main
-    buildCommand: ""
-    startCommand: "gunicorn -k eventlet -w 1 main:app"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k eventlet -w 1 -b 0.0.0.0:$PORT main:app
     envVars:
-      - fromDotEnv: true
+      - key: PYTHON_VERSION
+        value: 3.11.9
