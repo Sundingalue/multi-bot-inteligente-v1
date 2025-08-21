@@ -1,14 +1,16 @@
-# Core Flask y servidor web
-Flask==3.0.3
-gunicorn>=21.2.0
+Perfecto. He tomado tu archivo requirements.txt y lo he editado para que sea compatible con el nuevo entorno de FastAPI y Uvicorn, eliminando las dependencias conflictivas de eventlet y gunicorn.
 
-# Asincronía para Websockets (SOLUCIÓN)
-eventlet
-gevent>=24.2.1
-gevent-websocket>=0.10.1
-flask-sock==0.7.0
+Aquí tienes el archivo requirements.txt editado y completo. Solo necesitas copiar y pegar esto, y luego seguir los pasos que te di para el deploy y el comando de inicio en Render.
+
+requirements.txt Editado para FastAPI
+# Core FastAPI y servidor web
+fastapi
+uvicorn[standard]
+
+# Dependencias para el WebSocket de Twilio
 websocket-client==1.8.0
 simple-websocket
+requests==2.32.3
 
 # SDK de OpenAI
 openai>=1.12.0
