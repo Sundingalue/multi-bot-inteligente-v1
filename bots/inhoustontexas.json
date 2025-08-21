@@ -110,7 +110,7 @@
       "latency_mode": "low",
       "interruptible": true,
       "audio_in": {
-        "format": "mulaw",
+        "format": "pcm24",
         "sample_rate_hz": 24000
       },
       "audio_out": {
@@ -120,7 +120,7 @@
       "vad": {
         "enable": true,
         "prefix_ms": 150,
-        "silence_ms": 250
+        "silence_ms": 150
       },
       "transcription": {
         "enable": true,
