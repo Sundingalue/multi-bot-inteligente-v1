@@ -198,8 +198,9 @@ def _hora_to_epoch_ms(hora_str: str) -> int:
 
 def _normalize_bot_name(name: str):
     for cfg in bots_config.values():
-        if cfg.get("name", "").lower() == str(name).lower():
-            return cfg.get("name")
+        if isinstance(cfg, dict):
+            if cfg.get("name", "").lower() == str(name).lower():
+                return cfg.get("name")
     return None
 
 def _get_bot_cfg_by_name(name: str):
@@ -743,17 +744,18 @@ def login_html_redirect():
 
 @app.route("/panel", methods=["GET", "POST"])
 def panel():
-    # ---- NO AUTENTICADO: login ----
     if not session.get("autenticado"):
         if request.method == "POST":
-            # acepta usuario/username/email
+            # ✅ Acepta 'usuario' y también 'username' o 'email' (compatibilidad con gestores iOS/Android)
             usuario = (request.form.get("usuario") or request.form.get("username") or request.form.get("email") or "").strip()
-            # acepta clave/password
+
+            # ✅ Acepta 'clave' o 'password' (para mejores prompts del navegador)
             clave = request.form.get("clave")
-            if not clave:
-                clave = request.form.get("password")
+            if clave is None or clave == "":
+                clave = request.form.get("password")  # por si el input se llama 'password'
             clave = (clave or "").strip()
-            # remember me
+
+            # ✅ Sesión persistente si marcaron "Recuérdame"
             remember_flag = (request.form.get("recordarme") or request.form.get("remember") or "").strip().lower()
             remember_on = remember_flag in ("on", "1", "true", "yes", "si", "sí")
 
@@ -762,16 +764,18 @@ def panel():
                 session["autenticado"] = True
                 session["usuario"] = auth["username"]
                 session["bots_permitidos"] = auth["bots"]
+
+                # ✅ Sesión persistente si marcaron "Recuérdame"
                 session.permanent = bool(remember_on)
 
-                # destino según permisos
+                # Preparamos redirect de destino
                 if "*" in auth["bots"]:
                     destino_resp = redirect(url_for("panel"))
                 else:
                     destino = _first_allowed_bot()
                     destino_resp = redirect(url_for("panel_exclusivo_bot", bot_nombre=destino)) if destino else redirect(url_for("panel"))
 
-                # cookies útiles
+                # ✅ Cookies útiles para autocompletar desde el front si lo deseas
                 resp = make_response(destino_resp)
                 max_age = 60 * 24 * 60 * 60  # 60 días
                 if remember_on:
@@ -782,43 +786,23 @@ def panel():
                     resp.delete_cookie("last_username")
                 return resp
 
-            # login fallido
+            # 🔴 Login fallido
             return render_template("login.html", error=True)
 
         # GET no autenticado -> formulario
         return render_template("login.html")
 
-    # ---- AUTENTICADO ----
-    # si NO es admin, redirige al panel exclusivo del primer bot permitido
+    # Ya autenticado
     if not _is_admin():
         destino = _first_allowed_bot()
         if destino:
             return redirect(url_for("panel_exclusivo_bot", bot_nombre=destino))
 
-    # Leads completos (todos los bots)
     leads_todos = fb_list_leads_all()
-
-    # Construir listado de bots disponibles con blindaje de tipos
     bots_disponibles = {}
     for cfg in bots_config.values():
-        if not isinstance(cfg, dict):
-            continue  # ignorar entradas no-dict
-        # nombre interno del bot (varios planes B)
-        name = (
-            (cfg.get("name") or "").strip()
-            or (cfg.get("bot_id") or "").strip()
-        )
-        if not name:
-            # último recurso: derivar de archivo si viene anotado
-            src = (cfg.get("__file__") or "").strip()
-            if src:
-                name = os.path.splitext(os.path.basename(src))[0]
-            if not name:
-                continue  # sin nombre, no se lista
-        label = (cfg.get("business_name") or name).strip() or name
-        bots_disponibles[name] = label
+        bots_disponibles[cfg["name"]] = cfg.get("business_name", cfg["name"])
 
-    # Filtro por bot desde querystring (si existe)
     bot_seleccionado = request.args.get("bot")
     if bot_seleccionado:
         bot_norm = _normalize_bot_name(bot_seleccionado) or bot_seleccionado
@@ -826,13 +810,17 @@ def panel():
     else:
         leads_filtrados = leads_todos
 
-    # Render correcto (antes enviabas leads_todos siempre)
-    return render_template(
-        "panel.html",
-        leads=leads_filtrados,
-        bots=bots_disponibles,
-        bot_seleccionado=bot_seleccionado
-    )
+    return render_template("panel.html", leads=leads_todos, bots= bots_disponibles, bot_seleccionado=bot_seleccionado)
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    # También limpiamos las cookies de ayuda (el navegador puede conservar credenciales guardadas por su cuenta)
+    resp = make_response(redirect(url_for("panel")))
+    resp.delete_cookie("remember_login")
+    # Nota: si quieres conservar last_username al salir, comenta la línea siguiente
+    resp.delete_cookie("last_username")
+    return resp
 
 # =======================
 #  Guardar/Exportar
