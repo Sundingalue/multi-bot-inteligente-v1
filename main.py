@@ -1604,9 +1604,9 @@ if sock:
         ai_reader_running = True
 
         pending_bytes = bytearray()
-        CHUNK_BYTES = 640
+        CHUNK_BYTES = 1600
 
-        SILENCE_MS = 600
+        SILENCE_MS = 900
         last_media_ts = time.time()
         silence_kill = Event()
 
