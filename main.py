@@ -43,6 +43,7 @@ import urllib.parse
 try:
     from flask_sock import Sock
     import websocket  # websocket-client
+    from websocket import WebSocketTimeoutException
 except Exception as _e:
     print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
 
@@ -1537,6 +1538,8 @@ if sock:
             url = f"wss://api.openai.com/v1/realtime?model={model}"
             ws = websocket.WebSocket()
             ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
+            ws.settimeout(0.0)  # no-bloqueante para cooperar con eventlet
+            
             session_update = {
                 "type": "session.update",
                 "session": {
@@ -1601,9 +1604,9 @@ if sock:
         ai_reader_running = True
 
         pending_bytes = bytearray()
-        CHUNK_BYTES = 1600
+        CHUNK_BYTES = 640
 
-        SILENCE_MS = 900
+        SILENCE_MS = 600
         last_media_ts = time.time()
         silence_kill = Event()
 
@@ -1633,23 +1636,30 @@ if sock:
                 print("[WS] error commit/response.create:", e)
 
         def _ai_reader():
-            nonlocal ai_reader_running, stream_sid
-            while ai_reader_running:
-                try:
-                    msg = ws_ai.recv()
-                    if not msg:
-                        continue
-                    data = json.loads(msg)
-                    t = data.get("type")
-                    if t == "response.audio.delta":
-                        payload = data.get("delta") or ""
-                        if payload and stream_sid:
-                            _send_twi_media(ws_twi, stream_sid, payload)
-                    elif t == "error":
-                        print("[WS][AI] ERROR:", data)
-                except Exception as e:
-                    print("ℹ️ AI reader finalizado:", e)
-                    break
+         nonlocal ai_reader_running, stream_sid
+    while ai_reader_running:
+        try:
+            # recv() ahora es no-bloqueante (timeout=0.0); puede no traer frame
+            msg = ws_ai.recv()
+            if not msg:
+                time.sleep(0.01)
+                continue
+            data = json.loads(msg)
+            t = data.get("type")
+            if t == "response.audio.delta":
+                payload = data.get("delta") or ""
+                if payload and stream_sid:
+                    _send_twi_media(ws_twi, stream_sid, payload)
+            elif t == "error":
+                print("[WS][AI] ERROR:", data)
+        except WebSocketTimeoutException:
+            # No hay datos en este instante; ceder CPU un momento
+            time.sleep(0.01)
+            continue
+        except Exception as e:
+            print("ℹ️ AI reader finalizado:", e)
+            break
+
 
         def _silence_watcher():
             while not silence_kill.is_set():
