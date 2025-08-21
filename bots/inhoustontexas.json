@@ -114,7 +114,7 @@
         "sample_rate_hz": 24000
       },
       "audio_out": {
-        "format": "pcm16",
+        "format": "pcm24",
         "sample_rate_hz": 24000
       },
       "vad": {
