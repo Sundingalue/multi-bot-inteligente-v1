@@ -136,7 +136,7 @@
       "after_60min": "Puedo ayudarte a agendar tu cita cuando gustes. ¿Te comparto el enlace?"
     },
     "realtime": {
-      "voice": "nova",
+      "voice": "alloy",
       "model": "gpt-4o-realtime-preview",
       "latency_mode": "low",
       "interruptible": true,
