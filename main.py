@@ -1395,14 +1395,14 @@ def _voice_get_bot_config(to_number: str) -> dict:
     Extrae y normaliza la configuración del bot para llamadas de voz.
     Mejora: Busca por E.164 para mayor compatibilidad.
     """
-    # ✅ CORRECCIÓN: Buscar por número canonizado primero para mayor compatibilidad
     canon_to = _canonize_phone(to_number)
+    bot_cfg = None
     for key, cfg in bots_config.items():
         if _canonize_phone(key) == canon_to:
             bot_cfg = cfg
             break
-    else:
-        # Si no se encontró, fallback a la búsqueda original
+    
+    if not bot_cfg:
         bot_cfg = bots_config.get(to_number)
 
     if not bot_cfg:
@@ -1417,8 +1417,8 @@ def _voice_get_bot_config(to_number: str) -> dict:
     }
     return config
 
-# ✅ CORRECCIÓN: Hilo para generar el audio de saludo y evitar bloqueos.
 def _generate_and_store_greeting(call_sid: str, bot_config: dict):
+    """Genera audio con OpenAI TTS y lo guarda en /tmp. Guarda el nombre del archivo en caché."""
     try:
         greeting_text = bot_config["voice_greeting"]
         openai_voice = bot_config["openai_voice"]
@@ -1426,22 +1426,25 @@ def _generate_and_store_greeting(call_sid: str, bot_config: dict):
         temp_dir = "/tmp"
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
-        greeting_file = os.path.join(temp_dir, f"{call_sid}_greeting.mp3")
+        greeting_file_name = f"{call_sid}_greeting.mp3"
+        greeting_file_path = os.path.join(temp_dir, greeting_file_name)
 
-        if not os.path.exists(greeting_file):
+        if not os.path.exists(greeting_file_path):
             tts_response = client.audio.speech.create(
                 model="tts-1",
                 voice=openai_voice,
                 input=greeting_text,
                 speed=1.0
             )
-            tts_response.stream_to_file(greeting_file)
+            tts_response.stream_to_file(greeting_file_path)
         
-        voice_call_cache[f"{call_sid}_greeting"] = os.path.basename(greeting_file)
+        # ✅ CORRECCIÓN: Guardar el nombre del archivo dentro de un diccionario
+        voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": greeting_file_name}
 
     except Exception as e:
         print(f"❌ Error en el hilo al generar el saludo para {call_sid}: {e}")
-        voice_call_cache[f"{call_sid}_greeting"] = ""
+        # ✅ CORRECCIÓN: Asegurar que siempre se guarde un diccionario
+        voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": ""}
 
 def _thread_target_chat(call_sid, user_speech, bot_config):
     """Función para el hilo de procesamiento de la IA."""
@@ -1459,11 +1462,11 @@ def _thread_target_chat(call_sid, user_speech, bot_config):
         
         voice_conversation_history[call_sid].append({"role": "assistant", "content": bot_response_text})
 
-        # Generar audio
         temp_dir = "/tmp"
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
-        audio_file = os.path.join(temp_dir, f"{call_sid}_{uuid.uuid4().hex[:8]}.mp3")
+        audio_file_name = f"{call_sid}_{uuid.uuid4().hex[:8]}.mp3"
+        audio_file_path = os.path.join(temp_dir, audio_file_name)
         
         tts_response = client.audio.speech.create(
             model="tts-1",
@@ -1471,14 +1474,14 @@ def _thread_target_chat(call_sid, user_speech, bot_config):
             input=bot_response_text,
             speed=1.0
         )
-        tts_response.stream_to_file(audio_file)
+        tts_response.stream_to_file(audio_file_path)
 
-        # Guardar la URL del audio en una caché
-        voice_call_cache[call_sid] = {"audio_file_name": os.path.basename(audio_file)}
+        # Guardar el nombre del archivo en la caché
+        voice_call_cache[call_sid] = {"audio_file_name": audio_file_name}
         
     except Exception as e:
         print(f"❌ Error en el hilo de chat con OpenAI: {e}")
-        voice_call_cache[call_sid] = {"audio_file_name": ""} # Marcar como error
+        voice_call_cache[call_sid] = {"audio_file_name": ""}
 
 def _wait_for_audio(call_sid, cache_key, timeout=15):
     """Espera hasta que el hilo haya generado el audio o se agote el tiempo."""
@@ -1489,7 +1492,6 @@ def _wait_for_audio(call_sid, cache_key, timeout=15):
     if cache_key in voice_call_cache:
         return voice_call_cache[cache_key].get("audio_file_name", "")
     return ""
-
 
 # 1. Webhook inicial para la llamada entrante
 @app.route("/voice", methods=["POST"])
@@ -1507,7 +1509,7 @@ def voice_webhook():
     
     # ✅ CORRECCIÓN: Iniciar el procesamiento del saludo en un hilo separado
     # Se añade la entrada a voice_call_cache para que el hilo sepa dónde guardar el resultado
-    voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": "placeholder"} # Evitar que el hilo falle
+    voice_call_cache[f"{call_sid}_greeting"] = {"audio_file_name": "placeholder"}
     Thread(target=_generate_and_store_greeting, args=(call_sid, bot_config), daemon=True).start()
 
     resp = VoiceResponse()
@@ -1540,24 +1542,12 @@ def voice_gather():
     if not bot_config:
         resp.say("Lo siento, hubo un problema técnico.")
         return str(resp)
-
-    if call_sid not in voice_conversation_history:
-        # ✅ CORRECCIÓN: En la primera llamada a voice_gather, el usuario no ha hablado,
-        # así que reproducimos el saludo.
-        greeting_file_name = _wait_for_audio(call_sid, f"{call_sid}_greeting")
-        if greeting_file_name:
-            resp.play(f"{request.host_url}voice-audio/{greeting_file_name}")
-        else:
-            resp.say("Lo siento, no pude generar el saludo.")
         
-        # El historial de la conversación se inicializa antes de la primera respuesta del usuario
-        voice_conversation_history[call_sid] = [{"role": "system", "content": bot_config["system_prompt"]}]
-    
-    elif user_speech:
+    if user_speech:
         print(f"[VOICE] Mensaje del usuario: {user_speech}")
         
         # ✅ CORRECCIÓN: Iniciar el procesamiento de la IA en un hilo separado
-        _start_async_chat(call_sid, user_speech, bot_config)
+        _thread_target_chat(call_sid, user_speech, bot_config)
         audio_file_name = _wait_for_audio(call_sid, call_sid, timeout=15)
         
         if audio_file_name:
@@ -1568,9 +1558,14 @@ def voice_gather():
             resp.say("Lo siento, estoy teniendo un problema y no pude responder.")
         
     else:
-        print("[VOICE] No se detectó voz del usuario.")
-        resp.say("No te escuché. ¿Puedes repetir, por favor?")
-        
+        # ✅ CORRECCIÓN: En la primera llamada a voice_gather, el usuario no ha hablado,
+        # así que reproducimos el saludo.
+        greeting_file_name = _wait_for_audio(call_sid, f"{call_sid}_greeting")
+        if greeting_file_name:
+            resp.play(f"{request.host_url}voice-audio/{greeting_file_name}")
+        else:
+            resp.say("Lo siento, no pude generar el saludo.")
+
     gather = Gather(
         input="speech", 
         action=url_for('voice_gather', _external=True), 
