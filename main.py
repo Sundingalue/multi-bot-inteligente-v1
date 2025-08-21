@@ -1387,32 +1387,100 @@ def whatsapp_bot():
     return str(response)
 
 # =======================
-#  🔊 VOZ — OpenAI Realtime (sin Gather)
-#  Twilio <Connect><Stream> ↔ WebSocket bridge ↔ OpenAI Realtime
+#  🔧 Resolución robusta de bots por número (con $ref)
+#  Reemplaza TUS helpers: _get_bot_cfg_by_any_number y el lector de config de voz
 # =======================
 
-import json as _json
-from flask import request
-from threading import Thread
+def _resolve_bot_ref(cfg: dict):
+    """
+    Resuelve {"$ref": "..."} siguiendo referencias dentro de bots_config.
+    Acepta "$ref" o "ref". Hace hasta 5 saltos para evitar ciclos.
+    """
+    if not isinstance(cfg, dict):
+        return cfg
+    max_hops = 5
+    cur = cfg
+    hops = 0
+    while isinstance(cur, dict) and hops < max_hops:
+        ref_key = cur.get("$ref") or cur.get("ref")
+        if not ref_key:
+            break
+        # Búsqueda directa por clave exacta
+        target = bots_config.get(ref_key)
+        if target:
+            cur = target
+            hops += 1
+            continue
+        # Búsqueda por número canonizado (por si el ref es "+1..." y la clave real es "whatsapp:+1...")
+        canon_ref = _canonize_phone(ref_key)
+        found = None
+        for k, v in bots_config.items():
+            if _canonize_phone(k) == canon_ref:
+                found = v
+                break
+        if found:
+            cur = found
+            hops += 1
+            continue
+        # Si no se encontró, se deja tal cual (rompe el loop)
+        break
+    return cur
 
-try:
-    from flask_sock import Sock
-except Exception:
-    raise RuntimeError("Falta dependencia: instala flask-sock (pip install flask-sock)")
+def _get_bot_cfg_by_any_number(to_number: str):
+    """
+    Devuelve la configuración del bot para un número dado.
+    - Soporta claves "whatsapp:+1..." o "+1..."
+    - Resuelve {"$ref": "..."} si existe.
+    - Loguea claves disponibles cuando no encuentra match.
+    """
+    if not bots_config or not isinstance(bots_config, dict):
+        print("[VOICE][CFG] bots_config vacío o inválido.")
+        return None
 
-try:
-    import websocket as ws_client  # websocket-client
-except Exception:
-    raise RuntimeError("Falta dependencia: instala websocket-client (pip install websocket-client)")
+    if not to_number:
+        # Si no llega número y solo hay un bot, úsalo
+        if len(bots_config) == 1:
+            only_cfg = list(bots_config.values())[0]
+            return _resolve_bot_ref(only_cfg) if isinstance(only_cfg, dict) else None
+        print("[VOICE][CFG] to_number vacío y hay múltiples bots; no se puede inferir.")
+        return None
 
-# Inicializa Sock una sola vez
-try:
-    sock  # noqa
-except NameError:
-    sock = Sock(app)
+    canon_to = _canonize_phone(to_number)
+
+    # 1) Match por número canonizado contra TODAS las claves
+    for key, cfg in bots_config.items():
+        try:
+            if _canonize_phone(key) == canon_to:
+                return _resolve_bot_ref(cfg) if isinstance(cfg, dict) else None
+        except Exception:
+            continue
+
+    # 2) Fallback: acceso directo por clave exacta
+    direct = bots_config.get(to_number)
+    if isinstance(direct, dict):
+        return _resolve_bot_ref(direct)
+
+    # 3) Fallback adicional: si solo hay un bot y no hubo match, úsalo
+    if len(bots_config) == 1:
+        only_cfg = list(bots_config.values())[0]
+        return _resolve_bot_ref(only_cfg) if isinstance(only_cfg, dict) else None
+
+    # 4) Debug: listar claves disponibles
+    try:
+        keys_preview = []
+        for k in bots_config.keys():
+            keys_preview.append(f"{k} → {_canonize_phone(k)}")
+        print(f"[VOICE][CFG] Bot NO encontrado para to='{to_number}' canon='{canon_to}'. "
+              f"Claves disponibles: {', '.join(keys_preview)}")
+    except Exception:
+        print(f"[VOICE][CFG] Bot NO encontrado para to='{to_number}' canon='{canon_to}'.")
+    return None
 
 def _voice_get_bot_realtime_config(to_number: str):
-    """Lee la config de voz realtime desde bots/*.json"""
+    """
+    Lee la config de voz realtime desde bots/*.json,
+    siempre AFTER de resolver $ref.
+    """
     bot_cfg = _get_bot_cfg_by_any_number(to_number)
     if not bot_cfg:
         return None
@@ -1436,6 +1504,9 @@ def _voice_get_bot_realtime_config(to_number: str):
     system_prompt = bot_cfg.get("system_prompt", "Eres un asistente de voz natural y profesional.")
     language = _get_path(bot_cfg, ["realtime.language", "language"], "es-MX")
 
+    # Log útil para verificar qué se tomó finalmente
+    print(f"[VOICE][CFG] Resuelto: name={bot_cfg.get('name')}, model={model}, voice={voice}, lang={language}")
+
     return {
         "bot_name": bot_cfg.get("name", "Unknown"),
         "model": str(model),
@@ -1443,234 +1514,6 @@ def _voice_get_bot_realtime_config(to_number: str):
         "system_prompt": str(system_prompt),
         "language": str(language),
     }
-
-# -------- 1) TwiML: sin Gather, solo <Connect><Stream>
-@app.route("/voice", methods=["POST"])
-def voice_webhook_realtime():
-    to_number = request.values.get("To", "")
-    cfg = _voice_get_bot_realtime_config(to_number)
-
-    vr = VoiceResponse()
-    if not cfg:
-        vr.say("Lo siento, este número no tiene un bot configurado.")
-        return str(vr)
-
-    # Construir URL WS externa (Twilio requiere wss://)
-    base = request.host_url.rstrip("/")  # ej: https://tu-dominio.com/
-    if base.startswith("https://"):
-        ws_base = "wss://" + base[len("https://"):]
-    else:
-        ws_base = "ws://" + base[len("http://"):]
-    stream_url = f"{ws_base}/ws/twilio-media?to={_canonize_phone(to_number)}"
-
-    print(f"[VOICE] TwiML Connect.Stream → {stream_url}")
-
-    connect = vr.connect()
-    connect.stream(url=stream_url)
-    return str(vr)
-
-# -------- 2) Hilo lector de OpenAI → Twilio
-def _oai_reader_loop(oai, ws, get_stream_sid):
-    """
-    Lee SIEMPRE de OpenAI Realtime y reenvía audio μ-law hacia Twilio.
-    get_stream_sid(): función que devuelve el streamSid actual (late-binding).
-    """
-    try:
-        while True:
-            raw = oai.recv()
-            if not raw:
-                print("[VOICE] OAI recv() vacío: fin del stream OAI")
-                break
-            msg = _json.loads(raw)
-            t = msg.get("type", "")
-
-            if t == "response.output_audio.delta":
-                audio_b64 = msg.get("delta", "")
-                sid = get_stream_sid()
-                if audio_b64 and sid:
-                    try:
-                        ws.send(_json.dumps({
-                            "event": "media",
-                            "streamSid": sid,
-                            "media": {"payload": audio_b64}
-                        }))
-                    except Exception as e:
-                        print(f"[VOICE] WS send to Twilio falló (delta): {e}")
-                        break
-
-            elif t in ("response.completed", "response.cancelled"):
-                sid = get_stream_sid()
-                if sid:
-                    try:
-                        ws.send(_json.dumps({
-                            "event": "mark",
-                            "streamSid": sid,
-                            "mark": {"name": "oai_response_end"}
-                        }))
-                    except Exception as e:
-                        print(f"[VOICE] WS send mark falló: {e}")
-                        break
-            # Otros tipos: ignorar
-    except Exception as e:
-        print(f"[VOICE] OAI reader loop cerró: {e}")
-
-# -------- 3) WebSocket Twilio <-> OpenAI Realtime
-@sock.route("/ws/twilio-media")
-def twilio_media_ws(ws):
-    print("[VOICE] WS: conexión entrante de Twilio Media")
-    oai = None
-    stream_sid = {"value": None}  # mutable wrapper para late-binding
-
-    def get_sid():
-        return stream_sid["value"]
-
-    try:
-        # 0) Mensaje inicial 'connected' (Twilio-friendly)
-        try:
-            ws.send(_json.dumps({
-                "event": "connected",
-                "protocol": "Call",
-                "version": "1.0"
-            }))
-            print("[VOICE] WS → Twilio: connected")
-        except Exception as e:
-            print(f"[VOICE] No se pudo enviar 'connected' a Twilio: {e}")
-
-        # 1) Config del bot (por número)
-        to_number = request.args.get("to", "")
-        cfg = _voice_get_bot_realtime_config(to_number)
-        if not cfg:
-            ws.send(_json.dumps({"event": "error", "message": "Bot no configurado"}))
-            print("[VOICE] Bot no configurado; cerrando WS")
-            return
-
-        model = cfg["model"]
-        voice = cfg["voice"]
-        system_prompt = cfg["system_prompt"]
-        print(f"[VOICE] Bot: model={model}, voice={voice}")
-
-        # 2) Conectar a OpenAI Realtime
-        oai_headers = [
-            f"Authorization: Bearer {OPENAI_API_KEY}",
-            "OpenAI-Beta: realtime=v1"
-        ]
-        oai_ws_url = f"wss://api.openai.com/v1/realtime?model={model}"
-        print(f"[VOICE] Conectando a OpenAI Realtime: {oai_ws_url}")
-        try:
-            oai = ws_client.create_connection(oai_ws_url, header=oai_headers)
-        except Exception as e:
-            print(f"[VOICE] ERROR conectando a OAI Realtime: {e}")
-            # Informamos a Twilio y mantenemos el WS unos ms
-            try:
-                ws.send(_json.dumps({"event": "mark", "mark": {"name": "oai_connect_error"}}))
-            except Exception:
-                pass
-            return
-
-        # 3) Configurar sesión (μ-law in/out, VAD, voz, prompt)
-        session_msg = {
-            "type": "session.update",
-            "session": {
-                "voice": voice,
-                "instructions": system_prompt,
-                "modalities": ["text", "audio"],
-                "input_audio_format": "mulaw",
-                "output_audio_format": "mulaw",
-                "turn_detection": {"type": "server_vad", "threshold": 0.5}
-            }
-        }
-        oai.send(_json.dumps(session_msg))
-        print("[VOICE] OAI session.update enviado")
-
-        # 4) Hilo que escucha SIEMPRE OpenAI → Twilio
-        reader_thread = Thread(target=_oai_reader_loop, args=(oai, ws, get_sid), daemon=True)
-        reader_thread.start()
-
-        # 5) Loop principal: leer Twilio (bloqueante)
-        frame_count = 0
-        while True:
-            try:
-                tw_raw = ws.receive()  # bloqueante
-            except EOFError:
-                print("[VOICE] Twilio cerró el WS (EOF)")
-                break
-            except Exception as e:
-                print(f"[VOICE] WS receive error: {e}")
-                break
-
-            if not tw_raw:
-                print("[VOICE] Twilio envió cierre (frame vacío)")
-                break
-
-            try:
-                tw_msg = _json.loads(tw_raw)
-            except Exception as e:
-                print(f"[VOICE] JSON inválido desde Twilio: {e}")
-                continue
-
-            ev = str(tw_msg.get("event", ""))
-
-            if ev == "start":
-                sid = ((tw_msg.get("start") or {}).get("streamSid"))
-                stream_sid["value"] = sid or stream_sid["value"]
-                print(f"[VOICE] Twilio start: streamSid={stream_sid['value']}")
-                try:
-                    oai.send(_json.dumps({"type": "input_audio_buffer.clear"}))
-                except Exception as e:
-                    print(f"[VOICE] OAI clear falló: {e}")
-                    # no cortamos: seguimos leyendo Twilio
-                    continue
-
-            elif ev == "media":
-                payload_b64 = (tw_msg.get("media") or {}).get("payload", "")
-                if payload_b64:
-                    try:
-                        oai.send(_json.dumps({
-                            "type": "input_audio_buffer.append",
-                            "audio": payload_b64
-                        }))
-                        frame_count += 1
-                        # micro-batch: cada ~10 frames (aprox 200ms)
-                        if frame_count >= 10:
-                            oai.send(_json.dumps({"type": "input_audio_buffer.commit"}))
-                            oai.send(_json.dumps({"type": "response.create"}))
-                            frame_count = 0
-                    except Exception as e:
-                        print(f"[VOICE] OAI append/commit falló: {e}")
-                        # Si OAI cae, no tumbar el WS: dejamos seguir (Twilio cortará cuando corresponda)
-
-            elif ev == "mark":
-                # opcional: logs de marcas entrantes
-                pass
-
-            elif ev == "stop":
-                print("[VOICE] Twilio stop: cierre solicitado")
-                try:
-                    if frame_count > 0:
-                        oai.send(_json.dumps({"type": "input_audio_buffer.commit"}))
-                        oai.send(_json.dumps({"type": "response.create"}))
-                except Exception:
-                    pass
-                break
-
-            else:
-                # Otros eventos de Twilio: ignorar
-                pass
-
-    except Exception as e:
-        print(f"[VOICE] twilio_media_ws excepción: {e}")
-    finally:
-        # Cierre ordenado
-        try:
-            if oai:
-                oai.close()
-        except Exception:
-            pass
-        try:
-            ws.close()
-        except Exception:
-            pass
-        print("[VOICE] WS cerrado (final)")
 
 
 
