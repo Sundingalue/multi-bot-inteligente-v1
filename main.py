@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 import os
 import json
 import time
-from threading import Thread, Lock
+from threading import Thread
 from datetime import datetime, timedelta
 import csv
 from io import StringIO
@@ -43,7 +43,6 @@ import urllib.parse
 try:
     from flask_sock import Sock
     import websocket  # websocket-client
-    from websocket import WebSocketTimeoutException
 except Exception as _e:
     print("⚠️ Falta dependencia para Realtime (instala): pip install flask-sock websocket-client")
 
@@ -105,7 +104,7 @@ def _bearer_ok(req) -> bool:
     return auth == f"Bearer {API_BEARER_TOKEN}"
 
 # =======================
-#  Inicializar Firebase (solo para leads/WhatsApp/push)
+#  Inicializar Firebase
 # =======================
 firebase_key_path = "/etc/secrets/firebase.json"
 firebase_db_url = (os.getenv("FIREBASE_DB_URL") or "").strip()
@@ -183,12 +182,6 @@ last_message_time = {}     # clave_sesion -> timestamp último mensaje
 follow_up_flags = {}       # clave_sesion -> {"5min": bool, "60min": bool}
 agenda_state = {}          # clave_sesion -> {"awaiting_confirm": bool, "status": str, "last_update": ts, "last_link_time": ts, "last_bot_hash": "", "closed": bool}
 greeted_state = {}         # clave_sesion -> bool (si ya se saludó)
-
-# =======================
-#  ✅ VOICE: sesiones EN MEMORIA (sin Firebase)
-# =======================
-voice_sessions_mem = {}
-voice_sessions_lock = Lock()
 
 # =======================
 #  Helpers generales (neutros)
@@ -1119,7 +1112,7 @@ def push_token():
                 notification=fcm.Notification(title=title, body=body_text),
                 data=data
             )
-            resp = fcm.send_multicast(multicast)
+            resp = fcm.send_multicast(multi)
             return jsonify({"success": True, "mode": "tokens", "sent": resp.success_count, "failed": resp.failure_count})
         elif token:
             msg = fcm.Message(
@@ -1471,35 +1464,37 @@ def voice_webhook():
     to_number = request.values.get("To")  # número destino (tu Twilio)
     from_number = request.values.get("From")
 
-    # 1) Buscar bot por número -> si no, usar Sara por nombre
-    bot_cfg = _get_bot_cfg_by_any_number(to_number) or _get_bot_cfg_by_name("Sara") or {}
+    # 1. Buscar bot por número
+    bot_cfg = _get_bot_cfg_by_any_number(to_number)
 
-    bot_name = bot_cfg.get("name", "Sara")
-    model = (bot_cfg.get("realtime", {}) or {}).get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL
-    voice = (bot_cfg.get("voice", {}) or {}).get("openai_voice") or (bot_cfg.get("voice", {}) or {}).get("voice_name") or OPENAI_REALTIME_VOICE
-    sysmsg = _make_system_message(bot_cfg) or "Soy Sara, representante de ventas de In Houston Texas."
+    if not bot_cfg:
+        # fallback: responder silencio
+        resp = VoiceResponse()
+        resp.say("Lo siento, no hay un bot configurado para este número.")
+        return str(resp)
 
-    # Guardar config en MEMORIA para que /twilio-media-stream la use
+    bot_name = bot_cfg.get("name", "Unknown")
+    model = bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL
+    voice = bot_cfg.get("voice", {}).get("openai_voice") or OPENAI_REALTIME_VOICE
+
+    # Guardar config en Firebase para que /twilio-media-stream la use
     try:
-        if call_sid:
-            with voice_sessions_lock:
-                voice_sessions_mem[call_sid] = {
-                    "bot_name": bot_name,
-                    "model": str(model).strip(),
-                    "voice": str(voice).strip(),
-                    "system_prompt": sysmsg,
-                }
-            print(f"[VOICE] Config guardada en MEMORIA (CallSid={call_sid}). bot={bot_name} model={model} voice={voice}")
-        else:
-            print("[VOICE] ⚠️ CallSid vacío; no se pudo guardar sesión en memoria.")
+        db.reference(f"voice_sessions/{call_sid}").set({
+            "bot_name": bot_name,
+            "model": model,
+            "voice": voice,
+            "created": datetime.now().isoformat()
+        })
+        print(f"[VOICE] Config guardada (CallSid={call_sid}). bot={bot_name} model={model} voice={voice}")
     except Exception as e:
-        print(f"⚠️ Error guardando config voice en memoria: {e}")
+        print(f"⚠️ Error guardando config voice: {e}")
 
-    # 2) TwiML SOLO con <Connect><Stream>
+    # 2. TwiML SOLO con <Connect><Stream>
     resp = VoiceResponse()
     with resp.connect() as connect:
         connect.stream(url="wss://multi-bot-inteligente-v1.onrender.com/twilio-media-stream")
     return str(resp)
+
 
 # ✅ Endpoint de prueba rápida: ver TwiML con ?to=+1XXXX
 @app.get("/voice_debug")
@@ -1507,11 +1502,11 @@ def voice_debug():
     fake_to = (request.args.get("to") or "").strip()
     if not fake_to:
         return Response("<h3>Usa ?to=+1346XXXXXXX para previsualizar TwiML</h3>", mimetype="text/html")
-    # Construir TwiML de muestra (no guarda sesión porque no hay CallSid)
-    resp = VoiceResponse()
-    with resp.connect() as connect:
-        connect.stream(url="wss://multi-bot-inteligente-v1.onrender.com/twilio-media-stream")
-    return str(resp)
+    fake_req = request
+    # Simula valores
+    fake_req.values = request.values.copy()
+    fake_req.values["To"] = fake_to
+    return voice_entry()
 
 # --- WebSocket server (Twilio -> OpenAI Realtime) ---
 sock = None
@@ -1538,8 +1533,6 @@ if sock:
             url = f"wss://api.openai.com/v1/realtime?model={model}"
             ws = websocket.WebSocket()
             ws.connect(url, header=headers, sslopt={"cert_reqs": ssl.CERT_REQUIRED})
-            ws.settimeout(0.0)  # no-bloqueante para cooperar con eventlet
-            
             session_update = {
                 "type": "session.update",
                 "session": {
@@ -1555,34 +1548,38 @@ if sock:
 
         try:
             print(f"[WS] handshake: ip={request.remote_addr} ua={request.headers.get('User-Agent','')}")
+            # Log de depuración para ver los encabezados de la solicitud
             print(f"[WS] Headers completos: {request.headers}")
         except Exception:
             pass
 
-        # 💥💥 RECUPERAR SESIÓN DESDE MEMORIA (sin Firebase) 💥💥
+        # 💥💥 CORRECCIÓN FINAL CON CallSid 💥💥
+        # Obtenemos la configuración del bot desde Firebase usando el CallSid del header
         call_sid = request.headers.get('X-Twilio-CallSid')
         session_data = None
         if call_sid:
             try:
-                with voice_sessions_lock:
-                    session_data = voice_sessions_mem.pop(call_sid, None)
+                ref = db.reference(f"voice_sessions/{call_sid}")
+                session_data = ref.get()
+                # Opcional: eliminar el registro para limpiar la base de datos
+                ref.delete()
             except Exception as e:
-                print(f"[WS] ❌ Error al leer la sesión en memoria para CallSid '{call_sid}': {e}")
-
+                print(f"[WS] ❌ Error al leer la sesión de Firebase para CallSid '{call_sid}': {e}")
+        
         if not session_data:
-            print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración de SARA por defecto.")
-            bot_cfg = _get_bot_cfg_by_name("Sara") or {}
-            bot_name = bot_cfg.get("name", "Sara")
-            model = (bot_cfg.get("realtime", {}) or {}).get("model") or bot_cfg.get("realtime_model") or OPENAI_REALTIME_MODEL
-            voice = (bot_cfg.get("voice", {}) or {}).get("openai_voice") or (bot_cfg.get("voice", {}) or {}).get("voice_name") or OPENAI_REALTIME_VOICE
-            sysmsg = _make_system_message(bot_cfg) or "Soy Sara, representante de ventas de In Houston Texas."
+            print(f"[WS] ❌ No se encontró la sesión para CallSid '{call_sid}'. Usando configuración por defecto.")
+            bot_cfg = {}
+            bot_name = "default"
+            model = OPENAI_REALTIME_MODEL
+            voice = OPENAI_REALTIME_VOICE
+            sysmsg = "Te llama Luis y eres un asistente de voz amable, cercano y muy natural con asento mexicano. Habla como humano y muy natural."
         else:
             bot_cfg = _get_bot_cfg_by_name(session_data.get("bot_name")) or {}
             bot_name = session_data["bot_name"]
             model = session_data["model"]
             voice = session_data["voice"]
             sysmsg = session_data["system_prompt"]
-
+        
         print(f"[WS] Sesión recuperada -> bot: {bot_name}, model: {model}, voice: {voice}")
         print(f"[WS] System Prompt cargado: {sysmsg[:100]}...")
 
