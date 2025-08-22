@@ -1,5 +1,5 @@
-# bots/api_mobile.py
-# Blueprint de API móvil para el panel dentro de la app.
+# bots/api_mobile_fastapi.py
+# Router de API móvil para el panel dentro de la app.
 # - Login leyendo credenciales desde bots/*.json ("auth": {...})
 # - Listado/actualización/borrado de leads en Firebase
 # - Filtro por alcance (allowed bots) usando Authorization: Bearer <token>
@@ -13,20 +13,49 @@ import glob
 import secrets
 from typing import Any, Dict, List
 
-from flask import Blueprint, request, jsonify
+from fastapi import APIRouter, Request, HTTPException, status
+from fastapi.responses import JSONResponse
 from firebase_admin import db
+from pydantic import BaseModel, Field
+
+# Importamos las funciones auxiliares de main.py
+# (Se asume que estas funciones no tienen dependencias de Flask)
+from main import (
+    _load_users,
+    _get_bot_cfg_by_name,
+    _normalize_bot_name,
+    fb_list_leads_by_bot,
+    fb_list_leads_all,
+    fb_get_lead,
+    fb_set_conversation_on,
+    fb_delete_lead
+)
 
 # --------------------------------------------------------------------
-# Blueprint  (SIN url_prefix: lo aporta main.py al registrar)
+# Router
 # --------------------------------------------------------------------
-mobile_bp = Blueprint("mobile_bp", __name__)
+mobile_router = APIRouter()
 
 # --------------------------------------------------------------------
 # Cache / Sesiones in-memory
 # --------------------------------------------------------------------
 _ACCOUNTS_CACHE: Dict[str, Dict[str, Any]] | None = None
-_BOT_COMPANY_CACHE: Dict[str, str] | None = None  # name -> company
-_SESSION_TOKENS: Dict[str, Dict[str, Any]] = {}  # token -> {"allowed": "*"/[bot_name,...]}
+_BOT_COMPANY_CACHE: Dict[str, str] | None = None
+_SESSION_TOKENS: Dict[str, Dict[str, Any]] = {}
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class UpdateLeadRequest(BaseModel):
+    bot: str
+    numero: str
+    estado: str | None = Field(None)
+    nota: str | None = Field(None)
+
+class DeleteLeadRequest(BaseModel):
+    bot: str
+    numero: str
 
 # --------------------------------------------------------------------
 # Carga de bots desde ./bots/*.json
@@ -45,10 +74,6 @@ def _load_bots_folder() -> Dict[str, Any]:
     return bots
 
 def _build_bot_company_map() -> Dict[str, str]:
-    """
-    Mapea cfg['name'] -> company (business_name / company / business).
-    Fallback: company = name en mayúsculas.
-    """
     company: Dict[str, str] = {}
     bots_cfg = _load_bots_folder()
     for _k, cfg in bots_cfg.items():
@@ -77,19 +102,8 @@ def _get_bot_company_map() -> Dict[str, str]:
     return _BOT_COMPANY_CACHE
 
 def _build_accounts_from_bots() -> Dict[str, Dict[str, Any]]:
-    """
-    Construye usuarios a partir de los JSON de /bots:
-    {
-      "username": {
-        "password": "...",
-        "bots": ["Sara","Camila"],  # lista de cfg["name"] (NO business_name)
-        "admin": bool               # si alguno trae "panel":"panel" => admin
-      }
-    }
-    """
     accounts: Dict[str, Dict[str, Any]] = {}
     bots_cfg = _load_bots_folder()
-
     for _num_key, cfg in bots_cfg.items():
         if not isinstance(cfg, dict):
             continue
@@ -98,19 +112,13 @@ def _build_accounts_from_bots() -> Dict[str, Dict[str, Any]]:
         password = (auth.get("password") or "").strip()
         if not username or not password:
             continue
-
-        bot_name = (cfg.get("name") or "").strip()  # usamos "name" para empatar Firebase
+        bot_name = (cfg.get("name") or "").strip()
         if not bot_name:
             continue
-
         acc = accounts.setdefault(username, {"password": password, "bots": set(), "admin": False})
         acc["bots"].add(bot_name)
-
-        # Si en alguno de los bots del mismo usuario aparece "panel":"panel" => admin (ve todo)
         if str(auth.get("panel", "")).strip().lower() == "panel":
             acc["admin"] = True
-
-    # Normaliza a listas / '*' si admin
     for u, a in accounts.items():
         if a.get("admin"):
             a["bots"] = "*"
@@ -126,20 +134,17 @@ def _get_accounts() -> Dict[str, Dict[str, Any]]:
     return _ACCOUNTS_CACHE
 
 def _issue_token(allowed):
-    """Genera token y guarda alcance ('*' o lista de bot names)."""
     tok = secrets.token_urlsafe(32)
     _SESSION_TOKENS[tok] = {"allowed": allowed}
     return tok
 
-def _allowed_from_request(req) -> Any:
-    """Devuelve '*' o lista de bot names a partir del header Authorization."""
-    auth = (req.headers.get("Authorization") or "").strip()
+def _allowed_from_request(request: Request) -> Any:
+    auth = request.headers.get("Authorization") or ""
     if auth.startswith("Bearer "):
         tok = auth[7:].strip()
         entry = _SESSION_TOKENS.get(tok)
         if entry:
             return entry.get("allowed", "*")
-    # si no hay token devolver '*' (compatibilidad), pero lo normal es exigir token
     return "*"
 
 def _is_allowed(bot_name: str, allowed) -> bool:
@@ -150,201 +155,77 @@ def _is_allowed(bot_name: str, allowed) -> bool:
     return True
 
 # --------------------------------------------------------------------
-# Firebase helpers (leads)
-# Estructura en RTDB: leads/<bot_name>/<numero> => {...}
-# donde <bot_name> coincide con cfg["name"] del bot (p.ej. "Sara")
-# --------------------------------------------------------------------
-def _lead_ref(bot_name: str, numero: str):
-    return db.reference(f"leads/{bot_name}/{numero}")
-
-def _list_leads_all() -> List[Dict[str, Any]]:
-    company = _get_bot_company_map()
-    root = db.reference("leads").get() or {}
-    leads: List[Dict[str, Any]] = []
-    if not isinstance(root, dict):
-        return leads
-    for bot_name, numeros in root.items():
-        if not isinstance(numeros, dict):
-            continue
-        for numero, data in numeros.items():
-            leads.append({
-                "bot": bot_name,
-                "company": company.get(bot_name, bot_name.upper()),
-                "numero": numero,
-                "first_seen": (data or {}).get("first_seen", ""),
-                "last_message": (data or {}).get("last_message", ""),
-                "last_seen": (data or {}).get("last_seen", ""),
-                "messages": int((data or {}).get("messages", 0) or 0),
-                "status": (data or {}).get("status", "nuevo") or "nuevo",
-                "notes": (data or {}).get("notes", "") or "",
-            })
-    # Ordena por last_seen descendente si hay string comparable
-    leads.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
-    return leads
-
-def _list_leads_by_bot(bot_name: str) -> List[Dict[str, Any]]:
-    company = _get_bot_company_map()
-    numeros = db.reference(f"leads/{bot_name}").get() or {}
-    leads: List[Dict[str, Any]] = []
-    if not isinstance(numeros, dict):
-        return leads
-    for numero, data in numeros.items():
-        leads.append({
-            "bot": bot_name,
-            "company": company.get(bot_name, bot_name.upper()),
-            "numero": numero,
-            "first_seen": (data or {}).get("first_seen", ""),
-            "last_message": (data or {}).get("last_message", ""),
-            "last_seen": (data or {}).get("last_seen", ""),
-            "messages": int((data or {}).get("messages", 0) or 0),
-            "status": (data or {}).get("status", "nuevo") or "nuevo",
-            "notes": (data or {}).get("notes", "") or "",
-        })
-    leads.sort(key=lambda x: x.get("last_seen", ""), reverse=True)
-    return leads
-
-def _update_lead(bot_name: str, numero: str, estado: str | None = None, nota: str | None = None) -> bool:
-    try:
-        ref = _lead_ref(bot_name, numero)
-        cur = ref.get() or {}
-        if estado is not None and estado != "":
-            cur["status"] = estado
-        if nota is not None:
-            cur["notes"] = nota
-        cur.setdefault("bot", bot_name)
-        cur.setdefault("numero", numero)
-        ref.set(cur)
-        return True
-    except Exception as e:
-        print(f"❌ Error actualizando lead {bot_name}/{numero}: {e}")
-        return False
-
-def _delete_lead(bot_name: str, numero: str) -> bool:
-    try:
-        _lead_ref(bot_name, numero).delete()
-        return True
-    except Exception as e:
-        print(f"❌ Error eliminando lead {bot_name}/{numero}: {e}")
-        return False
-
-# --------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------
-@mobile_bp.route("/health", methods=["GET"])
-def mobile_health():
-    return jsonify({"ok": True, "service": "mobile"})
+@mobile_router.get("/health")
+async def mobile_health():
+    return JSONResponse(content={"ok": True, "service": "mobile"})
 
-@mobile_bp.route("/login", methods=["POST"])
-def mobile_login():
-    """
-    Valida usuario/clave contra los JSON de /bots.
-    Respuesta:
-      { ok: true, token: "...", bots: ["Sara","Camila"] }  # o bots: "*" si admin
-    """
-    try:
-        body = request.get_json(force=True) or {}
-    except Exception:
-        body = {}
-    username = (body.get("username") or "").strip()
-    password = (body.get("password") or "").strip()
-
+@mobile_router.post("/login")
+async def mobile_login(login_data: LoginRequest):
+    username = login_data.username.strip()
+    password = login_data.password.strip()
     accounts = _get_accounts()
     acc = accounts.get(username)
     if not acc or password != acc.get("password"):
-        return jsonify({"ok": False, "error": "bad_credentials"}), 401
-
-    allowed = acc.get("bots", "*")  # '*' o lista de bot "name"
+        raise HTTPException(status_code=401, detail="bad_credentials")
+    allowed = acc.get("bots", "*")
     token = _issue_token(allowed)
-
-    # Asegura que "bots" sea serializable (lista o '*')
     bots_payload = allowed if allowed == "*" else list(allowed)
-    return jsonify({"ok": True, "token": token, "bots": bots_payload})
+    return JSONResponse(content={"ok": True, "token": token, "bots": bots_payload})
 
-@mobile_bp.route("/leads", methods=["GET"])
-def mobile_leads():
-    """
-    Lista leads visibles para el usuario según su token.
-    Query opcional: ?bot=<bot_name>
-    Devuelve, por lead:
-      bot, company, numero, first_seen, last_message, last_seen, messages, status, notes
-    """
-    allowed = _allowed_from_request(request)  # "*" o lista de bot names
-    bot_q = (request.args.get("bot") or "").strip()
+@mobile_router.get("/leads")
+async def mobile_leads(request: Request):
+    allowed = _allowed_from_request(request)
+    bot_q = request.query_params.get("bot", "").strip()
 
     try:
         if bot_q:
-            # filtra por bot + permisos
             if not _is_allowed(bot_q, allowed):
-                return jsonify({"leads": []})
+                return JSONResponse(content={"leads": []})
             leads = _list_leads_by_bot(bot_q)
         else:
-            # todos (luego aplicamos filtro de permisos)
             leads = _list_leads_all()
             if allowed != "*":
                 allowed_set = set(allowed) if isinstance(allowed, list) else set()
                 leads = [l for l in leads if l.get("bot") in allowed_set]
-
-        return jsonify({"leads": leads})
+        return JSONResponse(content={"leads": leads})
     except Exception as e:
         print(f"❌ Error leyendo leads: {e}")
-        return jsonify({"leads": []}), 500
+        raise HTTPException(status_code=500, detail="Error al leer los leads")
 
-@mobile_bp.route("/bots_meta", methods=["GET"])
-def mobile_bots_meta():
-    """
-    Devuelve metadatos de los bots:
-      { "bots": [ {"name":"Sara","company":"IN HOUSTON TEXAS"}, ... ] }
-    """
+@mobile_router.get("/bots_meta")
+async def mobile_bots_meta():
     comp = _get_bot_company_map()
     arr = [{"name": k, "company": v} for k, v in sorted(comp.items())]
-    return jsonify({"bots": arr})
+    return JSONResponse(content={"bots": arr})
 
-@mobile_bp.route("/lead", methods=["POST"])
-def mobile_update_lead():
-    """
-    Actualiza estado y/o nota (alias visible) de un lead.
-    Body JSON: { "bot": "Sara", "numero": "whatsapp:+1...", "estado": "en espera", "nota": "Carlos" }
-    Requiere permiso sobre ese bot vía token.
-    """
-    try:
-        body = request.get_json(force=True) or {}
-    except Exception:
-        body = {}
-    bot_name = (body.get("bot") or "").strip()
-    numero = (body.get("numero") or "").strip()
-    estado = body.get("estado", None)
-    nota = body.get("nota", None)
+@mobile_router.post("/lead")
+async def mobile_update_lead(lead_data: UpdateLeadRequest, request: Request):
+    bot_name = lead_data.bot.strip()
+    numero = lead_data.numero.strip()
 
     if not bot_name or not numero:
-        return jsonify({"ok": False, "error": "params"}), 400
+        raise HTTPException(status_code=400, detail="params")
 
     allowed = _allowed_from_request(request)
     if not _is_allowed(bot_name, allowed):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
+        raise HTTPException(status_code=403, detail="forbidden")
 
-    ok = _update_lead(bot_name, numero, estado=estado, nota=nota)
-    return jsonify({"ok": bool(ok)})
+    ok = _update_lead(bot_name, numero, estado=lead_data.estado, nota=lead_data.nota)
+    return JSONResponse(content={"ok": bool(ok)})
 
-@mobile_bp.route("/delete", methods=["POST"])
-def mobile_delete_lead():
-    """
-    Elimina completamente una conversación.
-    Body JSON: { "bot": "Sara", "numero": "whatsapp:+1..." }
-    Requiere permiso sobre ese bot vía token.
-    """
-    try:
-        body = request.get_json(force=True) or {}
-    except Exception:
-        body = {}
-    bot_name = (body.get("bot") or "").strip()
-    numero = (body.get("numero") or "").strip()
+@mobile_router.post("/delete")
+async def mobile_delete_lead(delete_data: DeleteLeadRequest, request: Request):
+    bot_name = delete_data.bot.strip()
+    numero = delete_data.numero.strip()
 
     if not bot_name or not numero:
-        return jsonify({"ok": False, "error": "params"}), 400
+        raise HTTPException(status_code=400, detail="params")
 
     allowed = _allowed_from_request(request)
     if not _is_allowed(bot_name, allowed):
-        return jsonify({"ok": False, "error": "forbidden"}), 403
+        raise HTTPException(status_code=403, detail="forbidden")
 
     ok = _delete_lead(bot_name, numero)
-    return jsonify({"ok": bool(ok)})
+    return JSONResponse(content={"ok": bool(ok)})
