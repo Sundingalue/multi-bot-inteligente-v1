@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Panel Exclusivo - {{ nombre_comercial }}</title>
+  <style>
+    :root{
+      --brand:#F7BD02;
+      --ink:#000;
+      --paper:#fff;
+      --radius:14px;
+      --shadow:0 6px 14px rgba(0,0,0,.25);
+    }
+
+    *{box-sizing:border-box}
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, Roboto, Arial, sans-serif;
+      background-color: var(--brand);
+      color: var(--ink);
+    }
+
+    /* ===== Header negro ===== */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background-color: #000;
+      color: var(--brand);
+      padding: 16px 20px;
+      text-align: center;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing:.3px;
+      text-transform: uppercase;
+      box-shadow: 0 2px 10px rgba(0,0,0,.35);
+    }
+
+    .container {
+      padding: 18px;
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    /* ===== Fila de controles ===== */
+    .controls{
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content:flex-end;
+      flex-wrap:wrap;
+      margin: 6px auto 18px;
+    }
+
+    /* Pastilla base (botones) */
+    .pill{
+      height: 46px;
+      border-radius: var(--radius);
+      border: 1.5px solid var(--ink);
+      background: var(--paper);
+      color: var(--ink);
+      font-weight: 700;
+      font-size: 15px;
+      padding: 0 14px;
+      display: inline-flex;
+      align-items: center;
+      gap:10px;
+      box-shadow: var(--shadow);
+      text-decoration:none;
+      cursor:pointer;
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      white-space: nowrap;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pill:hover{ background:#f5f5f5; }
+    .pill:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
+    /* Tarjetas de lead */
+    .lead-card {
+      background-color: #1a1a1a;
+      color: #fff;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .lead-link {
+      color: var(--brand);
+      font-weight: bold;
+      text-decoration: none;
+      font-size: 19px;
+      word-break: break-all;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+    }
+    .lead-link:hover { text-decoration: underline; }
+
+    /* Botón alias (editar nombre) */
+    .btn-alias{
+      border:none;
+      background:#2a2a2a;
+      color:#ffd54f;
+      font-weight:800;
+      padding: 4px 8px;
+      border-radius: 8px;
+      cursor:pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease;
+    }
+    .btn-alias:hover{ background:#343434; }
+    .btn-alias:active{ transform: translateY(1px); box-shadow: 0 3px 8px rgba(0,0,0,.28); }
+
+    .lead-info { margin-top: 10px; font-size: 15px; }
+
+    /* Selector de estado */
+    .lead-select {
+      margin-top: 10px;
+      font-size: 15px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: none;
+      background-color: var(--brand);
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .no-leads {
+      text-align: center;
+      font-size: 18px;
+      color: #333;
+      background: #fff3cd;
+      padding: 18px;
+      border-radius: 12px;
+      margin-top: 8px;
+    }
+
+    /* Botones de acciones (borrar / ver) */
+    .lead-actions{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      margin-top: 12px;
+    }
+
+    /* Botón borrar conversación */
+    .btn-delete{
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1.5px solid #b00020;
+      background-color: #fff;
+      color: #b00020;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      display:inline-flex; align-items:center; justify-content:center;
+      text-decoration:none;
+    }
+    .btn-delete:hover{ background:#ffe8ec; }
+    .btn-delete:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
+    /* Botón ver conversación */
+    .btn-view{
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1.5px solid var(--brand);
+      background-color: #fff;
+      color: var(--brand);
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease, color .2s ease;
+      display:inline-flex; align-items:center; justify-content:center;
+      text-decoration:none;
+      white-space: nowrap;             /* evita que se parta "Ver conversación" */
+    }
+    .btn-view:hover{ background:#fff8e1; }
+    .btn-view:active{ transform: translateY(1px); box-shadow: 0 4px 10px rgba(0,0,0,.22); }
+
+    /* Responsive móvil: dos columnas iguales para los dos botones */
+    @media (max-width: 520px){
+      .lead-actions{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap:10px;
+      }
+      .btn-delete, .btn-view{
+        width:100%;
+      }
+    }
+
+    @media (min-width: 720px){
+      .controls{ justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Panel Exclusivo - {{ nombre_comercial }}</div>
+
+  <div class="container">
+    <div class="controls">
+      <a class="pill" href="/logout" title="Cerrar sesión" aria-label="Cerrar sesión">⎋ Cerrar sesión</a>
+    </div>
+
+    {% if leads %}
+      {% for clave, datos in leads.items() %}
+        <div class="lead-card" data-key="{{ bot }}|{{ datos.numero }}">
+          <a class="lead-link" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}">
+            <span class="lead-name" id="name-{{ loop.index0 }}">{{ (datos.notes or datos.numero) if datos.notes is defined else datos.numero }}</span>
+          </a>
+          <button class="btn-alias" onclick="editarAlias('{{ bot }}','{{ datos.numero }}','name-{{ loop.index0 }}','{{ (datos.notes or datos.numero)|e if datos.notes is defined else datos.numero }}')" title="Editar nombre visible">✎</button>
+
+          <div class="lead-info">📩 {{ datos.last_message }}</div>
+          <div class="lead-info">📅 {{ datos.last_seen }}</div>
+
+          <div class="lead-info">
+            🔖 Estado:
+            <select class="lead-select" onchange="actualizarEstado('{{ bot }}', '{{ datos.numero }}', this.value)">
+              <option value="nuevo"    {% if datos.status == 'nuevo' %}selected{% endif %}>Nuevo</option>
+              <option value="en espera" {% if datos.status == 'en espera' %}selected{% endif %}>En espera</option>
+              <option value="cerrado"  {% if datos.status == 'cerrado' %}selected{% endif %}>Cerrado</option>
+            </select>
+          </div>
+
+          <!-- Acciones: lado a lado, mobile-first -->
+          <div class="lead-actions">
+            <button class="btn-delete" onclick="borrarConversacion('{{ bot }}','{{ datos.numero }}')">🗑️ borrar</button>
+            <a class="btn-view" href="{{ url_for('chat_bot', bot=bot, numero=datos.numero) }}">👁️ Ver conversación</a>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="no-leads">No hay conversaciones para este bot.</div>
+    {% endif %}
+  </div>
+
+  <script>
+    function actualizarEstado(bot, numero, estado) {
+      fetch('/guardar-lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          numero: `${bot}|${numero}`,
+          estado: estado,
+          nota: ""
+        })
+      })
+      .then(r => r.json())
+      .then(d => console.log("✅ Estado actualizado:", d))
+      .catch(e => console.error("❌ Error actualizando estado:", e));
+    }
+
+    async function borrarConversacion(bot, numero){
+      const msg = `¿Seguro que quieres borrar TODO el chat de:\n\nBot: ${bot}\nNúmero: ${numero}\n\nEsta acción no se puede deshacer.`;
+      if(!confirm(msg)) return;
+
+      try{
+        const res = await fetch('/api/delete_chat', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ bot, numero })
+        });
+        if(!res.ok){
+          const t = await res.text();
+          alert('No se pudo borrar: ' + t);
+          return;
+        }
+        const out = await res.json();
+        if(out && out.ok){
+          const key = `${bot}|${numero}`;
+          const selector = `.lead-card[data-key="${CSS.escape(key)}"]`;
+          const card = document.querySelector(selector);
+          if(card){ card.remove(); }
+
+          if(document.querySelectorAll('.lead-card').length === 0){
+            const cont = document.querySelector('.container');
+            const noLeads = document.createElement('div');
+            noLeads.className = 'no-leads';
+            noLeads.innerHTML = 'No hay conversaciones para este bot.';
+            cont.appendChild(noLeads);
+          }
+        }else{
+          alert('No se pudo borrar (respuesta inesperada).');
+        }
+      }catch(e){
+        console.error(e);
+        alert('Error de red al borrar la conversación.');
+      }
+    }
+
+    async function editarAlias(bot, numero, spanId, valorActual){
+      const el = document.getElementById(spanId);
+      if(!el) return;
+      const nombre = prompt("Escribe el nombre que quieres mostrar en el panel:", valorActual || el.textContent.trim());
+      if (nombre === null) return;
+
+      try{
+        const res = await fetch('/guardar-lead', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            numero: `${bot}|${numero}`,
+            estado: "",
+            nota: (nombre || "").trim()
+          })
+        });
+        const out = await res.json();
+        if(out && !out.error){
+          el.textContent = (nombre || "").trim() || numero;
+        }else{
+          alert("No se pudo guardar el nombre.");
+        }
+      }catch(e){
+        console.error(e);
+        alert("Error de red guardando el nombre.");
+      }
+    }
+  </script>
+</body>
+</html>

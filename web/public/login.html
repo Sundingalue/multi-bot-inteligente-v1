@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Login InHouston Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#000; color:#fff; font-family: system-ui, -apple-system, Arial; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+    .card { background:#111; padding:24px; border-radius:14px; width: min(360px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h2 { margin:0 0 14px; font-size: 20px; }
+    label { font-size:12px; color:#bbb; display:block; margin:10px 0 6px; }
+    input { width:100%; padding:12px; border:1px solid #333; border-radius:10px; background:#0a0a0a; color:#fff; outline:none; }
+    input:focus { border-color:#f7bd02; }
+    button { width:100%; padding:12px; margin-top:14px; background:#f7bd02; border:none; border-radius:10px; color:#000; font-weight:700; cursor:pointer; }
+    .error { color:#ff6b6b; margin-top:10px; min-height:22px; font-size:13px; }
+    .hint { margin-top:12px; font-size:12px; color:#aaa; text-align:center; }
+    .logo { display:block; margin:0 auto 12px; width:64px; height:64px; border-radius:12px; background:#f7bd02; color:#000; display:flex; align-items:center; justify-content:center; font-weight:900; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">IN</div>
+    <h2>Acceso al Panel</h2>
+
+    <label for="email">Correo</label>
+    <input id="email" type="email" placeholder="tucorreo@dominio.com" autocomplete="username" />
+
+    <label for="password">Contraseña</label>
+    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
+
+    <button id="loginBtn">Iniciar sesión</button>
+    <div id="error" class="error"></div>
+    <div class="hint">Usa tu usuario de <b>Firebase</b>.</div>
+  </div>
+
+  <!-- Firebase Web SDK (compat para simplificar) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
+  <script>
+    // 👇👇👇 REEMPLAZA ESTE OBJETO CON TU CONFIG DE LA APP WEB EN FIREBASE 👇👇👇
+    // Firebase Console → Engranaje (Configuración del proyecto) → Tus apps → Web → Configurar SDK
+   const firebaseConfig = {
+  apiKey: "AIzaSyABtAC1I4gpCpSCyC5TH-GWZ1Inv8xL3CY",
+  authDomain: "inhouston-209c0.firebaseapp.com",
+  projectId: "inhouston-209c0",
+  storageBucket: "inhouston-209c0.appspot.com",
+  messagingSenderId: "670626624001",
+  appId: "1:670626624001:web:84863644057358f4154600",
+  measurementId: "G-ESSRKLSP2Q"
+};
+
+    // 👆👆👆 FIN DEL CAMBIO 👆👆👆
+
+    firebase.initializeApp(firebaseConfig);
+
+    const $ = (id) => document.getElementById(id);
+    const errorDiv = $('error');
+
+    $('loginBtn').addEventListener('click', async () => {
+      errorDiv.textContent = '';
+      const email = $('email').value.trim().toLowerCase();
+      const pass  = $('password').value.trim();
+
+      if (!email || !pass) {
+        errorDiv.textContent = 'Completa correo y contraseña.';
+        return;
+      }
+
+      try {
+        // 1) Login cliente con Firebase
+        const cred = await firebase.auth().signInWithEmailAndPassword(email, pass);
+        const idToken = await cred.user.getIdToken(); // JWT
+
+        // 2) Enviar token al backend para crear cookie de sesión
+        const resp = await fetch('/sessionLogin', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ idToken }),
+          credentials: 'include' // importante para la cookie
+        });
+
+        if (!resp.ok) {

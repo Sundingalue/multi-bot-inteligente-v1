@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Acceso - Panel de Leads | In Houston Texas</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+
+  <style>
+    :root{ --brand:#F7BD02; --bg:#000; --card:#fff; --text:#000; --muted:#888; --radius:16px; --focus:#2b90ff; }
+    *{ box-sizing: border-box; }
+    html, body { margin:0; padding:0; height:100%; background:var(--bg); color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; font-size:17px; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+    .login-wrap{ min-height:100vh; display:grid; place-items:center; background:
+      radial-gradient(1200px 600px at 100% 0%, rgba(247,189,2,0.15), transparent 60%),
+      radial-gradient(1200px 600px at 0% 100%, rgba(247,189,2,0.12), transparent 60%),
+      linear-gradient(135deg,#000 0%,#0a0a0a 100%); padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
+    .card{ width:100%; max-width:420px; background:var(--card); color:var(--text); border-radius:var(--radius); box-shadow:0 18px 44px rgba(0,0,0,.35); padding:28px; }
+    .brand{ display:flex; align-items:center; gap:12px; margin-bottom:10px; justify-content:center; }
+    .brand img{ width:42px; height:42px; border-radius:12px; object-fit:cover; }
+    .brand-name{ font-weight:800; letter-spacing:.2px; }
+    h1{ margin:8px 0 18px; font-size:24px; text-align:center; color:var(--brand); }
+    .subtitle{ text-align:center; color:#333; font-size:15px; margin-bottom:18px; }
+    .alert{ background:#ffe5e5; color:#9b1c1c; border:1px solid #f6caca; padding:12px 14px; border-radius:12px; font-size:15px; margin-bottom:14px; text-align:center; }
+    .form{ display:grid; gap:14px; }
+    .field{ display:grid; gap:8px; }
+    label{ font-size:15px; color:#222; font-weight:600; }
+    input[type="text"], input[type="password"]{ width:100%; padding:16px 14px; border:1px solid #ddd; border-radius:12px; background:#f7f7f7; font-size:18px; line-height:1.15; outline:none; transition:border-color .2s, box-shadow .2s, background .2s; }
+    input::placeholder{ color:#999; }
+    input:focus{ border-color:var(--focus); background:#fff; box-shadow:0 0 0 3px rgba(43,144,255,.15); }
+    .row{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:2px; }
+    .remember{ display:inline-flex; align-items:center; gap:10px; color:#333; font-size:15px; }
+    .remember input[type="checkbox"]{ width:20px; height:20px; accent-color:var(--brand); }
+    .action{ margin-top:8px; }
+    button[type="submit"]{ width:100%; border:0; border-radius:12px; background:var(--brand); color:#000; padding:16px; font-weight:800; font-size:18px; letter-spacing:.2px; cursor:pointer; transition:transform .06s ease, box-shadow .2s ease, background .2s ease; box-shadow:0 8px 22px rgba(247,189,2,.35); touch-action:manipulation; }
+    button[type="submit"]:active{ transform:translateY(1px); box-shadow:0 6px 16px rgba(247,189,2,.35); }
+    button[type="submit"]:hover{ background:#000; color:var(--brand); box-shadow:0 10px 26px rgba(0,0,0,.25); }
+    .footer{ margin-top:16px; font-size:13px; color:var(--muted); text-align:center; }
+    @media (max-width:480px){ .card{ padding:24px; } h1{ font-size:22px; } }
+    .helper { font-size:12px; color:#666; margin-top:6px; }
+    datalist option { font-size:14px; }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="card" role="dialog" aria-labelledby="title" aria-describedby="subtitle">
+      <div class="brand">
+        <img src="/static/logo_in.png" alt="Logo In Houston Texas" onerror="this.style.display='none'">
+        <div class="brand-name">IN HOUSTON TEXAS</div>
+      </div>
+
+      <h1 id="title">Acceso al Panel</h1>
+      <div id="subtitle" class="subtitle">Ingresa tu usuario y contraseña para continuar</div>
+
+      {% if error %}
+        <div class="alert">Usuario o contraseña incorrectos. Inténtalo de nuevo.</div>
+      {% endif %}
+
+      <!-- IMPORTANTE: el campo VISIBLE ahora se llama name="usuario" para empatar con el backend -->
+      <form id="loginForm" class="form" method="POST" action="/panel" autocomplete="on">
+        <div class="field">
+          <label for="usuario">Usuario</label>
+          <input
+            id="usuario"
+            type="text"
+            name="usuario"
+            placeholder="Escribe tu usuario"
+            required
+            inputmode="text"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            autocomplete="username"
+            list="savedUsers"
+            enterkeyhint="done"
+          />
+          <datalist id="savedUsers"></datalist>
+          <div class="helper">Puedes elegir un usuario guardado.</div>
+        </div>
+
+        <div class="field">
+          <label for="clave">Contraseña</label>
+          <input
+            id="clave"
+            type="password"
+            name="clave"
+            placeholder="Escribe tu contraseña"
+            required
+            autocomplete="current-password"
+          />
+        </div>
+
+        <div class="row">
+          <label class="remember">
+            <input type="checkbox" name="remember" id="remember" />
+            Recuérdame
+          </label>
+
+          <button type="button" id="togglePwd" aria-controls="clave" aria-label="Mostrar u ocultar contraseña"
+                  style="background:#efefef;padding:10px 12px;border-radius:10px;border:1px solid #ddd;font-weight:600;cursor:pointer;">
+            Ver
+          </button>
+        </div>
+
+        <!-- Campo que lee el backend para sesión persistente -->
+        <input type="hidden" name="recordarme" id="recordarmeHidden" />
+
+        <div class="action">
+          <button type="submit" id="submitBtn">Entrar</button>
+        </div>
+      </form>
+
+      <div class="footer">In Houston Texas - Sistema de Leads © 2025</div>
+    </div>
+  </div>
+
+  <script>
+    // ===== Cookies simples (solo para recordar último usuario) =====
+    function setCookie(name, value, days){
+      try{
+        const max = days ? ';max-age='+(days*24*60*60) : '';
+        document.cookie = name + '=' + encodeURIComponent(value) + ';path=/' + max + ';SameSite=Lax';
+      }catch(e){}
+    }
+    function getCookie(name){
+      try{
+        const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return m ? decodeURIComponent(m[2]) : '';
+      }catch(e){ return ''; }
+    }
+
+    // ===== Gestor local multi-cuentas (AVISO: guarda en texto plano en este dispositivo) =====
+    const STORAGE_KEY = 'mbi_login_accounts'; // { "<usuario>": "<password>", ... }
+    function loadAccounts(){
+      try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e){ return {}; }
+    }
+    function saveAccounts(obj){
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }catch(e){}
+    }
+    function upsertAccount(user, pass){
+      if(!user) return;
+      const acc = loadAccounts();
+      acc[user] = pass || '';
+      saveAccounts(acc);
+    }
+
+    // ===== Credential Management API (opcional; Safari puede ignorarlo) =====
+    async function cmGet() {
+      if (!('credentials' in navigator)) return null;
+      try {
+        return await navigator.credentials.get({ password: true, mediation: 'optional' });
+      } catch(e){ return null; }
+    }
+    async function cmStore(username, password) {
+      if (!('credentials' in navigator) || !window.PasswordCredential) return;
+      try {
+        const cred = new PasswordCredential({ id: username, name: username, password });
+        await navigator.credentials.store(cred);
+      } catch(e){}
+    }
+
+    (function(){
+      const form = document.getElementById('loginForm');
+      const submit = document.getElementById('submitBtn');
+      const toggle = document.getElementById('togglePwd');
+      const pwd = document.getElementById('clave');
+      const user = document.getElementById('usuario');
+      const rememberChk = document.getElementById('remember');
+      const recordarmeHidden = document.getElementById('recordarmeHidden');
+      const listEl = document.getElementById('savedUsers');
+
+      // Helper UI
+      form.addEventListener('submit', function(){
+        submit.disabled = true;
+        submit.textContent = 'Ingresando…';
+        setTimeout(()=>{ submit.disabled = false; submit.textContent = 'Entrar'; }, 6000);
+      });
+
+      toggle.addEventListener('click', function(){
+        const visible = pwd.type === 'text';
+        pwd.type = visible ? 'password' : 'text';
+        toggle.textContent = visible ? 'Ver' : 'Ocultar';
+      });
+
+      // Foco
+      setTimeout(()=>user && user.focus(), 200);
+
+      // 1) Precargar último usuario por cookie
+      try{
+        const lastUser = getCookie('last_username');
+        if (lastUser && user && !user.value) { user.value = lastUser; }
+      }catch(e){}
+
+      // 2) Reconstruir datalist local
+      function rebuildDatalist(){
+        const acc = loadAccounts();
+        listEl.innerHTML = '';
+        Object.keys(acc).forEach(u=>{
+          const opt = document.createElement('option');
+          opt.value = u;
+          listEl.appendChild(opt);
+        });
+      }
+      rebuildDatalist();
+
+      // 3) Autocompletar password si el usuario existe en almacenamiento local
+      function maybeFillPassword(){
+        const acc = loadAccounts();
+        const u = (user.value || '').trim();
+        if (u in acc && !pwd.value){
+          pwd.value = acc[u] || '';
+        }
+      }
+      user.addEventListener('change', maybeFillPassword);
+      user.addEventListener('blur', maybeFillPassword);
+      // 🔹 nuevo: también mientras escribe
+      user.addEventListener('input', maybeFillPassword);
+
+      // 4) Intento de autofill con el gestor del navegador (iCloud/FaceID/Google PM)
+      (async () => {
+        const cred = await cmGet();
+        if (cred && cred.type === 'password') {
+          if (!user.value) user.value = cred.id || cred.name || '';
+          if (!pwd.value) pwd.value = cred.password || '';
+        }
+        // 🔹 nuevo: por si ya teníamos usuario de cookie/localStorage
+        maybeFillPassword();
+      })();
+
+      // 5) Sincronizar hidden remember
+      rememberChk && rememberChk.addEventListener('change', function(){
+        if (recordarmeHidden) recordarmeHidden.value = rememberChk.checked ? 'on' : '';
+      });
+
+      // 6) Al enviar: guardar en cookie + localStorage (si marcado) + pedir guardado al navegador
+      form.addEventListener('submit', async function(){
+        const u = (user ? user.value.trim() : '');
+        const p = (pwd ? pwd.value : '');
+
+        // cookie con último usuario (comodidad)
+        if (u) setCookie('last_username', u, 365);
+
+        // Guardado local multi-cuenta (si el usuario lo pidió)
+        if (rememberChk && rememberChk.checked) {
+          upsertAccount(u, p);
+          if (recordarmeHidden) recordarmeHidden.value = 'on';
+          // Pedir al navegador que lo guarde en su llavero/gestor
+          await cmStore(u, p);
+        } else {
+          if (recordarmeHidden) recordarmeHidden.value = '';
+        }
+      });
+
+      // 7) Si backend dejó cookie remember_login=1, marcar “Recuérdame”
+      try{
+        if (document.cookie.includes('remember_login=1')) {
+          rememberChk.checked = true;
+          recordarmeHidden.value = 'on';
+        }
+      }catch(e){}
+    })();
+  </script>
+</body>
+</html>

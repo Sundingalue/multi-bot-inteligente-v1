@@ -1,0 +1,34 @@
+# Core FastAPI y servidor web
+fastapi
+uvicorn[standard]
+
+# Dependencias para el WebSocket de Twilio
+websocket-client==1.8.0
+simple-websocket
+requests==2.32.3
+
+# SDK de OpenAI
+openai>=1.12.0
+
+# Librerías de Twilio
+twilio
+
+# Librerías de Firebase y Google
+firebase-admin==6.5.0
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+
+# Manejo de variables de entorno
+python-dotenv>=1.0.1,<2
+
+# Procesamiento de pagos
+stripe==10.10.0
+
+# Jinja2 y otras dependencias del framework
+jinja2
+itsdangerous
+
+# 🟢 NUEVO: Necesario para manejar datos de formulario en FastAPI
+python-multipart

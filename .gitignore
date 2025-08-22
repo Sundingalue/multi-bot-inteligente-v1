@@ -1,0 +1,10 @@
+.env
+__pycache__/
+.vscode/
+venv/
+venv/
+.DS_Store
+credentials/
+/etc/secrets/
+*.secret.json
+*.key.json

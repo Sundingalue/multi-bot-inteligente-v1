@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: multi-bot-inteligente
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k eventlet -w 1 -b 0.0.0.0:$PORT main:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
