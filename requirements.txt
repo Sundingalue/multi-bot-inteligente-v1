@@ -29,3 +29,6 @@ stripe==10.10.0
 # Jinja2 y otras dependencias del framework
 jinja2
 itsdangerous
+
+# 🟢 NUEVO: Necesario para manejar datos de formulario en FastAPI
+python-multipart
