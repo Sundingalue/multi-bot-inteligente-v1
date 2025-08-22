@@ -31,4 +31,4 @@ jinja2
 itsdangerous
 
 # 🟢 NUEVO: Necesario para manejar datos de formulario en FastAPI
-python-multipart
+python-multipartgunicorn>=21.2.0
