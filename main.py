@@ -128,7 +128,7 @@ if not firebase_db_url:
             if firebase_db_url:
                 print("[BOOT] FIREBASE_DB_URL leído desde Secret File.")
     except Exception:
-        pass
+        pass # La indentación debe estar aquí
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(firebase_key_path)
@@ -179,8 +179,7 @@ from billing_api_fastapi import billing_router, record_openai_usage
 app.include_router(billing_router, prefix="/billing")
 
 # 💡 API móvil (JSON público para la app)
-from bots.api_mobile_fastapi import mobile_router
-app.include_router(mobile_router, prefix="/api/mobile")
+# Se ha eliminado la importación porque el archivo 'bots/api_mobile_fastapi.py' no existe.
 
 # =======================
 #  Memorias por sesión (runtime)
@@ -575,7 +574,6 @@ def _hydrate_session_from_firebase(clave_sesion: str, bot_cfg: dict, sender_numb
 #  Rutas UI: Paneles
 # =======================
 def _load_users():
-    # ... (código sin cambios) ...
     users_from_json = {}
     
     def _normalize_list_scope(scope_val):
@@ -695,9 +693,9 @@ async def panel_exclusivo_bot(request: Request, bot_nombre: str):
         return RedirectResponse(url="/panel")
     bot_normalizado = _normalize_bot_name(bot_nombre)
     if not bot_normalizado:
-        return HTMLResponse(content=f"Bot '{bot_nombre}' no encontrado", status_code=404)
+        return templates.TemplateResponse("error.html", {"request": request, "message": "Bot no encontrado"}, status_code=404)
     if not _user_can_access_bot(request, bot_normalizado):
-        return HTMLResponse(content="No autorizado para este bot", status_code=403)
+        return templates.TemplateResponse("error.html", {"request": request, "message": "No autorizado para este bot"}, status_code=403)
     leads_filtrados = fb_list_leads_by_bot(bot_normalizado)
     nombre_comercial = next(
         (config.get("business_name", bot_normalizado)
