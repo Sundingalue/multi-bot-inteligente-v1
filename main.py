@@ -1,4 +1,3 @@
-
 # main.py — core genérico (sin conocimiento de marca en el core)
 
 # 💥💥 CORRECCIÓN FINAL 💥💥
@@ -26,6 +25,7 @@ import hashlib
 import html
 import uuid
 import requests
+
 
 # 🔹 Twilio REST (para enviar mensajes manuales desde el panel)
 from twilio.rest import Client as TwilioClient
@@ -198,8 +198,9 @@ def _hora_to_epoch_ms(hora_str: str) -> int:
 
 def _normalize_bot_name(name: str):
     for cfg in bots_config.values():
-        if cfg.get("name", "").lower() == str(name).lower():
-            return cfg.get("name")
+        if isinstance(cfg, dict):
+            if cfg.get("name", "").lower() == str(name).lower():
+                return cfg.get("name")
     return None
 
 def _get_bot_cfg_by_name(name: str):
